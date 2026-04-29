@@ -8,7 +8,7 @@ MuxMelt is a desktop media utility for common file conversion, cleanup, and batc
 |------|--------------|
 | Upscaler | Increases image and video resolution with 2x and 4x modes |
 | Format Converter | Converts images and videos between common formats |
-| URL Downloader | Downloads videos from supported website URLs into a selected folder |
+| Online Video Downloader | Downloads videos from supported website URLs into a selected folder |
 | Audio Extractor | Extracts audio from video files to MP3, WAV, FLAC, AAC, or OGG |
 | GIF Maker | Creates GIFs from video clips with FPS, width, and duration controls |
 | Video Compressor | Reduces video file size with codec, CRF, preset, and resolution options |

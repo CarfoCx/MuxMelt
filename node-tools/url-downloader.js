@@ -63,7 +63,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
       if (!pythonInfo || !pythonInfo.cmd) {
-        return { success: false, error: 'Python was not found. URL Downloader requires Python with yt-dlp installed.' };
+        return { success: false, error: 'Python was not found. Online Video Downloader requires Python with yt-dlp installed.' };
       }
 
       const outDir = validateOutputDir(options.outputDir) || defaultOutputDir();
@@ -185,7 +185,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       if ((err.message || '').toLowerCase().includes('no module named')) {
         return { success: false, error: 'yt-dlp is not installed in Python. Run setup again or install Python dependencies from python/requirements.txt.' };
       }
-      return { success: false, error: formatToolError(err, 'URL Downloader') };
+      return { success: false, error: formatToolError(err, 'Online Video Downloader') };
     }
   });
 

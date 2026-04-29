@@ -422,6 +422,10 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
   shell.openPath(folderPath);
 });
 
+ipcMain.handle('open-path', async (event, filePath) => {
+  shell.openPath(filePath);
+});
+
 ipcMain.handle('load-settings', () => loadSettings());
 
 ipcMain.handle('save-settings', (event, settings) => {

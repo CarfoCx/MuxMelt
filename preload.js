@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   getPythonPort: () => ipcRenderer.invoke('get-python-port'),
   openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
+  openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   getFileSize: (filePath) => ipcRenderer.invoke('get-file-size', filePath),
   showNotification: (options) => ipcRenderer.invoke('show-notification', options),

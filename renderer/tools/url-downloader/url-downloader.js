@@ -1,5 +1,5 @@
 // ============================================================================
-// URL Downloader Tool
+// Online Video Downloader Tool
 // ============================================================================
 
 (function() {
@@ -32,7 +32,7 @@ function init(ctx) {
   bindEvents();
   loadToolSettings();
   addRow('');
-  log('URL Downloader ready');
+  log('Online Video Downloader ready');
 }
 
 function cleanup() {
@@ -107,10 +107,23 @@ function addRow(value) {
   }, 0);
 }
 
+function createEmptyRow() {
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    url: '',
+    progress: 0,
+    status: 'Ready',
+    state: 'pending',
+    output: ''
+  };
+}
+
 function removeRow(id) {
   if (isProcessing) return;
   rows = rows.filter(row => row.id !== id);
-  if (rows.length === 0) addRow('');
+  if (rows.length === 0) {
+    rows.push(createEmptyRow());
+  }
   renderRows();
   updateButton();
 }
@@ -156,10 +169,10 @@ async function startDownload() {
   processingIndicator.classList.add('active');
   retryBtn.style.display = 'none';
   openOutputBtn.style.display = 'none';
-  statusText.textContent = `Downloading ${pending.length} URL(s)...`;
+  statusText.textContent = `Downloading ${pending.length} video URL(s)...`;
   if (etaText) etaText.textContent = '';
 
-  log(`Starting URL downloads: ${pending.length} URL(s)`);
+  log(`Starting online video downloads: ${pending.length} URL(s)`);
 
   for (const row of pending) {
     if (!isProcessing) break;
@@ -244,16 +257,19 @@ function renderRows() {
   urlList.innerHTML = '';
   rows.forEach(row => {
     const el = document.createElement('div');
-    el.className = 'url-row';
+    el.className = `url-row state-${row.state}`;
 
     let progressClass = '';
     if (row.state === 'complete') progressClass = ' complete';
     else if (row.state === 'error') progressClass = ' error';
 
     el.innerHTML = `
-      <input class="url-input" type="url" placeholder="https://example.com/watch..." value="${window.escapeHtml(row.url)}" ${isProcessing ? 'disabled' : ''}>
+      <div class="url-main">
+        <input class="url-input" type="url" placeholder="https://example.com/watch..." value="${window.escapeHtml(row.url)}" ${isProcessing ? 'disabled' : ''}>
+        ${row.output ? `<button class="url-output" title="${window.escapeHtml(row.output)}">Open downloaded file</button>` : ''}
+      </div>
       <div class="url-state" title="${window.escapeHtml(row.status)}">${window.escapeHtml(row.status)}</div>
-      <button class="url-remove" title="Remove" ${isProcessing || rows.length === 1 ? 'disabled' : ''}>&times;</button>
+      <button class="url-remove" title="Remove from list" ${isProcessing ? 'disabled' : ''}>&times;</button>
       <div class="url-progress"><div class="url-progress-fill${progressClass}" style="width: ${Math.round((row.progress || 0) * 100)}%"></div></div>
     `;
 
@@ -277,6 +293,11 @@ function renderRows() {
         }
       }, 0);
     });
+
+    const outputBtn = el.querySelector('.url-output');
+    if (outputBtn) {
+      outputBtn.addEventListener('click', () => window.api.openPath(row.output));
+    }
 
     el.querySelector('.url-remove').addEventListener('click', () => removeRow(row.id));
     urlList.appendChild(el);
