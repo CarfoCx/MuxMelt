@@ -131,9 +131,53 @@ function extractTarGz(tarPath, destDir) {
 
 // ─── FFmpeg Bundling ─────────────────────────────────────────────────────────
 
+function resolvePackageExport(packageName) {
+  const packagePath = require.resolve(packageName, { paths: [path.join(__dirname, '..')] });
+  return require(packagePath);
+}
+
+function copyExecutable(src, destName) {
+  if (!src || !fs.existsSync(src)) {
+    return false;
+  }
+
+  fs.mkdirSync(FFMPEG_DIR, { recursive: true });
+  const dest = path.join(FFMPEG_DIR, destName);
+  fs.copyFileSync(src, dest);
+  if (!IS_WIN) {
+    fs.chmodSync(dest, 0o755);
+  }
+  return true;
+}
+
+function prepareFfmpegFromNodePackages() {
+  try {
+    const ffmpegPath = resolvePackageExport('ffmpeg-static');
+    const ffprobeExport = resolvePackageExport('ffprobe-static');
+    const ffprobePath = typeof ffprobeExport === 'string' ? ffprobeExport : ffprobeExport.path;
+    const exe = IS_WIN ? '.exe' : '';
+
+    const copiedFfmpeg = copyExecutable(ffmpegPath, `ffmpeg${exe}`);
+    const copiedFfprobe = copyExecutable(ffprobePath, `ffprobe${exe}`);
+    if (!copiedFfmpeg || !copiedFfprobe) {
+      throw new Error('ffmpeg-static or ffprobe-static did not expose a usable binary');
+    }
+
+    console.log('  ffmpeg ready from npm static binaries');
+    return true;
+  } catch (err) {
+    console.log(`  npm static ffmpeg unavailable, falling back to direct download (${err.message})`);
+    return false;
+  }
+}
+
 async function prepareFfmpegWindows() {
   console.log('\n=== Preparing ffmpeg (Windows) ===');
   fs.mkdirSync(FFMPEG_DIR, { recursive: true });
+
+  if (prepareFfmpegFromNodePackages()) {
+    return;
+  }
 
   if (fs.existsSync(path.join(FFMPEG_DIR, 'ffmpeg.exe'))) {
     console.log('  ffmpeg already prepared');
@@ -167,6 +211,10 @@ async function prepareFfmpegMac() {
   console.log('\n=== Preparing ffmpeg (macOS) ===');
   fs.mkdirSync(FFMPEG_DIR, { recursive: true });
 
+  if (prepareFfmpegFromNodePackages()) {
+    return;
+  }
+
   if (fs.existsSync(path.join(FFMPEG_DIR, 'ffmpeg'))) {
     console.log('  ffmpeg already prepared');
     return;
@@ -197,6 +245,10 @@ async function prepareFfmpegMac() {
 async function prepareFfmpegLinux() {
   console.log('\n=== Preparing ffmpeg (Linux) ===');
   fs.mkdirSync(FFMPEG_DIR, { recursive: true });
+
+  if (prepareFfmpegFromNodePackages()) {
+    return;
+  }
 
   if (fs.existsSync(path.join(FFMPEG_DIR, 'ffmpeg'))) {
     console.log('  ffmpeg already prepared');
