@@ -1,0 +1,110 @@
+{
+  "name": "muxmelt",
+  "version": "1.1.0",
+  "description": "All-in-one media toolkit with upscaling, stem separation, format conversion, and more",
+  "main": "main.js",
+  "author": "Chad",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CarfoCx/MuxMelt"
+  },
+  "homepage": "https://github.com/CarfoCx/MuxMelt",
+  "scripts": {
+    "start": "electron .",
+    "build:full:win": "node build/prepare-python.js full && electron-builder --win",
+    "build:full:mac": "node build/prepare-python.js full && electron-builder --mac",
+    "build:slim:win": "node build/prepare-python.js slim && electron-builder --win --config build/slim.json",
+    "build:slim:mac": "node build/prepare-python.js slim && electron-builder --mac --config build/slim.json",
+    "build:linux": "node build/prepare-python.js slim && electron-builder --linux --config build/slim.json",
+    "build:full:linux": "node build/prepare-python.js full && electron-builder --linux"
+  },
+  "dependencies": {
+    "jsqr": "^1.4.0",
+    "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.carfocx.muxmelt",
+    "productName": "MuxMelt",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "setup-preload.js",
+      "package.json",
+      "renderer/**/*",
+      "node-tools/**/*",
+      "python/**/*",
+      "!python/weights/**",
+      "!python/**/__pycache__/**",
+      "!**/*.pyc"
+    ],
+    "asarUnpack": [
+      "node_modules/@img/**",
+      "python/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/bundle/python-env",
+        "to": "python-env",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "build/bundle/ffmpeg",
+        "to": "ffmpeg",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "MuxMelt-Windows-Setup.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.utilities",
+      "identity": "-"
+    },
+    "dmg": {
+      "artifactName": "MuxMelt-macOS-${arch}.${ext}"
+    },
+    "appImage": {
+      "artifactName": "MuxMelt-Linux.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Utility"
+    }
+  }
+}

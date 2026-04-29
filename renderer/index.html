@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: file:; media-src 'self' file:">
+  <title>MuxMelt</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" id="toolStylesheet" href="">
+</head>
+<body>
+  <div id="app">
+
+    <a href="#toolContent" class="skip-nav">Skip to content</a>
+
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar" aria-label="Tool navigation">
+      <div class="sidebar-header">
+        <h1>Mux<span>Meld</span></h1>
+      </div>
+
+      <div class="sidebar-tools">
+        <button class="sidebar-item active" data-tool="upscaler">
+          <span class="sidebar-icon">&#10024;</span>
+          <span class="sidebar-label">Upscaler</span>
+        </button>
+        <button class="sidebar-item" data-tool="format-converter">
+          <span class="sidebar-icon">&#128260;</span>
+          <span class="sidebar-label">Format Converter</span>
+        </button>
+        <button class="sidebar-item" data-tool="audio-extractor">
+          <span class="sidebar-icon">&#127925;</span>
+          <span class="sidebar-label">Audio Extractor</span>
+        </button>
+        <button class="sidebar-item" data-tool="gif-maker">
+          <span class="sidebar-icon">&#127916;</span>
+          <span class="sidebar-label">GIF Maker</span>
+        </button>
+        <button class="sidebar-item" data-tool="video-compressor">
+          <span class="sidebar-icon">&#128230;</span>
+          <span class="sidebar-label">Video Compressor</span>
+        </button>
+        <button class="sidebar-item" data-tool="url-downloader">
+          <span class="sidebar-icon">&#11015;</span>
+          <span class="sidebar-label">URL Downloader</span>
+        </button>
+        <button class="sidebar-item" data-tool="bg-remover">
+          <span class="sidebar-icon">&#9986;</span>
+          <span class="sidebar-label">BG Remover</span>
+        </button>
+        <button class="sidebar-item" data-tool="bulk-imager">
+          <span class="sidebar-icon">&#128444;</span>
+          <span class="sidebar-label">Bulk Imager</span>
+        </button>
+        <button class="sidebar-item" data-tool="pdf-toolkit">
+          <span class="sidebar-icon">&#128196;</span>
+          <span class="sidebar-label">PDF Toolkit</span>
+        </button>
+        <button class="sidebar-item" data-tool="stem-separator">
+          <span class="sidebar-icon">&#127929;</span>
+          <span class="sidebar-label">Stem Separator</span>
+        </button>
+        <button class="sidebar-item" data-tool="qr-studio">
+          <span class="sidebar-icon">&#9641;</span>
+          <span class="sidebar-label">QR Studio</span>
+        </button>
+        <button class="sidebar-item" data-tool="tts">
+          <span class="sidebar-icon">&#128483;</span>
+          <span class="sidebar-label">Text to Speech</span>
+        </button>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="sidebar-item sidebar-settings" data-tool="settings">
+          <span class="sidebar-icon">&#9881;</span>
+          <span class="sidebar-label">Settings</span>
+        </button>
+        <button class="sidebar-donate-btn" id="sidebarDonateBtn" title="Support MuxMelt development">
+          <span class="sidebar-donate-heart">&#9829;</span>
+          <span>Support</span>
+        </button>
+        <div class="gpu-stats" id="gpuStats">
+          <span class="gpu-stat" id="gpuUtilStat" title="GPU utilization" aria-label="GPU utilization"></span>
+          <span class="gpu-stat" id="gpuTempStat" title="GPU temperature" aria-label="GPU temperature"></span>
+          <span class="gpu-stat" id="gpuMemStat" title="GPU memory usage" aria-label="GPU memory usage"></span>
+        </div>
+        <span class="gpu-badge" id="gpuBadge" aria-label="GPU status">Connecting...</span>
+      </div>
+    </nav>
+
+    <!-- Main area -->
+    <div class="main-area" role="main">
+      <!-- Update banner (hidden by default) -->
+      <div class="update-banner" id="updateBanner" role="alert" style="display: none;">
+        <span>A new version of MuxMelt is available!</span>
+        <a class="update-banner-link" id="updateLink">Download update</a>
+        <button class="update-banner-dismiss" id="updateDismiss" title="Dismiss">&times;</button>
+      </div>
+
+      <!-- Tool content -->
+      <div class="tool-content" id="toolContent" aria-label="Tool content"></div>
+
+      <!-- Log panel (shared) -->
+      <div class="log-panel" id="logPanel" role="log" aria-label="Application log">
+        <div class="log-header" id="logToggle">
+          <span>Log</span>
+          <span class="log-toggle-icon" id="logIcon">&#9650;</span>
+        </div>
+        <div class="log-body" id="logBody">
+          <div class="log-entries" id="logEntries" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Keyboard shortcuts modal -->
+    <div class="shortcuts-overlay" id="shortcutsOverlay">
+      <div class="shortcuts-modal">
+        <div class="shortcuts-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button class="shortcuts-close" id="shortcutsClose">&times;</button>
+        </div>
+        <div class="shortcuts-body">
+          <div class="shortcut-row"><kbd>Ctrl+O</kbd><span>Open file browser</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+L</kbd><span>Toggle log panel</span></div>
+          <div class="shortcut-row"><kbd>Enter</kbd><span>Run primary action</span></div>
+          <div class="shortcut-row"><kbd>Escape</kbd><span>Close menus / modals</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+?</kbd><span>Show this help</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">&#128444;</div>
+    <div class="drop-zone-text">
+      Drag &amp; drop images for editing
+    </div>
+    <div class="drop-zone-actions">
+      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <span class="drop-zone-sep">|</span>
+      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+    </div>
+    <div class="drop-zone-hint">
+      Supports: PNG, JPG, WebP, BMP, TIFF
+    </div>
+  </div>
+
+  <!-- Settings bar -->
+  <div class="settings-bar">
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Same as source
+      </button>
+    </div>
+  </div>
+
+  <!-- File list -->
+  <div class="file-list-container">
+    <div class="file-list" id="fileList">
+      <div class="empty-state">
+        No files added yet. Drag images above or click browse.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Visual Editor Modal -->
+<div class="editor-overlay" id="editorOverlay"></div>
+<div class="editor-modal" id="editorModal">
+  <div class="editor-header">
+    <span class="editor-title" id="editorTitle">Edit Image</span>
+    <button class="editor-close" id="editorClose">&times;</button>
+  </div>
+
+  <div class="editor-toolbar">
+    <button class="editor-tool active" data-tool="crop" title="Crop">Crop</button>
+    <button class="editor-tool" data-tool="resize" title="Resize">Resize</button>
+    <button class="editor-tool" data-tool="rotate" title="Rotate">Rotate</button>
+    <button class="editor-tool" data-tool="flip" title="Flip">Flip</button>
+    <button class="editor-tool" data-tool="watermark" title="Watermark">Watermark</button>
+    <span class="editor-toolbar-sep"></span>
+    <button class="btn btn-sm" id="addToQueueBtn" title="Add current operation to queue">+ Add to Queue</button>
+  </div>
+
+  <!-- Tool options (changes per tool) -->
+  <div class="editor-options" id="editorOptions">
+    <!-- Crop options -->
+    <div class="editor-option-panel active" id="opt-crop">
+      <span class="opt-label">Drag on image to select crop area</span>
+      <div class="aspect-ratio-presets">
+        <button class="aspect-btn active" data-ratio="free">Free</button>
+        <button class="aspect-btn" data-ratio="1:1">1:1</button>
+        <button class="aspect-btn" data-ratio="16:9">16:9</button>
+        <button class="aspect-btn" data-ratio="4:3">4:3</button>
+        <button class="aspect-btn" data-ratio="9:16">9:16</button>
+        <button class="aspect-btn" data-ratio="3:2">3:2</button>
+      </div>
+      <span class="opt-info" id="cropInfo">-</span>
+      <button class="btn btn-sm" id="cropResetBtn">Reset</button>
+    </div>
+    <!-- Resize options -->
+    <div class="editor-option-panel" id="opt-resize">
+      <span class="opt-label">Width:</span>
+      <input type="number" id="edResizeW" placeholder="auto" min="1" max="10000" class="opt-input">
+      <span class="opt-label">Height:</span>
+      <input type="number" id="edResizeH" placeholder="auto" min="1" max="10000" class="opt-input">
+      <span class="opt-label">%:</span>
+      <input type="number" id="edResizePct" placeholder="100" min="1" max="500" class="opt-input opt-input-sm" value="100">
+      <label class="opt-checkbox"><input type="checkbox" id="edResizeLock" checked> Lock ratio</label>
+    </div>
+    <!-- Rotate options -->
+    <div class="editor-option-panel" id="opt-rotate">
+      <input type="range" id="edRotateSlider" min="-180" max="180" value="0" step="1" class="opt-slider">
+      <span class="opt-info" id="rotateInfo">0&deg;</span>
+      <button class="btn btn-sm" id="rotate90CW">90&deg; CW</button>
+      <button class="btn btn-sm" id="rotate90CCW">90&deg; CCW</button>
+      <button class="btn btn-sm" id="rotateResetBtn">Reset</button>
+    </div>
+    <!-- Flip options -->
+    <div class="editor-option-panel" id="opt-flip">
+      <button class="btn btn-sm" id="flipH">Flip Horizontal</button>
+      <button class="btn btn-sm" id="flipV">Flip Vertical</button>
+    </div>
+    <!-- Watermark options -->
+    <div class="editor-option-panel" id="opt-watermark">
+      <span class="opt-label">Text:</span>
+      <input type="text" id="edWmText" placeholder="Your watermark" class="opt-input opt-input-wide">
+      <span class="opt-label">Size:</span>
+      <input type="range" id="edWmSize" min="10" max="200" value="40" class="opt-slider-sm">
+      <span class="opt-label">Color:</span>
+      <input type="color" id="edWmColor" value="#ffffff" class="opt-color">
+      <span class="opt-label">Opacity:</span>
+      <input type="range" id="edWmOpacity" min="0.1" max="1" step="0.1" value="0.5" class="opt-slider-sm">
+      <span class="opt-hint">Drag text on image to position</span>
+    </div>
+  </div>
+
+  <!-- Canvas area -->
+  <div class="editor-canvas-wrap" id="editorCanvasWrap">
+    <canvas id="editorCanvas"></canvas>
+    <!-- Crop overlay (drawn via JS) -->
+    <div class="crop-overlay" id="cropOverlay" style="display:none;"></div>
+    <!-- Watermark drag handle -->
+    <div class="wm-drag" id="wmDrag" style="display:none;">Watermark</div>
+  </div>
+
+  <!-- Operation Queue -->
+  <div class="editor-queue" id="editorQueue" style="display:none;">
+    <div class="editor-queue-header">
+      <span class="editor-queue-label">Operation Queue:</span>
+      <button class="btn btn-sm" id="clearQueueBtn">Clear Queue</button>
+    </div>
+    <div class="editor-queue-list" id="queueList"></div>
+  </div>
+
+  <div class="editor-footer">
+    <div class="editor-footer-left">
+      <span id="editorImageInfo">-</span>
+    </div>
+    <div class="editor-footer-right">
+      <button class="btn btn-secondary" id="edApplyOne">Apply to This Image</button>
+      <button class="btn btn-primary" id="edApplyAll">Apply to All Images</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Processing...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="applyBtn" disabled>Apply</button>
+  </div>
+</div>

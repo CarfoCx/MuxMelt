@@ -1,0 +1,78 @@
+{
+  "appId": "com.carfocx.muxmelt",
+  "productName": "MuxMelt",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "main.js",
+    "preload.js",
+    "setup-preload.js",
+    "package.json",
+    "renderer/**/*",
+    "node-tools/**/*",
+    "python/**/*",
+    "!python/weights/**",
+    "!python/**/__pycache__/**",
+    "!**/*.pyc"
+  ],
+  "asarUnpack": [
+    "node_modules/@img/**",
+    "python/**"
+  ],
+  "extraResources": [
+    {
+      "from": "build/bundle/python-env",
+      "to": "python-env",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "build/bundle/ffmpeg",
+      "to": "ffmpeg",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "signAndEditExecutable": false,
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.png"
+  },
+  "nsis": {
+    "oneClick": true,
+    "perMachine": false,
+    "deleteAppDataOnUninstall": false,
+    "artifactName": "MuxMelt-Windows-Setup.${ext}"
+  },
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      }
+    ],
+    "icon": "build/icon.png",
+    "category": "public.app-category.utilities",
+    "identity": "-"
+  },
+  "dmg": {
+    "artifactName": "MuxMelt-macOS-${arch}.${ext}"
+  },
+  "appImage": {
+    "artifactName": "MuxMelt-Slim-Linux.${ext}"
+  },
+  "linux": {
+    "target": [
+      {
+        "target": "AppImage",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.png",
+    "category": "Utility"
+  }
+}

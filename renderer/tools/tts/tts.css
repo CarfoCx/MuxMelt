@@ -1,0 +1,150 @@
+/* Text-to-Speech - tool-specific styles */
+
+.tts-input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tts-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.tts-textarea {
+  width: 100%;
+  min-height: 140px;
+  max-height: 300px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.tts-textarea:focus {
+  border-color: var(--accent);
+}
+
+.tts-textarea::placeholder {
+  color: var(--text-dim);
+}
+
+.tts-char-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.range-value {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 32px;
+  text-align: center;
+}
+
+.output-dir-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-dir-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.status-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tts-result-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  padding: 16px;
+  overflow: hidden;
+}
+
+.tts-result-area .file-progress-bar {
+  width: 300px;
+  height: 8px;
+}
+
+.tts-audio-player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.tts-output-path {
+  font-size: 11px;
+  color: var(--text-dim);
+  word-break: break-all;
+  text-align: center;
+}
+
+/* Inline audio preview players */
+.audio-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-play-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.audio-play-btn:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.audio-play-btn.playing {
+  background: var(--accent);
+  color: white;
+}
+
+.tts-play-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}

@@ -1,0 +1,121 @@
+<div class="warning-banner" id="ffmpegWarning" style="display: none;">
+  &#9888; ffmpeg not found — video upscaling requires ffmpeg.
+  <a id="ffmpegLink">Install ffmpeg</a>
+</div>
+
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">&#128194;</div>
+    <div class="drop-zone-text">
+      Drag &amp; drop images, videos, or <strong>folders</strong> here
+    </div>
+    <div class="drop-zone-actions">
+      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <span class="drop-zone-sep">|</span>
+      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+    </div>
+    <div class="drop-zone-hint">
+      Supports: PNG, JPG, WebP, BMP, TIFF, MP4, AVI, MKV, MOV, WebM
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings-bar">
+    <div class="setting-group">
+      <label>Scale:</label>
+      <button class="scale-btn active" data-scale="2">2x</button>
+      <button class="scale-btn" data-scale="4">4x</button>
+    </div>
+
+    <div class="setting-group">
+      <label>Model:</label>
+      <select id="modelProfile">
+        <option value="general">General</option>
+        <option value="anime">Anime</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Format:</label>
+      <select id="outputFormat">
+        <option value="same">Same as input</option>
+        <optgroup label="Images">
+          <option value="png">PNG</option>
+          <option value="jpg">JPG</option>
+          <option value="webp">WebP</option>
+        </optgroup>
+        <optgroup label="Videos">
+          <option value="mp4">MP4</option>
+          <option value="mkv">MKV</option>
+          <option value="webm">WebM</option>
+          <option value="avi">AVI</option>
+        </optgroup>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Same as source
+      </button>
+    </div>
+  </div>
+
+  <!-- File list -->
+  <div class="file-list-container">
+    <div class="file-list" id="fileList">
+      <div class="empty-state">
+        No files added yet. Drag files above or click browse.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Processing...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn">Open Output</button>
+    <button class="btn btn-primary" id="upscaleBtn" disabled>Upscale</button>
+  </div>
+</div>
+
+<!-- Preview modal -->
+<div class="preview-modal" id="previewModal">
+  <div class="preview-overlay" id="previewOverlay"></div>
+  <div class="preview-dialog">
+    <div class="preview-header">
+      <span id="previewTitle">Preview</span>
+      <button class="preview-close" id="previewClose">&times;</button>
+    </div>
+    <div class="preview-body" id="previewBody">
+      <div class="preview-container" id="previewContainer">
+        <img class="preview-img preview-after" id="previewAfter" draggable="false">
+        <div class="preview-before-clip" id="previewBeforeClip">
+          <img class="preview-img preview-before" id="previewBefore" draggable="false">
+        </div>
+        <div class="preview-slider" id="previewSlider">
+          <div class="preview-slider-line"></div>
+          <div class="preview-slider-handle"></div>
+        </div>
+      </div>
+      <div class="preview-labels">
+        <span>Original</span>
+        <span>Upscaled</span>
+      </div>
+    </div>
+  </div>
+</div>

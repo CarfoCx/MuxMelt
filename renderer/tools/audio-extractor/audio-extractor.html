@@ -1,0 +1,103 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">&#127925;</div>
+    <div class="drop-zone-text">
+      Drag &amp; drop video files to extract audio
+    </div>
+    <div class="drop-zone-actions">
+      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <span class="drop-zone-sep">|</span>
+      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+    </div>
+    <div class="drop-zone-hint">
+      Supports: MP4, AVI, MKV, MOV, WebM
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings-bar">
+    <div class="setting-group">
+      <label>Format:</label>
+      <select id="audioFormat">
+        <option value="mp3">MP3</option>
+        <option value="wav">WAV</option>
+        <option value="flac">FLAC</option>
+        <option value="aac">AAC</option>
+        <option value="ogg">OGG</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Bitrate:</label>
+      <select id="bitrate">
+        <option value="128k">128 kbps</option>
+        <option value="192k">192 kbps</option>
+        <option value="256k" selected>256 kbps</option>
+        <option value="320k">320 kbps</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Sample Rate:</label>
+      <select id="sampleRate">
+        <option value="">Original</option>
+        <option value="22050">22050 Hz</option>
+        <option value="44100" selected>44100 Hz</option>
+        <option value="48000">48000 Hz</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>
+        <input type="checkbox" id="normalizeCheck"> Normalize volume
+      </label>
+    </div>
+
+    <div class="setting-group">
+      <label>Fade In:</label>
+      <input type="number" id="fadeIn" value="0" min="0" max="30" step="0.5" style="width: 60px;"> <span class="range-hint">sec</span>
+    </div>
+    <div class="setting-group">
+      <label>Fade Out:</label>
+      <input type="number" id="fadeOut" value="0" min="0" max="30" step="0.5" style="width: 60px;"> <span class="range-hint">sec</span>
+    </div>
+
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Same as source
+      </button>
+    </div>
+  </div>
+
+  <!-- File list -->
+  <div class="file-list-container">
+    <div class="file-list" id="fileList">
+      <div class="empty-state">
+        No files added yet. Drag video files above or click browse.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Extracting...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="extractBtn" disabled>Extract Audio</button>
+  </div>
+</div>

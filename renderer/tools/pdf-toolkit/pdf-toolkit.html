@@ -1,0 +1,87 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">&#128196;</div>
+    <div class="drop-zone-text">
+      Drag &amp; drop PDF files
+    </div>
+    <div class="drop-zone-actions">
+      <span class="drop-zone-link" id="browseBtn">browse files</span>
+    </div>
+    <div class="drop-zone-hint">
+      Supports: PDF
+    </div>
+  </div>
+
+  <!-- Operation tabs -->
+  <div class="operation-tabs">
+    <button class="op-tab active" data-op="merge">Merge</button>
+    <button class="op-tab" data-op="split">Split</button>
+    <button class="op-tab" data-op="extract">Extract Pages</button>
+  </div>
+
+  <!-- Operation panels -->
+  <div class="operation-panels">
+    <!-- Merge panel -->
+    <div class="op-panel active" id="panel-merge">
+      <div class="pdf-merge-hint">
+        Drag to reorder files. They will be merged in the order shown below.
+      </div>
+    </div>
+
+    <!-- Split panel -->
+    <div class="op-panel" id="panel-split">
+      <div class="pdf-split-hint">
+        Each PDF will be split into individual single-page files.
+      </div>
+    </div>
+
+    <!-- Extract panel -->
+    <div class="op-panel" id="panel-extract">
+      <div class="settings-bar">
+        <div class="setting-group">
+          <label>Page Range:</label>
+          <input type="text" id="pageRange" placeholder="e.g. 1-3, 5, 8-10" style="width: 200px;">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Output dir -->
+  <div class="settings-bar">
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Same as source
+      </button>
+    </div>
+  </div>
+
+  <!-- File list -->
+  <div class="file-list-container">
+    <div class="file-list" id="fileList">
+      <div class="empty-state">
+        No files added yet. Drag PDF files above or click browse.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Processing...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="actionBtn" disabled>Merge</button>
+  </div>
+</div>

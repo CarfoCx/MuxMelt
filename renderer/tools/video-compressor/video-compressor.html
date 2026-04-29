@@ -1,0 +1,99 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">&#128230;</div>
+    <div class="drop-zone-text">
+      Drag &amp; drop video files to compress
+    </div>
+    <div class="drop-zone-actions">
+      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <span class="drop-zone-sep">|</span>
+      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+    </div>
+    <div class="drop-zone-hint">
+      Supports: MP4, AVI, MKV, MOV, WebM
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings-bar" style="flex-wrap: wrap;">
+    <div class="setting-group">
+      <label title="Lower = better quality, bigger file">CRF:</label>
+      <input type="range" id="crfSlider" min="18" max="28" value="23">
+      <span class="range-value" id="crfValue">23</span>
+      <span class="range-hint">(lower = better)</span>
+    </div>
+
+    <div class="setting-group">
+      <label>Preset:</label>
+      <select id="preset">
+        <option value="ultrafast">Ultrafast</option>
+        <option value="fast">Fast</option>
+        <option value="medium" selected>Medium</option>
+        <option value="slow">Slow</option>
+        <option value="veryslow">Very Slow</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Codec:</label>
+      <select id="codec">
+        <option value="h264">H.264 (compatible)</option>
+        <option value="h265">H.265 / HEVC (smaller)</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Resolution:</label>
+      <select id="resolution">
+        <option value="original">Original</option>
+        <option value="1080p">1080p</option>
+        <option value="720p">720p</option>
+        <option value="480p">480p</option>
+        <option value="custom">Custom width...</option>
+      </select>
+      <input type="number" id="customWidth" class="custom-width-input" placeholder="Width" min="128" max="7680" style="display:none; width: 80px; margin-left: 6px;">
+    </div>
+
+    <div class="setting-group">
+      <label><input type="checkbox" id="twoPassCheck"> Two-pass</label>
+    </div>
+
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Same as source
+      </button>
+    </div>
+  </div>
+
+  <!-- File list -->
+  <div class="file-list-container">
+    <div class="file-list" id="fileList">
+      <div class="empty-state">
+        No files added yet. Drag video files above or click browse.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Compressing...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="compressBtn" disabled>Compress</button>
+  </div>
+</div>

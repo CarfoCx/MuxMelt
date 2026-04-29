@@ -1,0 +1,174 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Generate panel (always visible) -->
+  <div class="qr-generate-layout">
+    <div class="qr-generate-form">
+      <!-- Template selector tabs -->
+      <div class="qr-template-tabs">
+        <button class="qr-template-tab active" data-template="text">Text</button>
+        <button class="qr-template-tab" data-template="url">URL</button>
+        <button class="qr-template-tab" data-template="wifi">WiFi</button>
+        <button class="qr-template-tab" data-template="vcard">vCard</button>
+        <button class="qr-template-tab" data-template="geo">Geo</button>
+      </div>
+
+      <!-- Text template (default) -->
+      <div class="qr-template-fields" id="tmplText">
+        <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 6px;">
+          <label>Text / URL:</label>
+          <input type="text" id="qrText" placeholder="Enter text or URL..." style="width: 100%;">
+        </div>
+      </div>
+
+      <!-- URL template -->
+      <div class="qr-template-fields" id="tmplUrl" style="display: none;">
+        <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 6px;">
+          <label>URL:</label>
+          <div class="qr-url-input-wrap">
+            <span class="qr-url-prefix">https://</span>
+            <input type="text" id="qrUrl" placeholder="example.com/page">
+          </div>
+        </div>
+      </div>
+
+      <!-- WiFi template -->
+      <div class="qr-template-fields" id="tmplWifi" style="display: none;">
+        <div class="qr-template-grid">
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>SSID (Network Name):</label>
+            <input type="text" id="qrWifiSsid" placeholder="MyNetwork" style="width: 100%;">
+          </div>
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Password:</label>
+            <input type="text" id="qrWifiPass" placeholder="Password" style="width: 100%;">
+          </div>
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Security:</label>
+            <select id="qrWifiSecurity" class="select-input" style="width: 100%;">
+              <option value="WPA">WPA / WPA2</option>
+              <option value="WEP">WEP</option>
+              <option value="nopass">None</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- vCard template -->
+      <div class="qr-template-fields" id="tmplVcard" style="display: none;">
+        <div class="qr-template-grid">
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Full Name:</label>
+            <input type="text" id="qrVcardName" placeholder="John Doe" style="width: 100%;">
+          </div>
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Phone:</label>
+            <input type="text" id="qrVcardPhone" placeholder="+1 555-123-4567" style="width: 100%;">
+          </div>
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Email:</label>
+            <input type="text" id="qrVcardEmail" placeholder="john@example.com" style="width: 100%;">
+          </div>
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Organization:</label>
+            <input type="text" id="qrVcardOrg" placeholder="Acme Inc." style="width: 100%;">
+          </div>
+        </div>
+      </div>
+
+      <!-- Geo template -->
+      <div class="qr-template-fields" id="tmplGeo" style="display: none;">
+        <div class="qr-template-grid qr-template-grid-2">
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Latitude:</label>
+            <input type="text" id="qrGeoLat" placeholder="37.7749" style="width: 100%;">
+          </div>
+          <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+            <label>Longitude:</label>
+            <input type="text" id="qrGeoLon" placeholder="-122.4194" style="width: 100%;">
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-bar qr-settings" style="flex-wrap: wrap; margin-top: 12px;">
+        <div class="setting-group">
+          <label>Size:</label>
+          <input type="range" id="qrSize" min="128" max="1024" value="512" step="64">
+          <span class="range-value" id="qrSizeValue">512px</span>
+        </div>
+
+        <div class="setting-group">
+          <label>FG:</label>
+          <input type="color" id="qrColor" value="#000000" class="color-input" title="Foreground color">
+        </div>
+
+        <div class="setting-group">
+          <label>BG:</label>
+          <input type="color" id="qrBgColor" value="#ffffff" class="color-input" title="Background color">
+        </div>
+
+        <div class="setting-group">
+          <label>Margin:</label>
+          <input type="range" id="qrMargin" min="0" max="10" value="4" step="1">
+          <span class="range-value" id="qrMarginValue">4</span>
+        </div>
+
+        <div class="setting-group">
+          <label>Error Correction:</label>
+          <select id="qrErrorCorrection" class="select-input">
+            <option value="L">Low (7%)</option>
+            <option value="M" selected>Medium (15%)</option>
+            <option value="Q">Quartile (25%)</option>
+            <option value="H">High (30%)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="qr-preview-box" id="qrPreviewBox">
+      <div class="empty-state">QR code preview will appear here</div>
+    </div>
+  </div>
+
+  <!-- Scan section (collapsible) -->
+  <div class="qr-scan-section">
+    <button class="qr-scan-toggle" id="scanToggle">Scan existing QR code</button>
+    <div class="qr-scan-panel" id="scanPanel" style="display: none;">
+      <div class="drop-zone" id="scanDropZone">
+        <div class="drop-zone-icon">&#128269;</div>
+        <div class="drop-zone-text">
+          Drag &amp; drop an image containing a QR code
+        </div>
+        <div class="drop-zone-actions">
+          <span class="drop-zone-link" id="scanBrowseBtn">browse files</span>
+        </div>
+        <div class="drop-zone-hint">
+          Supports: PNG, JPG, WebP, BMP
+        </div>
+      </div>
+
+      <div class="qr-scan-result" id="scanResult" style="display: none;">
+        <label>Decoded Text:</label>
+        <div class="qr-decoded-text" id="decodedText"></div>
+        <button class="btn btn-secondary" id="copyResultBtn">Copy to Clipboard</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Processing...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="saveBtn" disabled>Save QR</button>
+    <button class="btn btn-primary" id="generateBtn">Generate QR</button>
+  </div>
+</div>

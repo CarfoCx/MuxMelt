@@ -1,0 +1,39 @@
+<div class="tool-body">
+  <div class="url-download-panel">
+    <div class="url-download-header">
+      <div>
+        <h2>URL Downloader</h2>
+        <p>Paste video page URLs and download them into one folder.</p>
+      </div>
+      <button class="btn btn-secondary add-url-btn" id="addUrlBtn" title="Add URL">+</button>
+    </div>
+
+    <div class="url-list" id="urlList"></div>
+
+    <div class="settings-bar url-settings">
+      <div class="setting-group">
+        <label>Output:</label>
+        <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+          Downloads/MuxMelt Downloads
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Downloading...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="downloadBtn">Download</button>
+  </div>
+</div>

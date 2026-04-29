@@ -1,0 +1,100 @@
+/* PDF Toolkit - tool-specific styles */
+
+.operation-tabs {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.op-tab {
+  padding: 7px 18px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+
+.op-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.op-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.operation-panels {
+  flex-shrink: 0;
+}
+
+.op-panel {
+  display: none;
+}
+
+.op-panel.active {
+  display: block;
+}
+
+.pdf-merge-hint,
+.pdf-split-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 8px 0;
+}
+
+.output-dir-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-dir-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.status-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Draggable reorder for merge */
+.file-item.dragging {
+  opacity: 0.4;
+}
+
+.file-item.drag-over {
+  border-top: 2px solid var(--accent);
+}
+
+.file-drag-handle {
+  cursor: grab;
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.file-drag-handle:hover {
+  color: var(--text-primary);
+}
+
+.file-order-num {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 18px;
+  text-align: center;
+}

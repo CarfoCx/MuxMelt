@@ -1,0 +1,77 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">&#127925;</div>
+    <div class="drop-zone-text">
+      Drag &amp; drop audio or video files to separate stems
+    </div>
+    <div class="drop-zone-actions">
+      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <span class="drop-zone-sep">|</span>
+      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+    </div>
+    <div class="drop-zone-hint">
+      Supports: MP3, WAV, FLAC, OGG, M4A, MP4, MKV, MOV
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings-bar" style="flex-wrap: wrap;">
+    <div class="setting-group">
+      <label>Model:</label>
+      <select id="modelSelect">
+        <option value="htdemucs" selected>HTDemucs (recommended)</option>
+        <option value="htdemucs_ft">HTDemucs Fine-Tuned (slower, better)</option>
+        <option value="mdx_extra">MDX Extra (alternative)</option>
+      </select>
+      <div class="model-description" id="modelDescription"></div>
+    </div>
+
+    <div class="setting-group">
+      <label>Stems:</label>
+      <div class="stem-checkboxes" id="stemCheckboxes">
+        <label class="stem-check"><input type="checkbox" value="vocals" checked> Vocals</label>
+        <label class="stem-check"><input type="checkbox" value="drums" checked> Drums</label>
+        <label class="stem-check"><input type="checkbox" value="bass" checked> Bass</label>
+        <label class="stem-check"><input type="checkbox" value="other" checked> Other</label>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Same as source
+      </button>
+    </div>
+  </div>
+
+  <!-- File list -->
+  <div class="file-list-container">
+    <div class="file-list" id="fileList">
+      <div class="empty-state">
+        No files added. Drag audio or video files here, or click browse.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Separating...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="separateBtn" disabled>Separate Stems</button>
+  </div>
+</div>

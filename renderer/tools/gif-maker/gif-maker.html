@@ -1,0 +1,98 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">&#127916;</div>
+    <div class="drop-zone-text">
+      Drag &amp; drop a <strong>single video</strong> file to create a GIF
+    </div>
+    <div class="drop-zone-actions">
+      <span class="drop-zone-link" id="browseBtn">browse files</span>
+    </div>
+    <div class="drop-zone-hint">
+      Supports: MP4, AVI, MKV, MOV, WebM
+    </div>
+  </div>
+
+  <!-- Video info -->
+  <div class="gif-video-info" id="videoInfo" style="display: none;">
+    <span class="gif-video-name" id="videoName"></span>
+    <button class="file-remove" id="removeVideoBtn" title="Remove">&times;</button>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings-bar" style="flex-wrap: wrap;">
+    <div class="setting-group">
+      <label>FPS:</label>
+      <input type="range" id="fpsSlider" min="5" max="30" value="15">
+      <span class="range-value" id="fpsValue">15</span>
+    </div>
+
+    <div class="setting-group">
+      <label>Width (px):</label>
+      <input type="number" id="widthInput" placeholder="480" value="480" min="50" max="2000" style="width: 80px;">
+    </div>
+
+    <div class="setting-group">
+      <label>Start Time:</label>
+      <input type="text" id="startTime" placeholder="00:00:00" value="00:00:00" style="width: 90px;">
+    </div>
+
+    <div class="setting-group">
+      <label>Duration (s):</label>
+      <input type="number" id="duration" placeholder="5" value="5" min="0.5" max="60" step="0.5" style="width: 70px;">
+    </div>
+
+    <div class="setting-group">
+      <label>Dithering:</label>
+      <select id="dither">
+        <option value="bayer" selected>Bayer (sharp)</option>
+        <option value="floyd_steinberg">Floyd-Steinberg (smooth)</option>
+        <option value="sierra2">Sierra (balanced)</option>
+        <option value="none">None (flat colors)</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Colors:</label>
+      <input type="range" id="maxColors" min="32" max="256" value="256" step="16">
+      <span class="range-value" id="maxColorsValue">256</span>
+    </div>
+
+    <div class="setting-group">
+      <label><input type="checkbox" id="reverseCheck"> Reverse</label>
+    </div>
+
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Same as source
+      </button>
+    </div>
+  </div>
+
+  <!-- Preview area -->
+  <div class="gif-preview-area" id="previewArea">
+    <div class="empty-state">
+      Drop a video above to get started.
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Creating GIF...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="createBtn" disabled>Create GIF</button>
+  </div>
+</div>

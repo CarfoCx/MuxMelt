@@ -1,0 +1,172 @@
+<div class="tool-body settings-page">
+
+  <!-- General -->
+  <div class="settings-section">
+    <h3 class="settings-section-title">General</h3>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Theme</label>
+      </div>
+      <div class="settings-control">
+        <select id="themeSelect" class="settings-select">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Default Output Directory</label>
+        <div class="settings-hint">Applied to all tools when no tool-specific output is set</div>
+      </div>
+      <div class="settings-control">
+        <button class="output-dir-btn" id="defaultOutputDirBtn">Same as source</button>
+        <span class="settings-reset-link" id="resetOutputDir">Reset</span>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Start with log panel collapsed</label>
+      </div>
+      <div class="settings-control">
+        <input type="checkbox" id="logCollapsedCheck" class="settings-toggle">
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Auto-open output folder when done</label>
+        <div class="settings-hint">Automatically opens the output folder after processing completes</div>
+      </div>
+      <div class="settings-control">
+        <input type="checkbox" id="autoOpenOutputCheck" class="settings-toggle">
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Ask before overwriting files</label>
+        <div class="settings-hint">Show a confirmation dialog when output files already exist</div>
+      </div>
+      <div class="settings-control">
+        <input type="checkbox" id="overwriteConfirmCheck" class="settings-toggle" checked>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Output filename pattern</label>
+        <div class="settings-hint">Use {name}, {operation}, {date}, {time}. Leave blank for default.</div>
+      </div>
+      <div class="settings-control">
+        <input type="text" id="filenamePattern" class="settings-input" placeholder="{name}_{operation}" style="width: 200px;">
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Default upscale factor</label>
+      </div>
+      <div class="settings-control">
+        <select id="defaultScale" class="settings-select">
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Upscaler model profile</label>
+      </div>
+      <div class="settings-control">
+        <select id="defaultModelProfile" class="settings-select">
+          <option value="general">General</option>
+          <option value="anime">Anime</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Files -->
+  <div class="settings-section">
+    <h3 class="settings-section-title">Recent Files</h3>
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label id="recentFilesLabel">No recent files</label>
+      </div>
+      <div class="settings-control">
+        <button class="btn btn-secondary" id="clearRecentBtn">Clear History</button>
+      </div>
+    </div>
+    <div class="recent-files-list" id="recentFilesList"></div>
+  </div>
+
+  <!-- System Info -->
+  <div class="settings-section">
+    <h3 class="settings-section-title">System Info</h3>
+
+    <div class="settings-info-grid">
+      <span class="settings-info-label">App Version</span>
+      <span class="settings-info-value" id="appVersion">-</span>
+
+      <span class="settings-info-label">Python</span>
+      <span class="settings-info-value" id="pythonVersion">-</span>
+
+      <span class="settings-info-label">Device</span>
+      <span class="settings-info-value" id="deviceInfo">-</span>
+
+      <span class="settings-info-label">GPU</span>
+      <span class="settings-info-value" id="gpuInfo">-</span>
+
+      <span class="settings-info-label">VRAM</span>
+      <span class="settings-info-value" id="vramInfo">-</span>
+
+      <span class="settings-info-label">Modules</span>
+      <span class="settings-info-value" id="modulesInfo">-</span>
+
+      <span class="settings-info-label">ffmpeg</span>
+      <span class="settings-info-value" id="ffmpegInfo">-</span>
+    </div>
+  </div>
+
+  <!-- Updates -->
+  <div class="settings-section">
+    <h3 class="settings-section-title">Updates</h3>
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label id="updateStatusLabel">Check for new versions</label>
+        <div class="settings-hint" id="updateStatusHint"></div>
+      </div>
+      <div class="settings-control">
+        <button class="btn btn-secondary" id="checkUpdateBtn">Check for Updates</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- About -->
+  <div class="settings-section">
+    <h3 class="settings-section-title">About</h3>
+    <div class="settings-about">
+      <strong>MuxMelt</strong> — All-in-one media toolkit with upscaling,
+      stem separation, format conversion, background removal, text-to-speech, and more.
+      <br><br>
+      All processing runs locally on your machine. No data is sent to any server.
+    </div>
+    <div class="settings-links">
+      <button class="btn btn-secondary settings-link-btn" id="githubBtn">GitHub</button>
+      <button class="btn btn-secondary settings-link-btn" id="issuesBtn">Report a Bug</button>
+    </div>
+    <div class="settings-donate">
+      <div class="settings-donate-text">
+        MuxMelt is free and open-source. If it saves you time or you just enjoy using it,
+        consider supporting its development:
+      </div>
+      <button class="btn btn-donate" id="donateBtn">Support on Ko-fi</button>
+    </div>
+  </div>
+
+</div>

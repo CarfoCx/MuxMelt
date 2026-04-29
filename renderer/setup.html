@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MuxMelt — First-Time Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', -apple-system, sans-serif;
+      background: #0f0f1a;
+      color: #ededf5;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+    .setup-container {
+      text-align: center;
+      max-width: 500px;
+      padding: 40px;
+    }
+    h1 {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+    h1 span { color: #7b73ff; }
+    .subtitle {
+      color: #b8b8d0;
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+    .progress-area {
+      margin: 24px 0;
+    }
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: #282845;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #7b73ff;
+      border-radius: 3px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .status {
+      font-size: 13px;
+      color: #b8b8d0;
+      margin-top: 12px;
+      min-height: 20px;
+    }
+    .detail {
+      font-size: 11px;
+      color: #8585a0;
+      margin-top: 6px;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      min-height: 16px;
+    }
+    .error {
+      color: #f87171;
+      margin-top: 16px;
+      font-size: 13px;
+      display: none;
+    }
+    .retry-btn {
+      margin-top: 16px;
+      padding: 8px 24px;
+      background: #7b73ff;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      display: none;
+    }
+    .retry-btn:hover { background: #6a62e8; }
+  </style>
+</head>
+<body>
+  <div class="setup-container">
+    <h1>Media<span>Melt</span></h1>
+    <div class="subtitle">First-time setup — downloading required components</div>
+    <div class="progress-area">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="status" id="status">Preparing...</div>
+      <div class="detail" id="detail"></div>
+    </div>
+    <div class="error" id="error"></div>
+    <button class="retry-btn" id="retryBtn" onclick="location.reload()">Retry</button>
+  </div>
+  <script>
+    window.setup.onProgress((data) => {
+      document.getElementById('progressFill').style.width = data.percent + '%';
+      document.getElementById('status').textContent = data.status || '';
+      if (data.detail) document.getElementById('detail').textContent = data.detail;
+    });
+
+    window.setup.onError((msg) => {
+      document.getElementById('error').style.display = 'block';
+      document.getElementById('error').textContent = msg;
+      document.getElementById('retryBtn').style.display = 'inline-block';
+    });
+
+    window.setup.onComplete(() => {
+      document.getElementById('status').textContent = 'Setup complete! Starting MuxMelt...';
+      document.getElementById('progressFill').style.width = '100%';
+    });
+  </script>
+</body>
+</html>

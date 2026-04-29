@@ -1,0 +1,65 @@
+<!-- Tool body -->
+<div class="tool-body">
+
+  <!-- Text input area -->
+  <div class="tts-input-area">
+    <label class="tts-label">Text to Speech:</label>
+    <textarea id="ttsText" class="tts-textarea" placeholder="Enter the text you want to convert to speech..." rows="8"></textarea>
+    <div class="tts-char-count"><span id="charCount">0</span> characters</div>
+  </div>
+
+  <!-- Settings -->
+  <div class="settings-bar" style="flex-wrap: wrap;">
+    <div class="setting-group">
+      <label>Voice:</label>
+      <select id="voiceSelect">
+        <option value="">Loading voices...</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Speed:</label>
+      <input type="range" id="speedSlider" min="0.5" max="2.0" value="1.0" step="0.1">
+      <span class="range-value" id="speedValue">1.0x</span>
+    </div>
+
+    <div class="setting-group">
+      <label>Format:</label>
+      <select id="outputFormat">
+        <option value="mp3">MP3</option>
+        <option value="wav">WAV</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Output:</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        Desktop (default)
+      </button>
+    </div>
+  </div>
+
+  <!-- Progress / result area -->
+  <div class="tts-result-area" id="resultArea">
+    <div class="empty-state">
+      Enter text and click Generate to create speech audio.
+    </div>
+  </div>
+
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Ready</span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Generating...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-primary" id="generateBtn">Generate</button>
+  </div>
+</div>
