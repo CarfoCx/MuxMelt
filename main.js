@@ -25,6 +25,7 @@ const BUNDLED_PYTHON = RESOURCES_PATH
     : path.join(RESOURCES_PATH, 'python-env', 'python', 'bin', 'python3'))
   : null;
 const BUNDLED_FFMPEG = RESOURCES_PATH ? path.join(RESOURCES_PATH, 'ffmpeg') : null;
+const DEV_FFMPEG = !IS_PACKAGED ? path.join(__dirname, 'build', 'bundle', 'ffmpeg') : null;
 const IS_SLIM = BUNDLED_PYTHON && fs.existsSync(path.join(RESOURCES_PATH, 'python-env', '.slim'));
 const SLIM_PYTHON_DIR = path.join(app.getPath('userData'), 'python-env');
 const SLIM_PYTHON_EXE = IS_WIN
@@ -32,8 +33,11 @@ const SLIM_PYTHON_EXE = IS_WIN
   : path.join(SLIM_PYTHON_DIR, 'bin', 'python3');
 
 // Add bundled ffmpeg to PATH if available
-if (BUNDLED_FFMPEG && fs.existsSync(BUNDLED_FFMPEG)) {
-  process.env.PATH = BUNDLED_FFMPEG + path.delimiter + process.env.PATH;
+const FFMPEG_PATH = BUNDLED_FFMPEG && fs.existsSync(BUNDLED_FFMPEG)
+  ? BUNDLED_FFMPEG
+  : (DEV_FFMPEG && fs.existsSync(DEV_FFMPEG) ? DEV_FFMPEG : null);
+if (FFMPEG_PATH) {
+  process.env.PATH = FFMPEG_PATH + path.delimiter + process.env.PATH;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +76,7 @@ function findPython() {
   }
 
   // Check for slim build's installed Python
-  if (IS_SLIM && fs.existsSync(SLIM_PYTHON_EXE)) {
+  if (fs.existsSync(SLIM_PYTHON_EXE)) {
     try {
       const result = execSync(`"${SLIM_PYTHON_EXE}" --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
       if (result.includes('Python 3.')) {
@@ -168,7 +172,11 @@ function startPythonServer() {
     [...pythonInfo.args, serverScript, '--port', PYTHON_PORT.toString()],
     {
       cwd: pythonCwd,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONPATH: [pythonCwd, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+      }
     }
   );
 
@@ -651,6 +659,9 @@ async function runSlimSetupWindows(send) {
     let c = fs.readFileSync(p, 'utf-8');
     c = c.replace('#import site', 'import site');
     if (!c.includes('Lib/site-packages')) c += '\nLib/site-packages\n';
+    const reqDir = IS_PACKAGED ? __dirname.replace('app.asar', 'app.asar.unpacked') : __dirname;
+    const pythonModuleDir = path.join(reqDir, 'python');
+    if (!c.includes(pythonModuleDir)) c += `\n${pythonModuleDir}\n`;
     fs.writeFileSync(p, c);
   }
 
