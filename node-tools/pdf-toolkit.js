@@ -2,6 +2,8 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
 const { PDFDocument } = require('pdf-lib');
 const { validateOutputDir, validateOutputName, formatToolError } = require('./path-utils');
 
@@ -122,7 +124,53 @@ function parsePageRange(rangeStr, totalPages) {
   return Array.from(pages).sort((a, b) => a - b);
 }
 
-function registerIPC(ipcMain, getMainWindow) {
+function splitRedactionTerms(value) {
+  return String(value || '')
+    .split(/\r?\n|,/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+async function runPythonPdfEdit(pythonInfo, options) {
+  if (!pythonInfo || !pythonInfo.cmd) {
+    throw new Error('Python was not found. Secure PDF redaction requires Python with PyMuPDF installed.');
+  }
+
+  const jobPath = path.join(os.tmpdir(), `muxmelt-pdf-edit-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  fs.writeFileSync(jobPath, JSON.stringify(options), 'utf8');
+
+  const scriptPath = path.join(__dirname, '..', 'python', 'pdf_redact.py');
+  let stdout = '';
+  let stderr = '';
+
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn(pythonInfo.cmd, [...(pythonInfo.args || []), scriptPath, jobPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+
+      proc.stdout.on('data', chunk => { stdout += chunk.toString(); });
+      proc.stderr.on('data', chunk => { stderr += chunk.toString(); });
+      proc.on('error', reject);
+      proc.on('close', code => {
+        if (code === 0) resolve();
+        else reject(new Error(stderr.trim() || stdout.trim() || `PDF edit worker exited with code ${code}`));
+      });
+    });
+  } finally {
+    fs.unlink(jobPath, () => {});
+  }
+
+  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const parsed = JSON.parse(lines[lines.length - 1] || '{}');
+  if (!parsed.success) {
+    throw new Error(parsed.error || 'PDF edit failed');
+  }
+  return parsed;
+}
+
+function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
   // ---- MERGE ----
   ipcMain.handle('pdf-toolkit-merge', async (event, options) => {
@@ -249,6 +297,73 @@ function registerIPC(ipcMain, getMainWindow) {
       };
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  // ---- EDIT / SECURE REDACT ----
+  ipcMain.handle('pdf-toolkit-edit', async (event, options = {}) => {
+    const { inputPath, outputDir, redactTerms, textEdit } = options;
+
+    try {
+      if (!inputPath || !fs.existsSync(inputPath)) {
+        return { success: false, error: 'Select one PDF to edit or redact.' };
+      }
+
+      const terms = splitRedactionTerms(redactTerms);
+      const text = String((textEdit && textEdit.text) || '').trim();
+      if (terms.length === 0 && !text) {
+        return { success: false, error: 'Add at least one redaction term or text edit.' };
+      }
+
+      const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
+      fs.mkdirSync(outDir, { recursive: true });
+
+      const baseName = path.basename(inputPath, '.pdf');
+      const outputPath = path.join(outDir, `${baseName}_edited.pdf`);
+      const edits = text ? [{
+        text,
+        page: Math.max(1, parseInt(textEdit.page, 10) || 1),
+        x: Math.max(0, parseFloat(textEdit.x) || 72),
+        y: Math.max(0, parseFloat(textEdit.y) || 72),
+        size: Math.max(6, Math.min(96, parseFloat(textEdit.size) || 12)),
+      }] : [];
+
+      const win = getMainWindow();
+      if (win) {
+        win.webContents.send('tool-progress', {
+          tool: 'pdf-toolkit',
+          percent: 0,
+          status: 'Editing PDF...'
+        });
+      }
+
+      const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
+      const result = await runPythonPdfEdit(pythonInfo, {
+        inputPath,
+        outputPath,
+        terms,
+        edits,
+      });
+
+      if (win) {
+        win.webContents.send('tool-progress', {
+          tool: 'pdf-toolkit',
+          percent: 100,
+          status: 'Done'
+        });
+      }
+
+      return {
+        success: true,
+        output: result.output,
+        redactions: result.redactions || 0,
+        textEdits: result.textEdits || 0,
+      };
+    } catch (err) {
+      const message = (err.message || '').toLowerCase().includes('no module named')
+        ? 'PyMuPDF is not installed. Run setup again or install Python dependencies from python/requirements.txt.'
+        : formatToolError(err, 'PDF Toolkit');
+      return { success: false, error: message };
     }
   });
 

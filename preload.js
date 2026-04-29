@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('api', {
     if (op === 'merge') return ipcRenderer.invoke('pdf-toolkit-merge', { inputPaths: options.files, outputDir: options.outputDir, outputName: options.outputName });
     if (op === 'split') return ipcRenderer.invoke('pdf-toolkit-split', { inputPath: options.files[0], outputDir: options.outputDir });
     if (op === 'extract') return ipcRenderer.invoke('pdf-toolkit-extract', { inputPath: options.files[0], outputDir: options.outputDir, pages: options.pageRange });
+    if (op === 'edit') return ipcRenderer.invoke('pdf-toolkit-edit', { inputPath: options.files[0], outputDir: options.outputDir, redactTerms: options.redactTerms, textEdit: options.textEdit });
     return Promise.resolve({ success: false, error: 'Unknown operation' });
   },
   pdfInfo: (filePath) => ipcRenderer.invoke('pdf-toolkit-info', filePath),

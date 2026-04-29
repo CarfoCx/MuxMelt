@@ -47,6 +47,67 @@
   padding: 8px 0;
 }
 
+.pdf-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
+  gap: 12px;
+}
+
+.pdf-edit-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.pdf-edit-section label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pdf-edit-section textarea,
+.pdf-edit-section input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.pdf-edit-section textarea {
+  min-height: 92px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.pdf-edit-section input {
+  height: 34px;
+  padding: 7px 9px;
+}
+
+.pdf-edit-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(56px, 1fr));
+  gap: 8px;
+}
+
+.pdf-edit-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (max-width: 860px) {
+  .pdf-edit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .output-dir-btn {
   padding: 6px 12px;
   border: 1px solid var(--border);

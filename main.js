@@ -569,7 +569,7 @@ try { require('./node-tools/gif-maker').registerIPC(ipcMain, getMainWindow); } c
 try { require('./node-tools/video-compressor').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load video-compressor:', e.message); }
 try { require('./node-tools/url-downloader').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load url-downloader:', e.message); }
 try { require('./node-tools/bulk-imager').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load bulk-imager:', e.message); }
-try { require('./node-tools/pdf-toolkit').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load pdf-toolkit:', e.message); }
+try { require('./node-tools/pdf-toolkit').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load pdf-toolkit:', e.message); }
 try { require('./node-tools/qr-studio').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load qr-studio:', e.message); }
 
 // ---------------------------------------------------------------------------

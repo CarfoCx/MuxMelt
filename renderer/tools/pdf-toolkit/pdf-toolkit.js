@@ -14,6 +14,7 @@ let dragSrcIndex = null;
 
 let dropZone, browseBtn, fileList, actionBtn, clearBtn, openOutputBtn;
 let outputDirBtn, statusText, processingIndicator, pageRange;
+let redactTerms, editText, editPage, editX, editY, editSize;
 let lastOutputDir = '';
 let _pasteHandler = null;
 
@@ -29,6 +30,12 @@ function init(ctx) {
   statusText = document.getElementById('statusText');
   processingIndicator = document.getElementById('processingIndicator');
   pageRange = document.getElementById('pageRange');
+  redactTerms = document.getElementById('redactTerms');
+  editText = document.getElementById('editText');
+  editPage = document.getElementById('editPage');
+  editX = document.getElementById('editX');
+  editY = document.getElementById('editY');
+  editSize = document.getElementById('editSize');
   openOutputBtn = document.getElementById('openOutputBtn');
 
   bindEvents();
@@ -118,26 +125,28 @@ function bindEvents() {
 }
 
 function updateActionButton() {
-  const labels = { merge: 'Merge', split: 'Split', extract: 'Extract' };
+  const labels = { merge: 'Merge', split: 'Split', extract: 'Extract', edit: 'Save Edited PDF' };
   actionBtn.textContent = labels[currentOp] || 'Process';
-  const hasPending = files.filter(f => f.state === 'pending' || f.state === 'error').length > 0;
-  actionBtn.disabled = !hasPending || isProcessing;
+  const hasPending = files.some(f => f.state === 'pending' || f.state === 'error');
+  const hasRequiredFiles = currentOp === 'merge' ? files.length >= 2 : files.length >= 1;
+  actionBtn.disabled = !hasPending || !hasRequiredFiles || isProcessing;
 }
 
 async function startOperation() {
   if (isProcessing) return;
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
   if (pending.length === 0) return;
+  const processedFiles = currentOp === 'merge' ? files : pending.slice(0, 1);
 
   isProcessing = true;
   actionBtn.disabled = true;
   processingIndicator.classList.add('active');
   statusText.textContent = `Processing...`;
 
-  pending.forEach(f => { f.state = 'processing'; f.progress = 0; f.status = 'Queued...'; });
+  processedFiles.forEach(f => { f.state = 'processing'; f.progress = 0; f.status = 'Queued...'; });
   renderFileList();
 
-  const filePaths = files.map(f => f.path);
+  const filePaths = processedFiles.map(f => f.path);
 
   const pdfOpts = {
     files: filePaths,
@@ -155,6 +164,24 @@ async function startOperation() {
     }
     pdfOpts.pageRange = pageRange.value.trim();
   }
+  if (currentOp === 'edit') {
+    pdfOpts.redactTerms = redactTerms ? redactTerms.value : '';
+    pdfOpts.textEdit = {
+      text: editText ? editText.value : '',
+      page: editPage ? editPage.value : '1',
+      x: editX ? editX.value : '72',
+      y: editY ? editY.value : '72',
+      size: editSize ? editSize.value : '12'
+    };
+    if (!pdfOpts.redactTerms.trim() && !pdfOpts.textEdit.text.trim()) {
+      log('Add a redaction term or text edit before saving.', 'warn');
+      isProcessing = false;
+      processingIndicator.classList.remove('active');
+      statusText.textContent = 'Ready';
+      updateActionButton();
+      return;
+    }
+  }
 
   log(`Starting PDF ${currentOp}: ${filePaths.length} file(s)`);
 
@@ -162,23 +189,26 @@ async function startOperation() {
     const result = await window.api.pdfOperation(pdfOpts);
 
     if (result && result.success) {
-      files.forEach(f => { f.state = 'complete'; f.progress = 1; f.status = 'Complete'; });
+      processedFiles.forEach(f => { f.state = 'complete'; f.progress = 1; f.status = 'Complete'; });
       if (result.output) {
         lastOutputDir = result.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
         log(`Output: ${result.output}`, 'success');
+        if (currentOp === 'edit') {
+          log(`Secure redactions applied: ${result.redactions || 0}; text edits: ${result.textEdits || 0}`, 'success');
+        }
       }
       if (result.outputs) {
         if (result.outputs.length > 0) lastOutputDir = result.outputs[0].replace(/\\/g, '/').split('/').slice(0, -1).join('/');
         log(`Created ${result.outputs.length} files`, 'success');
       }
     } else if (result && result.error) {
-      files.forEach(f => { f.state = 'error'; f.progress = 0; f.status = `Error: ${result.error}`; });
+      processedFiles.forEach(f => { f.state = 'error'; f.progress = 0; f.status = `Error: ${result.error}`; });
       log(`Error: ${result.error}`, 'error');
     }
     renderFileList();
   } catch (err) {
     log(`PDF operation error: ${err.message}`, 'error');
-    files.forEach(f => { f.state = 'error'; f.progress = 0; f.status = `Error: ${err.message}`; });
+    processedFiles.forEach(f => { f.state = 'error'; f.progress = 0; f.status = `Error: ${err.message}`; });
     renderFileList();
   }
 
@@ -236,9 +266,10 @@ async function addFiles(paths) {
     files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Ready', state: 'pending' });
     // Fetch page count asynchronously
     window.api.pdfInfo(p).then(info => {
-      if (info && info.pages) {
+      if (info && (info.pages || info.pageCount)) {
         const f = files.find(f2 => f2.path === p);
-        if (f) { f.pages = info.pages; f.status = `${info.pages} pages`; }
+        const pages = info.pages || info.pageCount;
+        if (f) { f.pages = pages; f.status = `${pages} pages`; }
         renderFileList();
       }
     }).catch(() => {});
