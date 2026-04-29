@@ -494,6 +494,22 @@ input[type="range"] {
   min-height: 0;
 }
 
+.module-banner {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.module-banner strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
 .tool-footer {
   display: flex;
   align-items: center;
