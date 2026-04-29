@@ -67,13 +67,24 @@ jobs:
         run: ${{ matrix.command }}
 
       - name: Create checksums
+        env:
+          FILES: ${{ matrix.files }}
         shell: bash
         run: |
-          cd dist
+          checksum_file="dist/SHA256SUMS-${{ matrix.name }}.txt"
+          : > "$checksum_file"
           if command -v shasum >/dev/null 2>&1; then
-            shasum -a 256 * > "SHA256SUMS-${{ matrix.name }}.txt"
+            while IFS= read -r file; do
+              if [ -n "$file" ] && [ -f "$file" ]; then
+                shasum -a 256 "$file" >> "$checksum_file"
+              fi
+            done <<< "$FILES"
           else
-            sha256sum * > "SHA256SUMS-${{ matrix.name }}.txt"
+            while IFS= read -r file; do
+              if [ -n "$file" ] && [ -f "$file" ]; then
+                sha256sum "$file" >> "$checksum_file"
+              fi
+            done <<< "$FILES"
           fi
 
       - name: Upload assets to release
