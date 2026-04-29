@@ -254,6 +254,7 @@ function handleProgress(data) {
 }
 
 function renderRows() {
+  if (window.updateQueueSummary) window.updateQueueSummary(rows.filter(row => row.url.trim()));
   urlList.innerHTML = '';
   rows.forEach(row => {
     const el = document.createElement('div');

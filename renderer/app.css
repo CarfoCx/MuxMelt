@@ -488,15 +488,15 @@ input[type="range"] {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 20px 24px;
-  gap: 16px;
+  padding: 16px 20px;
+  gap: 12px;
   overflow-y: auto;
   min-height: 0;
 }
 
 .module-banner {
   flex-shrink: 0;
-  padding: 10px 14px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
@@ -514,7 +514,8 @@ input[type="range"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 24px;
+  gap: 12px;
+  padding: 10px 20px;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -524,18 +525,20 @@ input[type="range"] {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .tool-footer-right {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ===== Drop Zone (shared) ===== */
 .drop-zone {
   border: 2px dashed var(--border);
   border-radius: var(--radius);
-  padding: 32px 20px;
+  padding: 22px 18px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -570,8 +573,8 @@ input[type="range"] {
 }
 
 .drop-zone-icon {
-  font-size: 36px;
-  margin-bottom: 10px;
+  font-size: 30px;
+  margin-bottom: 8px;
   opacity: 0.7;
   animation: float 3s ease-in-out infinite;
 }
@@ -616,10 +619,14 @@ input[type="range"] {
 /* ===== Settings Bar (shared) ===== */
 .settings-bar {
   display: flex;
-  gap: 12px;
+  gap: 10px 12px;
   align-items: center;
   flex-wrap: wrap;
   flex-shrink: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .setting-group {
@@ -639,19 +646,24 @@ input[type="range"] {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .file-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 100%;
 }
 
 .file-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 9px 12px;
   background: var(--bg-secondary);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -746,8 +758,12 @@ input[type="range"] {
 
 /* ===== Empty State ===== */
 .empty-state {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  padding: 40px 20px;
+  padding: 28px 20px;
   color: var(--text-dim);
   font-size: 13px;
 }
@@ -1154,6 +1170,38 @@ input[type="range"] {
   padding: 2px 8px;
   border-radius: 10px;
   white-space: nowrap;
+}
+
+.queue-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.queue-pill {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.queue-pill.processing {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.queue-pill.complete {
+  border-color: rgba(74, 222, 128, 0.45);
+  color: var(--success);
+}
+
+.queue-pill.error {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: var(--error);
 }
 
 /* ===== Context Menu ===== */

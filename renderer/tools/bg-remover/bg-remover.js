@@ -314,7 +314,7 @@ function clearFiles() {
   updateButton();
   statusText.textContent = 'Ready';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
-  if (window.updateFileCount) window.updateFileCount(0);
+  if (window.updateQueueSummary) window.updateQueueSummary([]);
 }
 
 function updateButton() {
@@ -330,10 +330,11 @@ function renderFileList() {
   }
   fileList.innerHTML = '';
   files.forEach((f, i) => fileList.appendChild(createFileElement(f, i)));
-  if (window.updateFileCount) window.updateFileCount(files.length);
+  if (window.updateQueueSummary) window.updateQueueSummary(files);
 }
 
 function renderFileItem(index) {
+  if (window.updateQueueSummary) window.updateQueueSummary(files);
   const existing = fileList.children[index];
   if (!existing) return;
   fileList.replaceChild(createFileElement(files[index], index), existing);

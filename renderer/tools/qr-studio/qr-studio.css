@@ -1,14 +1,17 @@
 /* QR Studio - tool-specific styles */
 
 .qr-generate-layout {
-  display: flex;
-  gap: 24px;
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(280px, 38%);
+  gap: 16px;
   flex: 1;
   min-height: 0;
 }
 
 .qr-generate-form {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -17,15 +20,14 @@
 }
 
 .qr-preview-box {
-  width: 280px;
-  min-height: 280px;
+  width: 100%;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  flex-shrink: 0;
   overflow: hidden;
 }
 
@@ -90,6 +92,7 @@
 /* Template field panels */
 .qr-template-fields {
   margin-bottom: 4px;
+  flex-shrink: 0;
 }
 
 .qr-template-grid {
@@ -155,9 +158,9 @@
 
 /* Scan section */
 .qr-scan-section {
-  margin-top: 16px;
+  margin-top: 0;
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: 10px;
 }
 
 .qr-scan-toggle {
@@ -176,7 +179,17 @@
 }
 
 .qr-scan-panel {
-  margin-top: 12px;
+  margin-top: 10px;
+}
+
+@media (max-width: 920px) {
+  .qr-generate-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .qr-preview-box {
+    min-height: 260px;
+  }
 }
 
 .qr-scan-result {

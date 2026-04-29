@@ -140,6 +140,7 @@ function setVideo(path) {
   videoInfo.style.display = 'flex';
   previewArea.innerHTML = '<div class="empty-state">Ready to create GIF. Adjust settings and click Create.</div>';
   createBtn.disabled = false;
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'pending' }]);
   log(`Selected: ${getFileName(path)}`);
 }
 
@@ -153,6 +154,7 @@ async function startCreation() {
   if (!videoFile) return;
 
   isProcessing = true;
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }]);
   createBtn.disabled = false;
   createBtn.textContent = 'Cancel';
   createBtn.classList.add('btn-cancel');
@@ -182,15 +184,18 @@ async function startCreation() {
       log(`GIF created: ${result.output || 'done'}`, 'success');
       if (result.output) { lastOutputDir = result.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/'); openOutputBtn.style.display = ''; }
       statusText.textContent = 'GIF created!';
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }]);
       if (window.showCompletionToast) window.showCompletionToast('GIF created successfully!');
       if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
     } else if (result && result.error) {
       log(`GIF error: ${result.error}`, 'error');
       statusText.textContent = 'Error creating GIF';
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }]);
     }
   } catch (err) {
     log(`GIF creation error: ${err.message}`, 'error');
     statusText.textContent = 'Error creating GIF';
+    if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }]);
   }
 
   isProcessing = false;
@@ -229,6 +234,7 @@ function clearAll() {
   previewArea.innerHTML = '<div class="empty-state">Drop a video above to get started.</div>';
   createBtn.disabled = true;
   statusText.textContent = 'Ready';
+  if (window.updateQueueSummary) window.updateQueueSummary([]);
 }
 
 function getFileExtension(fp) {

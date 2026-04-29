@@ -258,6 +258,47 @@ window.updateFileCount = function(count) {
   }
 };
 
+window.updateQueueSummary = function(items) {
+  const footerLeft = document.querySelector('.tool-footer-left');
+  if (!footerLeft) return;
+
+  let summary = document.querySelector('.queue-summary');
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    if (summary) summary.remove();
+    window.updateFileCount(0);
+    return;
+  }
+
+  const counts = list.reduce((acc, item) => {
+    const state = item && item.state ? item.state : 'pending';
+    acc[state] = (acc[state] || 0) + 1;
+    return acc;
+  }, {});
+
+  if (!summary) {
+    summary = document.createElement('span');
+    summary.className = 'queue-summary';
+    const fileCount = document.querySelector('.file-count');
+    if (fileCount && fileCount.parentNode === footerLeft) {
+      fileCount.insertAdjacentElement('afterend', summary);
+    } else {
+      footerLeft.appendChild(summary);
+    }
+  }
+
+  const pending = (counts.pending || 0) + (counts.queued || 0);
+  const parts = [];
+  if (pending) parts.push(`<span class="queue-pill">Ready ${pending}</span>`);
+  if (counts.processing) parts.push(`<span class="queue-pill processing">Working ${counts.processing}</span>`);
+  if (counts.complete) parts.push(`<span class="queue-pill complete">Done ${counts.complete}</span>`);
+  if (counts.error) parts.push(`<span class="queue-pill error">Failed ${counts.error}</span>`);
+  if (counts.cancelled) parts.push(`<span class="queue-pill">Cancelled ${counts.cancelled}</span>`);
+
+  summary.innerHTML = parts.join('');
+  window.updateFileCount(list.length);
+};
+
 // Platform-aware file reveal label
 function getRevealLabel() {
   const ua = navigator.userAgent.toLowerCase();
@@ -522,6 +563,7 @@ async function loadTool(toolId) {
   });
 
   currentToolId = toolId;
+  if (window.updateQueueSummary) window.updateQueueSummary([]);
 
   // Update window title
   const toolLabel = document.querySelector(`.sidebar-item[data-tool="${toolId}"] .sidebar-label`);

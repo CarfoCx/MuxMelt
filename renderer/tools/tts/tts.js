@@ -87,6 +87,7 @@ function handleWSMessage(data) {
       generateBtn.classList.remove('btn-cancel');
       processingIndicator.classList.remove('active');
       statusText.textContent = 'Audio generated!';
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }]);
       if (data.output) {
         const dir = data.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
         if (!outputDir) outputDir = dir;
@@ -102,6 +103,7 @@ function handleWSMessage(data) {
       generateBtn.classList.remove('btn-cancel');
       processingIndicator.classList.remove('active');
       statusText.textContent = `Error: ${data.error}`;
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }]);
       log(`TTS error: ${data.error}`, 'error');
       resultArea.innerHTML = `<div class="empty-state" style="color: var(--error);">Error: ${window.escapeHtml(data.error)}</div>`;
       break;
@@ -175,6 +177,7 @@ function showAudioResult(outputPath) {
 function bindEvents() {
   ttsText.addEventListener('input', () => {
     charCount.textContent = ttsText.value.length;
+    statusText.textContent = ttsText.value.trim() ? 'Text ready' : 'Ready';
   });
 
   speedSlider.addEventListener('input', () => {
@@ -202,6 +205,7 @@ function bindEvents() {
     resultArea.innerHTML = '<div class="empty-state">Enter text and click Generate to create speech audio.</div>';
     statusText.textContent = 'Ready';
     openOutputBtn.style.display = 'none';
+    if (window.updateQueueSummary) window.updateQueueSummary([]);
     window.clearLog();
   });
 
@@ -236,6 +240,7 @@ function bindEvents() {
     }
 
     isProcessing = true;
+    if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }]);
     generateBtn.disabled = false;
     generateBtn.textContent = 'Cancel';
     generateBtn.classList.add('btn-cancel');
