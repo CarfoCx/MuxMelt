@@ -12,15 +12,15 @@
   "homepage": "https://github.com/CarfoCx/MuxMelt",
   "scripts": {
     "start": "electron .",
-    "build:full:win": "node build/prepare-python.js full && electron-builder --win",
-    "build:full:mac": "node build/prepare-python.js full && electron-builder --mac",
-    "build:slim:win": "node build/prepare-python.js slim && electron-builder --win --config build/slim.json",
-    "build:slim:mac": "node build/prepare-python.js slim && electron-builder --mac --config build/slim.json",
-    "build:slim:mac:x64": "node build/prepare-python.js slim --arch=x64 && electron-builder --mac --x64 --config build/slim.json",
-    "build:slim:mac:arm64": "node build/prepare-python.js slim --arch=arm64 && electron-builder --mac --arm64 --config build/slim.json",
-    "build:linux": "node build/prepare-python.js slim && electron-builder --linux --config build/slim.json",
-    "build:linux:x64": "node build/prepare-python.js slim --arch=x64 && electron-builder --linux --x64 --config build/slim.json",
-    "build:full:linux": "node build/prepare-python.js full && electron-builder --linux"
+    "build:full:win": "node build/prepare-python.js full && electron-builder --win --publish never",
+    "build:full:mac": "node build/prepare-python.js full && electron-builder --mac --publish never",
+    "build:slim:win": "node build/prepare-python.js slim && electron-builder --win --config build/slim.json --publish never",
+    "build:slim:mac": "node build/prepare-python.js slim && electron-builder --mac --config build/slim.json --publish never",
+    "build:slim:mac:x64": "node build/prepare-python.js slim --arch=x64 && electron-builder --mac --x64 --config build/slim.json --publish never",
+    "build:slim:mac:arm64": "node build/prepare-python.js slim --arch=arm64 && electron-builder --mac --arm64 --config build/slim.json --publish never",
+    "build:linux": "node build/prepare-python.js slim && electron-builder --linux --config build/slim.json --publish never",
+    "build:linux:x64": "node build/prepare-python.js slim --arch=x64 && electron-builder --linux --x64 --config build/slim.json --publish never",
+    "build:full:linux": "node build/prepare-python.js full && electron-builder --linux --publish never"
   },
   "dependencies": {
     "jsqr": "^1.4.0",
