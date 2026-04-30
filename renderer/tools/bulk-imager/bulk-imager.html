@@ -1,19 +1,17 @@
 <!-- Tool body -->
 <div class="tool-body">
   <div class="module-banner">
-    <strong>Bulk Imager.</strong> Batch edit images with crop, resize, rotate, flip, and watermark operations.
+    <strong>Image Editor.</strong> Edit one image at a time with crop, resize, rotate, flip, and watermark tools.
   </div>
 
   <!-- Drop zone -->
   <div class="drop-zone" id="dropZone">
     <div class="drop-zone-icon">&#128444;</div>
     <div class="drop-zone-text">
-      Drag &amp; drop images for editing
+      Drag &amp; drop one image for editing
     </div>
     <div class="drop-zone-actions">
-      <span class="drop-zone-link" id="browseBtn">browse files</span>
-      <span class="drop-zone-sep">|</span>
-      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+      <span class="drop-zone-link" id="browseBtn">browse image</span>
     </div>
     <div class="drop-zone-hint">
       Supports: PNG, JPG, WebP, BMP, TIFF
@@ -34,7 +32,7 @@
   <div class="file-list-container">
     <div class="file-list" id="fileList">
       <div class="empty-state">
-        No files added yet. Drag images above or click browse.
+        No image selected yet. Drag one image above or click browse.
       </div>
     </div>
   </div>
@@ -56,7 +54,7 @@
     <button class="editor-tool" data-tool="flip" title="Flip">Flip</button>
     <button class="editor-tool" data-tool="watermark" title="Watermark">Watermark</button>
     <span class="editor-toolbar-sep"></span>
-    <button class="btn btn-sm" id="addToQueueBtn" title="Add current operation to queue">+ Add to Queue</button>
+    <button class="btn btn-sm" id="addToQueueBtn" title="Add current edit as a step">+ Add Step</button>
   </div>
 
   <!-- Tool options (changes per tool) -->
@@ -121,11 +119,11 @@
     <div class="wm-drag" id="wmDrag" style="display:none;">Watermark</div>
   </div>
 
-  <!-- Operation Queue -->
+  <!-- Edit Steps -->
   <div class="editor-queue" id="editorQueue" style="display:none;">
     <div class="editor-queue-header">
-      <span class="editor-queue-label">Operation Queue:</span>
-      <button class="btn btn-sm" id="clearQueueBtn">Clear Queue</button>
+      <span class="editor-queue-label">Edit Steps:</span>
+      <button class="btn btn-sm" id="clearQueueBtn">Clear Steps</button>
     </div>
     <div class="editor-queue-list" id="queueList"></div>
   </div>
@@ -135,8 +133,7 @@
       <span id="editorImageInfo">-</span>
     </div>
     <div class="editor-footer-right">
-      <button class="btn btn-secondary" id="edApplyOne">Apply to This Image</button>
-      <button class="btn btn-primary" id="edApplyAll">Apply to All Images</button>
+      <button class="btn btn-primary" id="edApplyOne">Export Image</button>
     </div>
   </div>
 </div>
@@ -152,8 +149,8 @@
     </div>
   </div>
   <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-clear" id="clearBtn">Clear</button>
     <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
-    <button class="btn btn-primary" id="applyBtn" disabled>Apply</button>
+    <button class="btn btn-primary" id="applyBtn" disabled>Edit Image</button>
   </div>
 </div>

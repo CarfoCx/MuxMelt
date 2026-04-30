@@ -1,5 +1,5 @@
-// ============================================================================
-// Bulk Imager Tool — Visual Editor
+﻿// ============================================================================
+// Image Editor Tool
 // ============================================================================
 
 (function() {
@@ -11,9 +11,6 @@ let outputDir = '';
 let isProcessing = false;
 let log = null;
 let progressCleanup = null;
-let batchStartTime = 0;
-let batchTotalFiles = 0;
-
 let dropZone, browseBtn, fileList, applyBtn, clearBtn, openOutputBtn;
 let outputDirBtn, statusText, processingIndicator, etaText;
 let lastOutputDir = '';
@@ -45,9 +42,6 @@ let wmText = 'Watermark', wmSize = 40, wmColor = '#ffffff', wmOpacity = 0.5;
 let wmX = 0.5, wmY = 0.5; // normalized position (0-1)
 let wmDragging = false, wmDragOffX = 0, wmDragOffY = 0;
 
-// Pending operation to apply
-let pendingOperation = null;
-
 // Operation queue for chaining
 let operationQueue = [];
 
@@ -78,7 +72,7 @@ function init(ctx) {
   _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
-  log('Bulk Imager ready — click an image to open visual editor');
+  log('Image Editor ready â€” select one image to edit');
 }
 
 function cleanup() {
@@ -111,40 +105,28 @@ function bindEvents() {
     for (const file of e.dataTransfer.files) paths.push(file.path);
     if (paths.length > 0) {
       const resolved = await window.api.resolveDroppedPaths(paths);
-      if (resolved.length > 0) addFiles(resolved);
-      else log('No supported image files found', 'warn');
+      if (resolved.length > 0) setImageFromPaths(resolved);
+      else log('No supported image found', 'warn');
     }
   });
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const paths = await window.api.selectFiles({
-      title: 'Select Images',
+      title: 'Select Image',
       filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }]
     });
-    if (paths.length > 0) addFiles(paths);
+    if (paths.length > 0) setImageFromPaths(paths);
   });
-
-  const browseFolderBtn = document.getElementById('browseFolderBtn');
-  if (browseFolderBtn) {
-    browseFolderBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (statusText) statusText.textContent = 'Scanning folder...';
-      const paths = await window.api.selectFolder();
-      if (paths.length > 0) addFiles(paths);
-      else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Ready';
-    });
-  }
 
   dropZone.addEventListener('click', async (e) => {
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
-    if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
+    if (e.target.id === 'browseBtn') return;
     const paths = await window.api.selectFiles({
-      title: 'Select Images',
+      title: 'Select Image',
       filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }]
     });
-    if (paths.length > 0) addFiles(paths);
+    if (paths.length > 0) setImageFromPaths(paths);
   });
 
   clearBtn.addEventListener('click', () => {
@@ -156,11 +138,11 @@ function bindEvents() {
   });
 
   applyBtn.addEventListener('click', () => {
-    if (!pendingOperation) {
-      log('Open the editor on an image first to set up an operation', 'warn');
+    if (!files[0]) {
+      log('Select an image first', 'warn');
       return;
     }
-    applyToAll();
+    openEditor(0);
   });
 
   progressCleanup = window.api.onToolProgress((data) => {
@@ -311,13 +293,12 @@ function bindEditorEvents() {
   });
   document.addEventListener('mouseup', () => { wmDragging = false; });
 
-  // Queue buttons
+  // Edit-step buttons
   document.getElementById('addToQueueBtn').addEventListener('click', addToQueue);
   document.getElementById('clearQueueBtn').addEventListener('click', clearQueue);
 
-  // Apply buttons
+  // Export button
   document.getElementById('edApplyOne').addEventListener('click', applyToOne);
-  document.getElementById('edApplyAll').addEventListener('click', () => { closeEditor(); applyToAll(); });
 }
 
 // ========================================================================
@@ -607,15 +588,15 @@ function updateEditorOverlays() {
 }
 
 // ========================================================================
-// Operation Queue
+// Edit steps
 // ========================================================================
 
 function addToQueue() {
   const op = buildOperation();
-  if (!op) { log('Configure an operation first before adding to queue', 'warn'); return; }
+  if (!op) { log('Configure an edit before adding a step', 'warn'); return; }
   operationQueue.push(op);
   renderQueue();
-  log(`Added ${op.operation} to queue (${operationQueue.length} operation${operationQueue.length > 1 ? 's' : ''} queued)`);
+  log(`Added ${op.operation} step (${operationQueue.length} step${operationQueue.length > 1 ? 's' : ''})`);
 }
 
 function removeFromQueue(index) {
@@ -743,121 +724,74 @@ function buildOperation() {
 // ========================================================================
 
 async function applyToOne() {
-  const op = buildOperation();
-  if (!op) { log('No operation configured', 'warn'); return; }
-
   const file = files[currentEditorFile];
   if (!file) return;
 
-  log(`Applying ${op.operation} to ${file.name}...`);
+  const chain = operationQueue.length > 0 ? operationQueue.slice() : null;
+  const op = chain ? chain[0] : buildOperation();
+  if (!op && !chain) { log('Configure an edit before exporting', 'warn'); return; }
+
+  const label = chain ? chain.map(step => step.operation).join(' -> ') : op.operation;
+  log(`Exporting ${file.name} with ${label}...`);
+  isProcessing = true;
+  applyBtn.disabled = true;
   file.state = 'processing';
   file.status = 'Processing...';
-
-  try {
-    const result = await window.api.bulkProcess({
-      files: [file.path],
-      operation: op.operation,
-      operationOptions: op.operationOptions,
-      outputDir: outputDir
-    });
-
-    if (result && result.success) {
-      file.state = 'complete';
-      file.progress = 1;
-      file.status = 'Complete';
-      if (outputDir) lastOutputDir = outputDir;
-      else lastOutputDir = file.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-      openOutputBtn.style.display = '';
-      log(`Done: ${file.name}`, 'success');
-    } else {
-      file.state = 'error';
-      file.status = `Error: ${result ? result.error : 'unknown'}`;
-      log(`Error: ${result ? result.error : 'unknown'}`, 'error');
-    }
-  } catch (err) {
-    file.state = 'error';
-    file.status = `Error: ${err.message}`;
-    log(`Error: ${err.message}`, 'error');
-  }
-
+  file.progress = 0;
   renderFileList();
-  closeEditor();
-}
-
-async function applyToAll() {
-  // Determine chain: queued operations or single operation
-  const chain = operationQueue.length > 0
-    ? operationQueue.slice()
-    : null;
-  const op = chain ? chain[0] : (pendingOperation || buildOperation());
-  if (!op && !chain) { log('Open the editor and configure an operation first', 'warn'); return; }
-
-  if (!chain) pendingOperation = op;
-  const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
-  if (pending.length === 0) { log('No pending files to process', 'warn'); return; }
-
-  const useChain = chain && chain.length > 0;
-  const statusLabel = useChain
-    ? chain.map(c => c.operation).join(' \u2192 ')
-    : op.operation;
-
-  isProcessing = true;
-  batchStartTime = Date.now();
-  batchTotalFiles = pending.length;
-  if (etaText) etaText.textContent = 'ETA: calculating...';
-  applyBtn.disabled = true;
   processingIndicator.classList.add('active');
-  statusText.textContent = `Applying ${statusLabel} to ${pending.length} file(s)...`;
-  log(`Applying ${statusLabel} to ${pending.length} file(s)...`);
+  statusText.textContent = 'Exporting image...';
+  if (window.updateQueueSummary) window.updateQueueSummary(files);
 
   try {
-    const result = useChain
+    const result = chain
       ? await window.api.bulkProcessChain({
-          files: pending.map(f => f.path),
-          chain: chain,
+          files: [file.path],
+          chain,
           outputDir: outputDir
         })
       : await window.api.bulkProcess({
-          files: pending.map(f => f.path),
+          files: [file.path],
           operation: op.operation,
           operationOptions: op.operationOptions,
           outputDir: outputDir
         });
 
-    if (result && result.success && result.results) {
-      for (const r of result.results) {
-        const idx = files.findIndex(f => f.path === r.input);
-        if (idx === -1) continue;
-        if (r.success) {
-          files[idx].state = 'complete';
-          files[idx].progress = 1;
-          files[idx].status = 'Complete';
-        } else {
-          files[idx].state = 'error';
-          files[idx].status = `Error: ${r.error}`;
-        }
-      }
-      if (outputDir) lastOutputDir = outputDir;
-      else if (pending.length > 0) lastOutputDir = pending[0].path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-    } else if (result && result.error) {
-      pending.forEach(f => { f.state = 'error'; f.status = `Error: ${result.error}`; });
-      log(`Error: ${result.error}`, 'error');
+    const first = result && result.results && result.results[0];
+    if (result && result.success && (!first || first.success)) {
+      file.state = 'complete';
+      file.progress = 1;
+      file.status = 'Complete';
+      const output = first && first.output ? first.output : '';
+      if (output) {
+        lastOutputDir = output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        if (window.addRecentFile) window.addRecentFile(output);
+      } else if (outputDir) lastOutputDir = outputDir;
+      else lastOutputDir = file.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+      openOutputBtn.style.display = '';
+      log(`Exported: ${output || file.name}`, 'success');
+      statusText.textContent = 'Image exported';
+      if (window.showCompletionToast) window.showCompletionToast('Image exported successfully', false, output ? [output] : []);
+      if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+    } else {
+      file.state = 'error';
+      const error = first && first.error ? first.error : (result ? result.error : 'unknown');
+      file.status = `Error: ${error}`;
+      statusText.textContent = 'Export failed';
+      log(`Error: ${error}`, 'error');
     }
   } catch (err) {
-    pending.forEach(f => { f.state = 'error'; f.status = `Error: ${err.message}`; });
+    file.state = 'error';
+    file.status = `Error: ${err.message}`;
+    statusText.textContent = 'Export failed';
     log(`Error: ${err.message}`, 'error');
   }
 
   renderFileList();
   isProcessing = false;
-  if (etaText) etaText.textContent = '';
-  applyBtn.disabled = files.filter(f => f.state === 'pending' || f.state === 'error').length === 0;
   processingIndicator.classList.remove('active');
-  const completed = files.filter(f => f.state === 'complete').length;
-  const errors = files.filter(f => f.state === 'error').length;
-  statusText.textContent = `Done! ${completed} processed${errors > 0 ? `, ${errors} failed` : ''}`;
-  if (lastOutputDir) openOutputBtn.style.display = '';
-  log(`Finished: ${completed} completed, ${errors} failed`, errors > 0 ? 'warn' : 'success');
+  updateButton();
+  closeEditor();
 }
 
 // ========================================================================
@@ -866,7 +800,6 @@ async function applyToAll() {
 
 function handleProgress(data) {
   if (data.status) statusText.textContent = data.status;
-  if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files);
 }
 
 // ========================================================================
@@ -880,27 +813,47 @@ function getFileExtension(fp) {
 
 function getFileName(fp) { return fp.replace(/\\/g, '/').split('/').pop(); }
 
-async function addFiles(paths) {
-  let added = 0;
+async function setImageFromPaths(paths) {
+  let selected = null;
   for (const p of paths) {
     const ext = getFileExtension(p);
     if (!IMAGE_EXTS.has(ext)) continue;
-    if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
-    const size = await window.api.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Ready', state: 'pending' });
-    added++;
+    selected = p;
+    break;
   }
-  if (added > 0) log(`Added ${added} image file(s) — click an image to edit`);
+
+  if (!selected) {
+    log('No supported image found', 'warn');
+    return;
+  }
+
+  const size = await window.api.getFileSize(selected);
+  files = [{ path: selected, name: getFileName(selected), size, progress: 0, status: 'Ready to edit', state: 'pending' }];
+  operationQueue = [];
+  renderQueue();
+  lastOutputDir = '';
+  openOutputBtn.style.display = 'none';
+  statusText.textContent = 'Image ready';
+  log(`Selected image: ${getFileName(selected)}`);
   renderFileList();
   updateButton();
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
 }
 
-function removeFile(index) { files.splice(index, 1); renderFileList(); updateButton(); }
+async function addFiles(paths) {
+  await setImageFromPaths(paths);
+}
+
+function removeFile(index) {
+  files.splice(index, 1);
+  renderFileList();
+  updateButton();
+  if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
+  if (files.length === 0 && window.updateQueueSummary) window.updateQueueSummary([]);
+}
 
 function clearFiles() {
   files = [];
-  pendingOperation = null;
   operationQueue = [];
   renderQueue();
   renderFileList();
@@ -910,8 +863,7 @@ function clearFiles() {
 }
 
 function updateButton() {
-  const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
-  applyBtn.disabled = pending.length === 0 || isProcessing;
+  applyBtn.disabled = files.length === 0 || isProcessing;
 }
 
 // ========================================================================
@@ -920,7 +872,7 @@ function updateButton() {
 
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">No image selected. Drag one image here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     return;
   }
   fileList.innerHTML = '';
@@ -945,7 +897,7 @@ function createFileElement(file, index) {
 
   el.innerHTML = `
     <img class="file-thumb" data-path="${window.escapeHtml(file.path)}" src="" alt="">
-    <div class="file-info">
+      <div class="file-info">
       <div class="file-name" title="${window.escapeHtml(file.path)}">${window.escapeHtml(file.name)}<span class="file-edit-badge">click to edit</span></div>
       <div class="file-status">${window.escapeHtml(file.status)}</div>
     </div>

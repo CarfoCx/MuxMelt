@@ -13,7 +13,7 @@ MuxMelt is a desktop media utility for common file conversion, cleanup, and batc
 | GIF Maker | Creates GIFs from video clips with FPS, width, and duration controls |
 | Video Compressor | Reduces video file size with codec, CRF, preset, and resolution options |
 | Background Remover | Removes image backgrounds and exports transparent PNG files |
-| Bulk Imager | Batch-crops, resizes, rotates, flips, and watermarks images |
+| Image Editor | Edits one image at a time with crop, resize, rotate, flip, and watermark tools |
 | PDF Toolkit | Merges, splits, extracts pages, adds text, and securely redacts matching PDF text |
 | Stem Separator | Separates vocals, drums, bass, and other stems from audio tracks |
 | QR Studio | Generates styled QR codes and scans QR codes from images |
