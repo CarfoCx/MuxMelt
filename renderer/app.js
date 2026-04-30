@@ -644,8 +644,6 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
 // ============================================================================
 
 async function init() {
-  log('Starting MuxMelt...');
-
   const allSettings = await loadGlobalSettings();
   if (allSettings.global?.logCollapsed) {
     logPanel.classList.add('collapsed');
@@ -657,7 +655,6 @@ async function init() {
 
   pythonPort = await window.api.getPythonPort();
   window.pythonPort = pythonPort;
-  log(`Backend port: ${pythonPort}`);
 
   checkHealth();
   startGpuPolling();

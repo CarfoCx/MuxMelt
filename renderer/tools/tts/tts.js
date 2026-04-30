@@ -119,7 +119,7 @@ function handleComplete(data) {
   generateBtn.classList.remove('btn-cancel');
   processingIndicator.classList.remove('active');
   
-  statusText.textContent = isActuallyPreview ? 'Preview ready' : 'Audio generated!';
+  statusText.textContent = isActuallyPreview ? 'Preview Generated' : 'Audio generated!';
   if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }]);
   
   if (!isActuallyPreview && data.output) {
