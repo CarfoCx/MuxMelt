@@ -32,7 +32,7 @@ function init(ctx) {
   bindEvents();
   loadToolSettings();
   addRow('');
-  log('Online Video Downloader ready');
+  log('Online Video Downloader initialized');
 }
 
 function cleanup() {
@@ -61,7 +61,7 @@ function bindEvents() {
     retryBtn.style.display = 'none';
     window.clearLog();
     addRow('');
-    statusText.textContent = 'Ready';
+    statusText.textContent = 'Waiting for URL';
   });
 
   retryBtn.addEventListener('click', () => {
@@ -69,7 +69,7 @@ function bindEvents() {
       if (row.state === 'error') {
         row.state = 'pending';
         row.progress = 0;
-        row.status = 'Ready';
+        row.status = 'Waiting for URL';
       }
     });
     retryBtn.style.display = 'none';
@@ -94,7 +94,7 @@ function addRow(value) {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     url: value || '',
     progress: 0,
-    status: 'Ready',
+    status: 'Waiting for URL',
     state: 'pending',
     output: ''
   });
@@ -112,7 +112,7 @@ function createEmptyRow() {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     url: '',
     progress: 0,
-    status: 'Ready',
+    status: 'Waiting for URL',
     state: 'pending',
     output: ''
   };
@@ -278,7 +278,7 @@ function renderRows() {
     input.addEventListener('input', () => {
       row.url = input.value;
       row.state = 'pending';
-      row.status = 'Ready';
+      row.status = 'Waiting for URL';
       row.progress = 0;
       updateButton();
     });

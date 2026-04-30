@@ -14,9 +14,16 @@
   <!-- Settings -->
   <div class="settings-bar" style="flex-wrap: wrap;">
     <div class="setting-group">
+      <label>Language:</label>
+      <select id="languageSelect">
+        <option value="en">English</option>
+      </select>
+    </div>
+
+    <div class="setting-group">
       <label>Voice:</label>
       <select id="voiceSelect">
-        <option value="">Loading voices...</option>
+        <option value="">Select a language first</option>
       </select>
     </div>
 
@@ -45,7 +52,7 @@
   <!-- Progress / result area -->
   <div class="tts-result-area" id="resultArea">
     <div class="empty-state">
-      Enter text and click Generate to create speech audio.
+      Enter text and click Preview or Generate.
     </div>
   </div>
 
@@ -54,7 +61,7 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Ready</span>
+    <span class="status-text" id="statusText">Waiting for Text</span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
       <span>Generating...</span>
@@ -63,6 +70,7 @@
   <div class="tool-footer-right">
     <button class="btn btn-clear" id="clearBtn">Clear All</button>
     <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-secondary" id="previewBtn">Preview</button>
     <button class="btn btn-primary" id="generateBtn">Generate</button>
   </div>
 </div>

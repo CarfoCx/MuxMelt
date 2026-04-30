@@ -79,7 +79,7 @@ function init(ctx) {
   _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
 
-  log('Upscaler ready');
+  log('Upscaler initialized');
 }
 
 function cleanup() {
@@ -208,7 +208,7 @@ function bindEvents() {
     const paths = await window.api.selectFolder();
     if (paths.length > 0) addFiles(paths);
     else log('No supported files found in folder', 'warn');
-    if (statusText) statusText.textContent = 'Ready';
+    if (statusText) statusText.textContent = 'Waiting for File';
   });
 
   dropZone.addEventListener('click', async (e) => {
@@ -327,8 +327,8 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
-    if (statusText) statusText.textContent = 'Connected to backend';
-    log('WebSocket connected', 'success');
+    // Removed technical logs
+    // Request initial data if needed
   };
   ws.onmessage = (event) => handleWSMessage(JSON.parse(event.data));
   ws.onclose = () => {
@@ -460,7 +460,7 @@ async function addFiles(paths) {
     else continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
     const size = await window.api.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Ready', state: 'pending', output: null });
+    files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for File', state: 'pending', output: null });
     added++;
   }
   if (added > 0) log(`Added ${added} file(s)`);
@@ -475,7 +475,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateUpscaleButton();
-  statusText.textContent = 'Ready';
+  statusText.textContent = 'Waiting for File';
   etaText.textContent = '';
   if (retryBtn) retryBtn.style.display = 'none';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);

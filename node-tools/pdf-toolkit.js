@@ -302,7 +302,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
   // ---- EDIT / SECURE REDACT ----
   ipcMain.handle('pdf-toolkit-edit', async (event, options = {}) => {
-    const { inputPath, outputDir, redactTerms, textEdit } = options;
+    const { inputPath, outputDir, redactTerms, rects, edits: textEdits } = options;
 
     try {
       if (!inputPath || !fs.existsSync(inputPath)) {
@@ -310,9 +310,14 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       }
 
       const terms = splitRedactionTerms(redactTerms);
-      const text = String((textEdit && textEdit.text) || '').trim();
-      if (terms.length === 0 && !text) {
-        return { success: false, error: 'Add at least one redaction term or text edit.' };
+      const win = getMainWindow();
+
+      if (win) {
+        win.webContents.send('tool-progress', {
+          tool: 'pdf-toolkit',
+          percent: 0,
+          status: 'Applying PDF edits...'
+        });
       }
 
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
@@ -320,29 +325,15 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       const baseName = path.basename(inputPath, '.pdf');
       const outputPath = path.join(outDir, `${baseName}_edited.pdf`);
-      const edits = text ? [{
-        text,
-        page: Math.max(1, parseInt(textEdit.page, 10) || 1),
-        x: Math.max(0, parseFloat(textEdit.x) || 72),
-        y: Math.max(0, parseFloat(textEdit.y) || 72),
-        size: Math.max(6, Math.min(96, parseFloat(textEdit.size) || 12)),
-      }] : [];
-
-      const win = getMainWindow();
-      if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 0,
-          status: 'Editing PDF...'
-        });
-      }
 
       const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
       const result = await runPythonPdfEdit(pythonInfo, {
+        action: 'edit',
         inputPath,
         outputPath,
         terms,
-        edits,
+        rects: rects || [],
+        edits: textEdits || [],
       });
 
       if (win) {
@@ -360,10 +351,29 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         textEdits: result.textEdits || 0,
       };
     } catch (err) {
-      const message = (err.message || '').toLowerCase().includes('no module named')
-        ? 'PyMuPDF is not installed. Run setup again or install Python dependencies from python/requirements.txt.'
-        : formatToolError(err, 'PDF Toolkit');
-      return { success: false, error: message };
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  // ---- RENDER PREVIEW ----
+  ipcMain.handle('pdf-toolkit-render', async (event, options = {}) => {
+    const { inputPath, dpi = 150 } = options;
+
+    try {
+      if (!inputPath || !fs.existsSync(inputPath)) {
+        throw new Error('PDF file not found');
+      }
+
+      const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
+      const result = await runPythonPdfEdit(pythonInfo, {
+        action: 'render',
+        inputPath,
+        dpi
+      });
+
+      return result;
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
     }
   });
 

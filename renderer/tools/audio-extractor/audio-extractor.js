@@ -46,7 +46,7 @@ function init(ctx) {
   document.addEventListener('paste-files', _pasteHandler);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   loadToolSettings();
-  log('Audio Extractor ready');
+  log('Audio Extractor initialized');
 }
 
 function cleanup() {
@@ -102,7 +102,7 @@ function bindEvents() {
       const paths = await window.api.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Ready';
+      if (statusText) statusText.textContent = 'Waiting for Video';
     });
   }
 
@@ -125,7 +125,7 @@ function bindEvents() {
 
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
-      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Ready'; } });
+      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Waiting for Video'; } });
       retryBtn.style.display = 'none';
       renderFileList();
       updateButton();
@@ -258,7 +258,7 @@ async function addFiles(paths) {
     if (!VIDEO_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) continue;
     const size = await window.api.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Ready', state: 'pending' });
+    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Video', state: 'pending' });
     added++;
   }
   if (added > 0) log(`Added ${added} video file(s)`);
@@ -273,7 +273,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateButton();
-  statusText.textContent = 'Ready';
+  statusText.textContent = 'Waiting for Video';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }

@@ -289,7 +289,7 @@ window.updateQueueSummary = function(items) {
 
   const pending = (counts.pending || 0) + (counts.queued || 0);
   const parts = [];
-  if (pending) parts.push(`<span class="queue-pill">Ready ${pending}</span>`);
+  if (pending) parts.push(`<span class="queue-pill">Queued ${pending}</span>`);
   if (counts.processing) parts.push(`<span class="queue-pill processing">Working ${counts.processing}</span>`);
   if (counts.complete) parts.push(`<span class="queue-pill complete">Done ${counts.complete}</span>`);
   if (counts.error) parts.push(`<span class="queue-pill error">Failed ${counts.error}</span>`);
@@ -513,14 +513,14 @@ function checkHealth() {
     .then(r => r.json())
     .then(data => {
       const hasGpu = data.device === 'cuda' || data.device === 'mps';
-      gpuBadge.textContent = hasGpu ? data.gpu_name || 'GPU Ready' : 'CPU Mode (slower)';
+      gpuBadge.textContent = hasGpu ? data.gpu_name || 'GPU Active' : 'CPU Mode (slower)';
       gpuBadge.style.borderColor = hasGpu ? '#4ade80' : '#fbbf24';
-      log(`Device: ${data.device.toUpperCase()}`, hasGpu ? 'success' : 'warn');
-      if (data.gpu_name) log(`GPU: ${data.gpu_name}`);
+      // log(`Device: ${data.device.toUpperCase()}`, hasGpu ? 'success' : 'warn'); // Removed
+      // if (data.gpu_name) log(`GPU: ${data.gpu_name}`); // Removed
       if (!hasGpu) {
         log('No GPU detected — processing will be slower. An NVIDIA GPU with CUDA or Apple Silicon is recommended.', 'warn');
       }
-      if (data.python_version) log(`Python ${data.python_version}`);
+      // if (data.python_version) log(`Python ${data.python_version}`); // Removed
     })
     .catch(() => {
       gpuBadge.textContent = 'Backend Error';

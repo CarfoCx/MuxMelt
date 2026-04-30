@@ -59,7 +59,7 @@ function init(ctx) {
   connectWebSocket(pythonPort);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   loadToolSettings();
-  log('Stem Separator ready');
+  log('Stem Separator initialized');
 }
 
 function cleanup() {
@@ -73,8 +73,7 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/stem-separator/ws`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
-    if (statusText) statusText.textContent = 'Connected to backend';
-    log('WebSocket connected', 'success');
+    // Removed technical logs
   };
   ws.onmessage = (event) => handleWSMessage(JSON.parse(event.data));
   ws.onclose = () => {
@@ -201,7 +200,7 @@ function bindEvents() {
       const paths = await window.api.selectFolder();
       if (paths.length > 0) addFilesDirect(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Ready';
+      if (statusText) statusText.textContent = 'Waiting for Audio';
     });
   }
 
@@ -308,7 +307,7 @@ async function addFilesDirect(paths) {
     const ext = getFileExtension(p);
     const type = AUDIO_EXTS.has(ext) ? 'audio' : 'video';
     const size = await window.api.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Ready', state: 'pending', outputs: {} });
+    files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for Audio', state: 'pending', outputs: {} });
     added++;
   }
   if (added > 0) log(`Added ${added} file(s)`);
@@ -323,7 +322,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateButton();
-  statusText.textContent = 'Ready';
+  statusText.textContent = 'Waiting for Audio';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }

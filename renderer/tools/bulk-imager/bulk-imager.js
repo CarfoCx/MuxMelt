@@ -72,7 +72,7 @@ function init(ctx) {
   _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
-  log('Image Editor ready â€” select one image to edit');
+  log('Image Editor initialized — select one image to edit');
 }
 
 function cleanup() {
@@ -828,12 +828,12 @@ async function setImageFromPaths(paths) {
   }
 
   const size = await window.api.getFileSize(selected);
-  files = [{ path: selected, name: getFileName(selected), size, progress: 0, status: 'Ready to edit', state: 'pending' }];
+  files = [{ path: selected, name: getFileName(selected), size, progress: 0, status: 'Active', state: 'pending' }];
   operationQueue = [];
   renderQueue();
   lastOutputDir = '';
   openOutputBtn.style.display = 'none';
-  statusText.textContent = 'Image ready';
+  statusText.textContent = 'Image Selected';
   log(`Selected image: ${getFileName(selected)}`);
   renderFileList();
   updateButton();
@@ -858,7 +858,7 @@ function clearFiles() {
   renderQueue();
   renderFileList();
   updateButton();
-  statusText.textContent = 'Ready';
+  statusText.textContent = 'Waiting for Image';
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }
 

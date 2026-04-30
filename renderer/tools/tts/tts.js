@@ -15,21 +15,26 @@ let reconnectAttempts = 0;
 let reconnectTimerId = null;
 const MAX_RECONNECT_DELAY = 30000;
 
-let ttsText, voiceSelect, speedSlider, speedValue, outputFormat;
-let outputDirBtn, generateBtn, clearBtn, statusText, processingIndicator;
+let ttsText, languageSelect, voiceSelect, speedSlider, speedValue, outputFormat;
+let outputDirBtn, generateBtn, previewBtn, clearBtn, statusText, processingIndicator;
 let resultArea, charCount, openOutputBtn;
+
+let allVoices = [];
+let isPreviewing = false;
 
 function init(ctx) {
   pythonPort = ctx.pythonPort;
   log = ctx.log;
 
   ttsText = document.getElementById('ttsText');
+  languageSelect = document.getElementById('languageSelect');
   voiceSelect = document.getElementById('voiceSelect');
   speedSlider = document.getElementById('speedSlider');
   speedValue = document.getElementById('speedValue');
   outputFormat = document.getElementById('outputFormat');
   outputDirBtn = document.getElementById('outputDirBtn');
   generateBtn = document.getElementById('generateBtn');
+  previewBtn = document.getElementById('previewBtn');
   clearBtn = document.getElementById('clearBtn');
   statusText = document.getElementById('statusText');
   processingIndicator = document.getElementById('processingIndicator');
@@ -39,7 +44,7 @@ function init(ctx) {
 
   bindEvents();
   connectWebSocket(pythonPort);
-  log('Text-to-Speech ready');
+  // log('Text-to-Speech initialized'); // Removed as per request to clean logs
 }
 
 function cleanup() {
@@ -52,8 +57,8 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/tts/ws`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
-    if (statusText) statusText.textContent = 'Connected to backend';
-    log('WebSocket connected', 'success');
+    // if (statusText) statusText.textContent = 'Connected to backend';
+    // log('WebSocket connected', 'success'); // Removed technical log
     // Request voice list
     ws.send(JSON.stringify({ action: 'list_voices' }));
   };
@@ -63,7 +68,7 @@ function connectWebSocket(port) {
     statusText.textContent = 'Disconnected - reconnecting...';
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
-    log(`WebSocket disconnected, reconnecting in ${(delay / 1000).toFixed(1)}s...`, 'warn');
+    // log(`WebSocket disconnected...`, 'warn'); // Simplified log
     reconnectTimerId = setTimeout(() => connectWebSocket(port), delay);
   };
   ws.onerror = () => { if (statusText) statusText.textContent = 'Connection error'; };
@@ -72,33 +77,26 @@ function connectWebSocket(port) {
 function handleWSMessage(data) {
   switch (data.type) {
     case 'voices':
-      populateVoices(data.voices || []);
+      allVoices = data.voices || [];
+      populateLanguages();
       break;
     case 'log':
-      log(data.message, data.level || 'info');
+      // Filter out technical logs from backend
+      if (!data.message.toLowerCase().includes('websocket') && !data.message.toLowerCase().includes('connected')) {
+        log(data.message, data.level || 'info');
+      }
       break;
     case 'progress':
       updateProgress(data.progress, data.status);
       break;
     case 'complete':
-      isProcessing = false;
-      generateBtn.disabled = false;
-      generateBtn.textContent = 'Generate';
-      generateBtn.classList.remove('btn-cancel');
-      processingIndicator.classList.remove('active');
-      statusText.textContent = 'Audio generated!';
-      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }]);
-      if (data.output) {
-        const dir = data.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-        if (!outputDir) outputDir = dir;
-        openOutputBtn.style.display = '';
-      }
-      log(`Audio saved: ${data.output || 'done'}`, 'success');
-      showAudioResult(data.output);
+      handleComplete(data);
       break;
     case 'error':
       isProcessing = false;
+      isPreviewing = false;
       generateBtn.disabled = false;
+      previewBtn.disabled = false;
       generateBtn.textContent = 'Generate';
       generateBtn.classList.remove('btn-cancel');
       processingIndicator.classList.remove('active');
@@ -110,19 +108,94 @@ function handleWSMessage(data) {
   }
 }
 
-function populateVoices(voices) {
-  voiceSelect.innerHTML = '';
-  if (voices.length === 0) {
-    voiceSelect.innerHTML = '<option value="default">Default</option>';
-    return;
+function handleComplete(data) {
+  isProcessing = false;
+  const isActuallyPreview = isPreviewing;
+  isPreviewing = false;
+  
+  generateBtn.disabled = false;
+  previewBtn.disabled = false;
+  generateBtn.textContent = 'Generate';
+  generateBtn.classList.remove('btn-cancel');
+  processingIndicator.classList.remove('active');
+  
+  statusText.textContent = isActuallyPreview ? 'Preview ready' : 'Audio generated!';
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }]);
+  
+  if (!isActuallyPreview && data.output) {
+    const dir = data.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+    if (!outputDir) outputDir = dir;
+    openOutputBtn.style.display = '';
+    log(`Audio saved: ${data.output}`, 'success');
   }
-  voices.forEach(v => {
+  
+  showAudioResult(data.output, isActuallyPreview);
+}
+
+function populateLanguages() {
+  const languages = new Set();
+  allVoices.forEach(v => {
+    if (v.locale) {
+      const lang = v.locale.split('-')[0];
+      languages.add(lang);
+    }
+  });
+
+  languageSelect.innerHTML = '';
+  const sortedLangs = Array.from(languages).sort();
+  
+  // Try to find full language names
+  const langNames = {
+    'en': 'English',
+    'es': 'Spanish',
+    'fr': 'French',
+    'de': 'German',
+    'it': 'Italian',
+    'pt': 'Portuguese',
+    'ja': 'Japanese',
+    'zh': 'Chinese',
+    'ko': 'Korean',
+    'ru': 'Russian',
+    'hi': 'Hindi',
+    'ar': 'Arabic'
+  };
+
+  sortedLangs.forEach(lang => {
     const opt = document.createElement('option');
-    opt.value = v.id || v.name || v;
-    opt.textContent = v.name || v.id || v;
+    opt.value = lang;
+    opt.textContent = langNames[lang] || lang.toUpperCase();
+    languageSelect.appendChild(opt);
+  });
+
+  // Default to English if available
+  if (languages.has('en')) languageSelect.value = 'en';
+  
+  populateVoices();
+}
+
+function populateVoices() {
+  const lang = languageSelect.value;
+  const filtered = allVoices.filter(v => v.locale.startsWith(lang));
+  
+  // Simplify: only take a few male and female variants
+  const simplified = [];
+  const genders = { 'Male': 0, 'Female': 0 };
+  const MAX_VARIANTS = 3;
+
+  filtered.forEach(v => {
+    if (genders[v.gender] < MAX_VARIANTS) {
+      simplified.push(v);
+      genders[v.gender]++;
+    }
+  });
+
+  voiceSelect.innerHTML = '';
+  simplified.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = `${v.gender} variant ${simplified.filter(sv => sv.gender === v.gender).indexOf(v) + 1}`;
     voiceSelect.appendChild(opt);
   });
-  log(`Loaded ${voices.length} voice(s)`);
 }
 
 function updateProgress(progress, status) {
@@ -133,42 +206,46 @@ function updateProgress(progress, status) {
   if (status) statusText.textContent = status;
 }
 
-function showAudioResult(outputPath) {
+function showAudioResult(outputPath, isPreview) {
   if (outputPath) {
     const fileUrl = 'file://' + outputPath.replace(/\\/g, '/');
     resultArea.innerHTML = `
       <div class="tts-audio-player">
         <div class="audio-preview">
           <button class="audio-play-btn" id="ttsPlayBtn" title="Play audio">&#9654;</button>
-          <span class="tts-play-label">Play result</span>
+          <span class="tts-play-label">${isPreview ? 'Play Preview' : 'Play result'}</span>
         </div>
-        <div class="tts-output-path">${window.escapeHtml(outputPath)}</div>
+        ${isPreview ? '' : `<div class="tts-output-path">${window.escapeHtml(outputPath)}</div>`}
       </div>`;
+    
     const playBtn = document.getElementById('ttsPlayBtn');
-    let currentAudio = null;
+    let audio = new Audio(fileUrl);
+    
     playBtn.addEventListener('click', () => {
-      if (currentAudio && !currentAudio.paused) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-        currentAudio = null;
+      if (!audio.paused) {
+        audio.pause();
+        audio.currentTime = 0;
         playBtn.innerHTML = '&#9654;';
         playBtn.classList.remove('playing');
-        return;
+      } else {
+        playBtn.innerHTML = '&#9632;';
+        playBtn.classList.add('playing');
+        audio.play().catch(() => {
+          playBtn.innerHTML = '&#9654;';
+          playBtn.classList.remove('playing');
+          log('Could not play audio preview', 'warn');
+        });
       }
-      currentAudio = new Audio(fileUrl);
-      playBtn.innerHTML = '&#9632;';
-      playBtn.classList.add('playing');
-      currentAudio.play().catch(() => {
-        playBtn.innerHTML = '&#9654;';
-        playBtn.classList.remove('playing');
-        log('Could not play audio preview', 'warn');
-      });
-      currentAudio.addEventListener('ended', () => {
-        playBtn.innerHTML = '&#9654;';
-        playBtn.classList.remove('playing');
-        currentAudio = null;
-      });
     });
+
+    audio.addEventListener('ended', () => {
+      playBtn.innerHTML = '&#9654;';
+      playBtn.classList.remove('playing');
+    });
+
+    // Auto-play preview
+    if (isPreview) playBtn.click();
+
   } else {
     resultArea.innerHTML = '<div class="empty-state" style="color: var(--success);">Audio generated successfully!</div>';
   }
@@ -177,8 +254,10 @@ function showAudioResult(outputPath) {
 function bindEvents() {
   ttsText.addEventListener('input', () => {
     charCount.textContent = ttsText.value.length;
-    statusText.textContent = ttsText.value.trim() ? 'Text ready' : 'Ready';
+    statusText.textContent = ttsText.value.trim() ? 'Text Entered' : 'Waiting for Text';
   });
+
+  languageSelect.addEventListener('change', populateVoices);
 
   speedSlider.addEventListener('input', () => {
     speedValue.textContent = `${parseFloat(speedSlider.value).toFixed(1)}x`;
@@ -202,76 +281,82 @@ function bindEvents() {
   clearBtn.addEventListener('click', () => {
     ttsText.value = '';
     charCount.textContent = '0';
-    resultArea.innerHTML = '<div class="empty-state">Enter text and click Generate to create speech audio.</div>';
-    statusText.textContent = 'Ready';
+    resultArea.innerHTML = '<div class="empty-state">Enter text and click Preview or Generate.</div>';
+    statusText.textContent = 'Waiting for Text';
     openOutputBtn.style.display = 'none';
     if (window.updateQueueSummary) window.updateQueueSummary([]);
     window.clearLog();
   });
 
+  previewBtn.addEventListener('click', () => startSynthesis(true));
   generateBtn.addEventListener('click', () => {
-    if (isProcessing) {
-      // Cancel
+    if (isProcessing && !isPreviewing) {
+      // Cancel logic
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: 'cancel' }));
         generateBtn.disabled = true;
         generateBtn.textContent = 'Cancelling...';
-        log('Cancelling...', 'warn');
-        setTimeout(() => {
-          if (isProcessing) {
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Cancel';
-            log('Cancel may not have completed — you can try again', 'warn');
-          }
-        }, 10000);
+        setTimeout(() => { if (isProcessing) { generateBtn.disabled = false; generateBtn.textContent = 'Cancel'; } }, 5000);
       }
       return;
     }
+    startSynthesis(false);
+  });
+}
 
-    const text = ttsText.value.trim();
-    if (!text) {
-      log('Please enter text to convert to speech', 'warn');
-      return;
-    }
+function startSynthesis(isPreview) {
+  const text = ttsText.value.trim();
+  if (!text) {
+    log('Please enter text to convert to speech', 'warn');
+    return;
+  }
 
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      log('Not connected to backend', 'error');
-      return;
-    }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    log('Not connected to backend', 'error');
+    return;
+  }
 
-    isProcessing = true;
-    if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }]);
-    generateBtn.disabled = false;
+  isProcessing = true;
+  isPreviewing = isPreview;
+  
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }]);
+  
+  generateBtn.disabled = !isPreview;
+  previewBtn.disabled = true;
+  if (!isPreview) {
     generateBtn.textContent = 'Cancel';
     generateBtn.classList.add('btn-cancel');
-    processingIndicator.classList.add('active');
-    statusText.textContent = 'Generating audio...';
+  }
+  
+  processingIndicator.classList.add('active');
+  statusText.textContent = isPreview ? 'Preparing preview...' : 'Generating audio...';
 
-    resultArea.innerHTML = `
-      <div style="text-align: center; width: 100%;">
-        <div class="file-progress-bar"><div class="file-progress-fill" id="ttsProgress" style="width: 0%"></div></div>
-        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">Generating...</div>
-      </div>`;
+  resultArea.innerHTML = `
+    <div style="text-align: center; width: 100%;">
+      <div class="file-progress-bar"><div class="file-progress-fill" id="ttsProgress" style="width: 0%"></div></div>
+      <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">${isPreview ? 'Preparing preview...' : 'Generating...'}</div>
+    </div>`;
 
-    const voice = voiceSelect.value;
-    const speed = parseFloat(speedSlider.value);
-    const format = outputFormat.value;
+  const voice = voiceSelect.value;
+  const speed = parseFloat(speedSlider.value);
+  const format = outputFormat.value;
 
-    // Convert speed multiplier to edge-tts rate string (e.g., 1.5 -> "+50%", 0.5 -> "-50%")
-    const ratePercent = Math.round((speed - 1.0) * 100);
-    const rate = ratePercent >= 0 ? `+${ratePercent}%` : `${ratePercent}%`;
+  const ratePercent = Math.round((speed - 1.0) * 100);
+  const rate = ratePercent >= 0 ? `+${ratePercent}%` : `${ratePercent}%`;
 
-    log(`Generating TTS: ${text.length} chars, voice=${voice}, speed=${speed}x, format=${format}`);
+  if (!isPreview) {
+    log(`Generating TTS: ${text.length} chars, voice=${voice}, speed=${speed}x`);
+  }
 
-    ws.send(JSON.stringify({
-      action: 'synthesize',
-      text: text,
-      voice: voice,
-      rate: rate,
-      output_format: format,
-      output_dir: outputDir
-    }));
-  });
+  ws.send(JSON.stringify({
+    action: 'synthesize',
+    text: text,
+    voice: voice,
+    rate: rate,
+    output_format: format,
+    output_dir: isPreview ? 'TEMP' : outputDir,
+    is_preview: isPreview
+  }));
 }
 
 window.registerTool('tts', { init, cleanup });

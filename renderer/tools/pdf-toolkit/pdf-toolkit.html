@@ -54,24 +54,84 @@
 
     <!-- Edit / redact panel -->
     <div class="op-panel" id="panel-edit">
+      <div class="pdf-edit-intro">
+        <div class="pdf-edit-icon">&#9999;</div>
+        <h3>Interactive PDF Editor</h3>
+        <p>Open the editor to visually redact content, add text, and modify pages with a live preview.</p>
+        <button class="btn btn-primary" id="launchEditorBtn" disabled>Launch PDF Editor</button>
+      </div>
+      
+      <div class="pdf-edit-divider"><span>OR</span></div>
+
       <div class="pdf-edit-grid">
         <div class="pdf-edit-section">
-          <label for="redactTerms">Secure redaction terms</label>
-          <textarea id="redactTerms" rows="4" placeholder="One term per line, or comma-separated"></textarea>
-          <div class="pdf-edit-hint">Matched text is removed from the output PDF content, not just covered visually.</div>
-        </div>
-        <div class="pdf-edit-section">
-          <label for="editText">Add text</label>
-          <input type="text" id="editText" placeholder="Text to add">
-          <div class="pdf-edit-controls">
-            <input type="number" id="editPage" min="1" value="1" title="Page">
-            <input type="number" id="editX" min="0" value="72" title="X position">
-            <input type="number" id="editY" min="0" value="72" title="Y position">
-            <input type="number" id="editSize" min="6" max="96" value="12" title="Font size">
-          </div>
-          <div class="pdf-edit-hint">Position uses PDF points from the top-left area of the page.</div>
+          <label for="redactTerms">Bulk secure redaction terms</label>
+          <textarea id="redactTerms" rows="3" placeholder="One term per line, or comma-separated"></textarea>
+          <div class="pdf-edit-hint">Matched text is removed from the output PDF content throughout the document.</div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- PDF Editor Overlay -->
+  <div class="pdf-editor-overlay" id="pdfEditorOverlay" style="display:none;">
+    <div class="pdf-editor-header">
+      <div class="pdf-editor-title">
+        <span class="editor-back-btn" id="closeEditorBtn">&#8592;</span>
+        <span id="editorFileName">document.pdf</span>
+      </div>
+      <div class="pdf-editor-toolbar">
+        <div class="toolbar-group">
+          <button class="tool-btn active" id="toolSelect" title="Select / Pan">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M13.13 22.19l-1.63-3.83c1.57-.64 3.04-1.55 4.4-2.7l1.49 3.48c.18.41-.01.88-.42 1.05l-3.37 1.41c-.13.06-.27.09-.41.09-.3 0-.58-.17-.7-.5M5.64 12.5l-3.37 1.41c-.41.17-.6.64-.42 1.05l1.49 3.48c1.36-1.15 2.83-2.06 4.4-2.7L6.11 12c-.12-.33-.4-.5-.72-.5-.14 0-.28.03-.41.09m15.52-5.41l-18 7.5c-.32.13-.5.45-.44.78.05.34.29.61.62.67l5.07 1.01 1.01 5.07c.07.33.33.57.67.62.03 0 .06 0 .09 0 .3 0 .56-.17.69-.44l7.5-18c.13-.32.08-.68-.13-.89-.21-.21-.57-.26-.89-.13z"/></svg>
+          </button>
+          <button class="tool-btn" id="toolRedact" title="Redact Area">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3,3V21H21V3H3M19,19H5V5H19V19M17,17H7V7H17V17Z"/></svg>
+          </button>
+          <button class="tool-btn" id="toolText" title="Add Text">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M13,12H11V16H9V12H7V10H13V12M19,10V12H17V16H15V12H13V10H19M21,3H3A2,2 0 0,0 1,5V19A2,2 0 0,0 3,21H21A2,2 0 0,0 23,19V5A2,2 0 0,0 21,3M21,19H3V5H21V19Z"/></svg>
+          </button>
+        </div>
+        <div class="toolbar-separator"></div>
+        <div class="toolbar-group">
+          <input type="color" id="textColorPicker" value="#000000" title="Text Color">
+          <select id="textSizeSelect" title="Font Size">
+            <option value="8">8pt</option>
+            <option value="10">10pt</option>
+            <option value="12" selected>12pt</option>
+            <option value="14">14pt</option>
+            <option value="16">16pt</option>
+            <option value="18">18pt</option>
+            <option value="24">24pt</option>
+            <option value="36">36pt</option>
+          </select>
+        </div>
+        <div class="toolbar-separator"></div>
+        <div class="toolbar-group">
+          <button class="btn btn-secondary btn-sm" id="editorClearBtn">Reset</button>
+          <button class="btn btn-primary btn-sm" id="editorApplyBtn">Apply &amp; Export</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="pdf-editor-main">
+      <div class="pdf-editor-sidebar" id="editorSidebar">
+        <!-- Page thumbnails will go here -->
+      </div>
+      <div class="pdf-editor-content" id="editorContent">
+        <div class="pdf-viewer-loading" id="editorLoading">
+          <div class="spinner"></div>
+          <span>Rendering PDF pages...</span>
+        </div>
+        <div class="pdf-pages-container" id="pagesContainer">
+          <!-- Rendered pages will go here -->
+        </div>
+      </div>
+    </div>
+    
+    <div class="pdf-editor-status">
+      <span id="editorStatusText">Selection Mode</span>
+      <span id="editorPageInfo">Page 1 of 1</span>
     </div>
   </div>
 
@@ -99,7 +159,7 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Ready</span>
+    <span class="status-text" id="statusText">Waiting for PDF</span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
       <span>Processing...</span>

@@ -64,7 +64,7 @@ function init(ctx) {
   connectWebSocket(pythonPort);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   loadToolSettings();
-  log('Background Remover ready');
+  log('Background Remover initialized');
 }
 
 function cleanup() {
@@ -78,8 +78,7 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/bg-remover/ws`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
-    if (statusText) statusText.textContent = 'Connected to backend';
-    log('WebSocket connected', 'success');
+    // Removed technical logs
   };
   ws.onmessage = (event) => handleWSMessage(JSON.parse(event.data));
   ws.onclose = () => {
@@ -215,7 +214,7 @@ function bindEvents() {
       const paths = await window.api.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Ready';
+      if (statusText) statusText.textContent = 'Waiting for Image';
     });
   }
 
@@ -297,7 +296,7 @@ async function addFiles(paths) {
     if (!IMAGE_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
     const size = await window.api.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Ready', state: 'pending' });
+    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Image', state: 'pending' });
     added++;
   }
   if (added > 0) log(`Added ${added} image file(s)`);
@@ -312,7 +311,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateButton();
-  statusText.textContent = 'Ready';
+  statusText.textContent = 'Waiting for Image';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }

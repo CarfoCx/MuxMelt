@@ -61,7 +61,7 @@ function init(ctx) {
   qrGeoLon = document.getElementById('qrGeoLon');
 
   bindEvents();
-  log('QR Studio ready');
+  log('QR Studio initialized');
 }
 
 function cleanup() {}
@@ -192,7 +192,7 @@ function bindEvents() {
     qrPreviewBox.innerHTML = '<div class="empty-state">QR code preview will appear here</div>';
     scanResult.style.display = 'none';
     decodedText.textContent = '';
-    statusText.textContent = 'Ready';
+    statusText.textContent = 'Waiting for Input';
     lastGeneratedDataUrl = null;
     saveBtn.disabled = true;
     window.clearLog();

@@ -47,7 +47,7 @@ function init(ctx) {
   bindEvents();
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   loadToolSettings();
-  log('GIF Maker ready');
+  log('GIF Maker initialized');
 }
 
 function cleanup() {
@@ -138,7 +138,7 @@ function setVideo(path) {
   videoName.textContent = getFileName(path);
   videoName.title = path;
   videoInfo.style.display = 'flex';
-  previewArea.innerHTML = '<div class="empty-state">Ready to create GIF. Adjust settings and click Create.</div>';
+  previewArea.innerHTML = '<div class="empty-state">Set parameters and create GIF. Adjust settings and click Create.</div>';
   createBtn.disabled = false;
   if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'pending' }]);
   log(`Selected: ${getFileName(path)}`);
@@ -233,7 +233,7 @@ function clearAll() {
   videoName.textContent = '';
   previewArea.innerHTML = '<div class="empty-state">Drop a video above to get started.</div>';
   createBtn.disabled = true;
-  statusText.textContent = 'Ready';
+  statusText.textContent = 'Waiting for Video';
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }
 

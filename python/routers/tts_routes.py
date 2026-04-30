@@ -38,8 +38,12 @@ async def tts_ws(ws: WebSocket):
                 output_dir = data.get('output_dir', '')
                 output_format = data.get('output_format', 'mp3')
                 rate = data.get('rate', '+0%')
+                is_preview = data.get('is_preview', False)
 
-                if not output_dir:
+                if is_preview and output_dir == 'TEMP':
+                    import tempfile
+                    output_dir = tempfile.gettempdir()
+                elif not output_dir:
                     output_dir = os.path.join(os.path.expanduser('~'), 'Desktop')
                 else:
                     output_dir = validate_output_dir(output_dir)
@@ -50,6 +54,8 @@ async def tts_ws(ws: WebSocket):
                 words = text.strip().split()[:5]
                 safe_name = '_'.join(w[:10] for w in words) if words else 'speech'
                 safe_name = ''.join(c for c in safe_name if c.isalnum() or c in ('_', '-'))
+                if is_preview:
+                    safe_name = f'preview_{safe_name}_{os.urandom(4).hex()}'
                 output_path = os.path.join(output_dir, f'{safe_name}.{output_format}')
 
                 try:
@@ -62,7 +68,7 @@ async def tts_ws(ws: WebSocket):
                                      progress_callback=on_progress)
 
                     await ws.send_json({
-                        'type': 'complete', 'output': output_path, 'progress': 1.0
+                        'type': 'complete', 'output': output_path, 'progress': 1.0, 'is_preview': is_preview
                     })
 
                 except Exception as e:
