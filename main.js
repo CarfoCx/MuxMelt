@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
@@ -9,6 +10,12 @@ let mainWindow;
 let pythonProcess;
 let PYTHON_PORT = 8765;
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
+const pdfEditorSessions = new Map();
+let isUpdateReady = false;
+
+// Configure autoUpdater
+autoUpdater.autoDownload = false; // We'll let the user click "Download" in the banner
+autoUpdater.autoInstallOnAppQuit = true;
 
 // ---------------------------------------------------------------------------
 // Bundled app detection — find bundled Python and ffmpeg if available
@@ -18,6 +25,28 @@ const IS_PACKAGED = app.isPackaged;
 const RESOURCES_PATH = IS_PACKAGED ? path.join(process.resourcesPath) : null;
 const IS_WIN = process.platform === 'win32';
 const FFMPEG_BIN = IS_WIN ? 'ffmpeg.exe' : 'ffmpeg';
+
+// Work around intermittent Windows compositor artifacts in Electron/Chromium
+// that can appear as vertical scanlines or black overlay bands until repaint.
+// This affects the Electron UI compositor only; Python/CUDA processing is separate.
+if (IS_WIN) {
+  const disabledChromiumFeatures = [
+    'CalculateNativeWinOcclusion',
+    'CanvasOopRasterization',
+    'DCompPresenter',
+    'DirectComposition',
+    'DirectCompositionVideoOverlays',
+    'HardwareOverlays',
+    'UseSkiaRenderer'
+  ].join(',');
+
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-direct-composition');
+  app.commandLine.appendSwitch('disable-features', disabledChromiumFeatures);
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+  app.commandLine.appendSwitch('use-angle', 'swiftshader');
+}
 // Standalone Python lives at python-env/python/bin/python3 (Unix) or python-env/python/python.exe (Win)
 const BUNDLED_PYTHON = RESOURCES_PATH
   ? (IS_WIN
@@ -57,6 +86,18 @@ function saveSettings(settings) {
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
   } catch (err) {
     console.error('Failed to save settings:', err.message);
+  }
+}
+
+function clearChromiumGpuCaches() {
+  if (!IS_WIN) return;
+
+  for (const cacheDir of ['GPUCache', 'DawnCache']) {
+    try {
+      fs.rmSync(path.join(app.getPath('userData'), cacheDir), { recursive: true, force: true });
+    } catch (err) {
+      console.warn(`Failed to clear ${cacheDir}:`, err.message);
+    }
   }
 }
 
@@ -292,13 +333,38 @@ function scanFolder(dir, maxFiles = 1000) {
 }
 
 // ---------------------------------------------------------------------------
-// Update checker (GitHub releases)
+// Update checker
 // ---------------------------------------------------------------------------
 
 function checkForUpdates() {
   const pkg = require('./package.json');
   const currentVersion = pkg.version;
 
+  // 1. Check for local/network update folder first if configured
+  try {
+    const settings = loadSettings();
+    const updateFolder = settings.global && settings.global.updateFolderPath;
+    if (updateFolder && fs.existsSync(updateFolder)) {
+      const versionPath = path.join(updateFolder, 'version.json');
+      if (fs.existsSync(versionPath)) {
+        const info = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+        if (info.version && info.installer) {
+          const isNewer = compareVersions(info.version, currentVersion) > 0;
+          return Promise.resolve({
+            upToDate: !isNewer,
+            currentVersion,
+            latestVersion: info.version,
+            installerPath: path.join(updateFolder, info.installer),
+            isLocal: true
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to check local update folder:', err.message);
+  }
+
+  // 2. Fallback to GitHub releases
   const repoUrl = pkg.repository && pkg.repository.url;
   if (!repoUrl) {
     return Promise.resolve({
@@ -330,7 +396,8 @@ function checkForUpdates() {
               currentVersion,
               latestVersion,
               upToDate: !latestVersion || currentVersion === latestVersion,
-              releaseUrl: release.html_url || ''
+              releaseUrl: release.html_url || '',
+              isLocal: false
             });
           } catch {
             resolve({ upToDate: true, currentVersion });
@@ -344,6 +411,16 @@ function checkForUpdates() {
       resolve({ upToDate: true, currentVersion });
     });
   });
+}
+
+function compareVersions(v1, v2) {
+  const p1 = v1.split('.').map(Number);
+  const p2 = v2.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((p1[i] || 0) > (p2[i] || 0)) return 1;
+    if ((p1[i] || 0) < (p2[i] || 0)) return -1;
+  }
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +559,60 @@ ipcMain.handle('check-overwrite', async (event, filePath) => {
   return { proceed: result.response === 0 };
 });
 
+ipcMain.handle('open-pdf-editor', async (event, options = {}) => {
+  const filePath = options.filePath;
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { success: false, error: 'Select a PDF before opening the editor.' };
+  }
+
+  const sessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  pdfEditorSessions.set(sessionId, {
+    filePath,
+    outputDir: options.outputDir || '',
+    fileName: path.basename(filePath)
+  });
+
+  const editorWindow = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    minWidth: 960,
+    minHeight: 640,
+    parent: mainWindow || undefined,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    },
+    backgroundColor: '#11111a',
+    icon: path.join(__dirname, 'build', 'icon.png'),
+    show: false
+  });
+
+  editorWindow.setMenuBarVisibility(false);
+  editorWindow.setTitle(`${path.basename(filePath)} - MuxMelt PDF`);
+
+  // Load the new React-based MuxMelt PDF UI
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  if (isDev && !options.useBuilt) {
+    editorWindow.loadURL(`http://localhost:5173/index.html?sessionId=${sessionId}`);
+  } else {
+    editorWindow.loadFile(path.join(__dirname, 'renderer', 'tools', 'pdf-toolkit', 'dist', 'index.html'), {
+      query: { sessionId }
+    });
+  }
+  editorWindow.once('ready-to-show', () => editorWindow.show());
+  editorWindow.on('closed', () => {
+    pdfEditorSessions.delete(sessionId);
+  });
+
+  return { success: true, sessionId };
+});
+
+ipcMain.handle('get-pdf-editor-session', async (event, sessionId) => {
+  const session = pdfEditorSessions.get(sessionId);
+  return session ? { success: true, ...session } : { success: false, error: 'PDF editor session expired.' };
+});
+
 ipcMain.handle('show-notification', async (event, options) => {
   if (Notification.isSupported()) {
     const notification = new Notification({
@@ -493,25 +624,60 @@ ipcMain.handle('show-notification', async (event, options) => {
   }
 });
 
-ipcMain.handle('read-image-preview', async (event, filePath) => {
+ipcMain.handle('read-pdf-file', async (event, filePath) => {
   try {
     const data = await fs.promises.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-    const mimeTypes = {
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.webp': 'image/webp',
-      '.bmp': 'image/bmp',
-      '.tiff': 'image/tiff',
-      '.tif': 'image/tiff'
-    };
-    const mime = mimeTypes[ext] || 'image/png';
-    return `data:${mime};base64,${data.toString('base64')}`;
-  } catch {
+    return new Uint8Array(data);
+  } catch (err) {
+    console.error('Failed to read PDF:', err);
     return null;
   }
 });
+
+// Auto-updater IPC handlers
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    return await autoUpdater.checkForUpdates();
+  } catch (err) {
+    console.error('Update check failed:', err);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('download-update', async () => {
+  return await autoUpdater.downloadUpdate();
+});
+
+ipcMain.handle('restart-to-update', () => {
+  autoUpdater.quitAndInstall();
+});
+
+function initAutoUpdater() {
+  autoUpdater.on('checking-for-update', () => {
+    if (mainWindow) mainWindow.webContents.send('update-status', 'Checking for updates...');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    if (mainWindow) mainWindow.webContents.send('update-available', info);
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    if (mainWindow) mainWindow.webContents.send('update-not-available', info);
+  });
+
+  autoUpdater.on('error', (err) => {
+    if (mainWindow) mainWindow.webContents.send('update-error', err.message);
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    if (mainWindow) mainWindow.webContents.send('update-download-progress', progressObj);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    isUpdateReady = true;
+    if (mainWindow) mainWindow.webContents.send('update-downloaded', info);
+  });
+}
 
 let pythonRestartInProgress = false;
 ipcMain.handle('restart-python', async () => {
@@ -541,7 +707,8 @@ ipcMain.handle('check-for-updates', async () => {
 });
 
 ipcMain.handle('get-app-version', () => {
-  // Version is derived purely from git — no arbitrary version numbers
+  const pkg = require('./package.json');
+  const baseVersion = pkg.version;
   try {
     const hash = execSync('git rev-parse --short HEAD', {
       cwd: __dirname, encoding: 'utf-8', timeout: 3000
@@ -552,9 +719,36 @@ ipcMain.handle('get-app-version', () => {
     const dirty = execSync('git status --porcelain', {
       cwd: __dirname, encoding: 'utf-8', timeout: 3000
     }).trim();
-    return `build ${count} (${hash})${dirty ? ' *' : ''}`;
+    return `${baseVersion} (build ${count}, ${hash})${dirty ? ' *' : ''}`;
   } catch {}
-  return 'dev (no git)';
+  return baseVersion;
+});
+
+ipcMain.handle('download-and-update', async (event, installerPath) => {
+  if (!installerPath || !fs.existsSync(installerPath)) {
+    throw new Error('Installer not found at ' + installerPath);
+  }
+
+  const tempDir = app.getPath('temp');
+  const targetPath = path.join(tempDir, path.basename(installerPath));
+
+  // Copy to temp
+  fs.copyFileSync(installerPath, targetPath);
+
+  // Run installer
+  const isWin = process.platform === 'win32';
+  if (isWin) {
+    spawn(targetPath, [], {
+      detached: true,
+      stdio: 'ignore'
+    }).unref();
+  } else {
+    shell.openPath(targetPath);
+  }
+
+  // Quit app
+  app.quit();
+  return true;
 });
 
 // ---------------------------------------------------------------------------
@@ -571,6 +765,7 @@ try { require('./node-tools/url-downloader').registerIPC(ipcMain, getMainWindow,
 try { require('./node-tools/bulk-imager').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load bulk-imager:', e.message); }
 try { require('./node-tools/pdf-toolkit').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load pdf-toolkit:', e.message); }
 try { require('./node-tools/qr-studio').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load qr-studio:', e.message); }
+try { require('./node-tools/chatbot-trainer').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load chatbot-trainer:', e.message); }
 
 // ---------------------------------------------------------------------------
 // App lifecycle
@@ -757,6 +952,8 @@ function needsSlimSetup() {
 
 app.whenReady().then(async () => {
   try {
+    clearChromiumGpuCaches();
+
     // Slim build: auto-install Python on first run
     if (needsSlimSetup()) {
       await runSlimSetup();
@@ -765,6 +962,7 @@ app.whenReady().then(async () => {
     PYTHON_PORT = await findAvailablePort(PYTHON_PORT);
     await startPythonServer();
     createWindow();
+    initAutoUpdater();
   } catch (err) {
     console.error('Startup failed:', err.message);
     dialog.showErrorBox(

@@ -286,7 +286,7 @@ const App = () => {
           <span className="text-slate-400">Zoom: {Math.round(zoom * 100)}%</span>
         </div>
         <div className="flex gap-4 items-center">
-          <span className="text-slate-400 font-bold tracking-tighter">MuxMelt Engine v1.2.2</span>
+          <span className="text-slate-400 font-bold tracking-tighter">MuxMelt Engine v1.2.3</span>
         </div>
       </footer>
     </div>
