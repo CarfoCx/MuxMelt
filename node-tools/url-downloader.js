@@ -19,6 +19,63 @@ function isHttpUrl(value) {
   }
 }
 
+function parseUrl(value) {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function isDirectVideoUrl(parsed) {
+  return !!parsed && /\.(mp4|m4v|mov|webm|mkv|avi)(?:$|[?#])/i.test(parsed.pathname);
+}
+
+function isMotherlessUrl(parsed) {
+  return !!parsed && /(^|\.)motherless(?:media)?\.com$/i.test(parsed.hostname);
+}
+
+function getSignedUrlExpiry(parsed) {
+  if (!parsed) return null;
+  const validTo = Number(parsed.searchParams.get('validto'));
+  if (!Number.isFinite(validTo) || validTo <= 0) return null;
+  return new Date(validTo * 1000);
+}
+
+function buildRequestHeaders(url, options = {}) {
+  const parsed = parseUrl(url);
+  const directVideo = isDirectVideoUrl(parsed);
+  const motherless = isMotherlessUrl(parsed);
+  const headers = [];
+
+  if (!options.impersonate) {
+    headers.push(
+      ['--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'],
+      ['--add-header', 'Accept-Language:en-US,en;q=0.9'],
+    );
+  }
+
+  if (directVideo || !options.impersonate) {
+    headers.push(['--add-header', directVideo ? 'Accept:*/*' : 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7']);
+  }
+
+  if (motherless) {
+    headers.push(
+      ['--referer', 'https://motherless.com/'],
+      ['--add-header', 'Sec-Fetch-Site:cross-site'],
+    );
+  }
+
+  if (directVideo) {
+    headers.push(
+      ['--add-header', 'Sec-Fetch-Dest:video'],
+      ['--add-header', 'Sec-Fetch-Mode:no-cors'],
+    );
+  }
+
+  return headers.flat();
+}
+
 function parseProgressLine(line) {
   const percentMatch = line.match(/\[download\]\s+([\d.]+)%/i);
   if (!percentMatch) return null;
@@ -50,6 +107,54 @@ function extractDestination(line) {
   return '';
 }
 
+function shouldRetryWithImpersonation(error) {
+  const message = String(error && error.message ? error.message : error || '').toLowerCase();
+  return message.includes('403') ||
+    message.includes('forbidden') ||
+    message.includes('http error 404') ||
+    message.includes('http error 410') ||
+    message.includes('cloudflare') ||
+    message.includes('impersonat');
+}
+
+function formatDownloadError(err, url) {
+  const message = err && err.message ? err.message : String(err || '');
+  const lower = message.toLowerCase();
+  const parsed = parseUrl(url);
+  const expires = getSignedUrlExpiry(parsed);
+
+  if (expires && expires.getTime() <= Date.now()) {
+    return `This direct video link expired on ${expires.toLocaleString()}. Open the video page again and paste a fresh link.`;
+  }
+  if (expires && (lower.includes('403') || lower.includes('forbidden') || lower.includes('404') || lower.includes('410'))) {
+    return `The site rejected this signed video link. It may have expired or require a fresh link from the video page. Link expiry: ${expires.toLocaleString()}.`;
+  }
+
+  return formatToolError(err, 'Online Video Downloader');
+}
+
+function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
+  const args = [
+    ...(pythonInfo.args || []),
+    '-m', 'yt_dlp',
+    '--newline',
+    '--no-color',
+    '--no-playlist',
+    '--merge-output-format', 'mp4',
+    '--paths', outDir,
+    '-o', '%(title).200B [%(id)s].%(ext)s',
+    '--print', 'after_move:filepath',
+  ];
+
+  if (options.impersonate) {
+    args.push('--impersonate', 'chrome');
+  }
+
+  args.push(...buildRequestHeaders(url, options));
+  args.push(url);
+  return args;
+}
+
 function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   let activeProcess = null;
 
@@ -69,22 +174,6 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       const outDir = validateOutputDir(options.outputDir) || defaultOutputDir();
       fs.mkdirSync(outDir, { recursive: true });
 
-      const args = [
-        ...(pythonInfo.args || []),
-        '-m', 'yt_dlp',
-        '--newline',
-        '--no-color',
-        '--no-playlist',
-        '--merge-output-format', 'mp4',
-        '--paths', outDir,
-        '-o', '%(title).200B [%(id)s].%(ext)s',
-        '--print', 'after_move:filepath',
-        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        '--add-header', 'Accept-Language:en-US,en;q=0.9',
-        url
-      ];
-
       const win = getMainWindow();
       if (win) {
         win.webContents.send('tool-progress', {
@@ -99,7 +188,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       let stderr = '';
       let outputPath = '';
 
-      await new Promise((resolve, reject) => {
+      const runDownload = (args, statusPrefix = '') => new Promise((resolve, reject) => {
         const proc = spawn(pythonInfo.cmd, args, {
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true
@@ -127,7 +216,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
               type: 'progress',
               progress: progress.percent / 100,
               status: [
-                `Downloading... ${Math.round(progress.percent)}%`,
+                `${statusPrefix}Downloading... ${Math.round(progress.percent)}%`,
                 progress.speed,
                 progress.eta ? `ETA ${progress.eta}` : ''
               ].filter(Boolean).join(' | '),
@@ -155,11 +244,32 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           else {
             const combined = `${stderr}\n${stdout}`.trim();
             const lines = combined.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-            const last = lines.reverse().find(l => l && !l.startsWith('[download]')) || `yt-dlp exited with code ${code}`;
-            reject(new Error(last));
+            const usefulLines = lines.filter(l => l && !l.startsWith('[download]'));
+            const last = usefulLines.reverse().find(Boolean) || `yt-dlp exited with code ${code}`;
+            const err = new Error(last);
+            err.fullOutput = combined;
+            reject(err);
           }
         });
       });
+
+      try {
+        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir));
+      } catch (err) {
+        if (!shouldRetryWithImpersonation(err)) throw err;
+        if (win) {
+          win.webContents.send('tool-progress', {
+            tool: 'url-downloader',
+            url,
+            type: 'start',
+            status: 'Site blocked the standard request. Retrying with browser impersonation...'
+          });
+        }
+        stdout = '';
+        stderr = '';
+        outputPath = '';
+        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, { impersonate: true }), 'Browser mode | ');
+      }
 
       if (!outputPath) {
         const candidates = fs.readdirSync(outDir)
@@ -188,7 +298,10 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       if ((err.message || '').toLowerCase().includes('no module named')) {
         return { success: false, error: 'yt-dlp is not installed in Python. Run setup again or install Python dependencies from python/requirements.txt.' };
       }
-      return { success: false, error: formatToolError(err, 'Online Video Downloader') };
+      if ((err.message || '').toLowerCase().includes('impersonate') || (err.message || '').toLowerCase().includes('curl_cffi')) {
+        return { success: false, error: 'This site blocks standard downloads. Install the bundled Python dependencies again so yt-dlp can use browser impersonation (curl_cffi).' };
+      }
+      return { success: false, error: formatDownloadError(err, url) };
     }
   });
 
@@ -202,4 +315,4 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   });
 }
 
-module.exports = { registerIPC };
+module.exports = { registerIPC, buildYtDlpArgs };
