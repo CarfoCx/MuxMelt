@@ -138,10 +138,21 @@
     <h3 class="settings-section-title">Updates</h3>
     <div class="settings-row">
       <div class="settings-row-left">
+        <label>Update Source Folder</label>
+        <div class="settings-hint">Check for installers in a local or network folder before GitHub</div>
+      </div>
+      <div class="settings-control">
+        <button class="output-dir-btn" id="updateFolderBtn">Not set</button>
+        <span class="settings-reset-link" id="resetUpdateFolder">Reset</span>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
         <label id="updateStatusLabel">Check for new versions</label>
         <div class="settings-hint" id="updateStatusHint"></div>
       </div>
-      <div class="settings-control">
+      <div class="settings-control" id="updateControlsContainer">
         <button class="btn btn-secondary" id="checkUpdateBtn">Check for Updates</button>
       </div>
     </div>

@@ -1,14 +1,13 @@
 import os
+import subprocess
+import sys
 import threading
 import tempfile
 import shutil
 from pathlib import Path
+from importlib.util import find_spec
 
-try:
-    import demucs.api
-    _available = True
-except ImportError:
-    _available = False
+_available = find_spec('demucs') is not None and find_spec('demucs.separate') is not None
 
 
 def is_available():
@@ -18,7 +17,6 @@ def is_available():
 class StemSeparator:
     def __init__(self):
         self.cancel_event = threading.Event()
-        self._separator = None
 
     def cancel(self):
         self.cancel_event.set()
@@ -42,7 +40,7 @@ class StemSeparator:
         """
         if not _available:
             raise RuntimeError(
-                'demucs is not installed. Run: pip install demucs'
+                'Demucs is not installed in the app Python environment. Run: python -m pip install demucs'
             )
 
         if self.cancel_event.is_set():
@@ -51,61 +49,83 @@ class StemSeparator:
         if progress_callback:
             progress_callback(0.05, 'Loading separation model...')
 
-        # Initialize separator on first use (or if model changed)
-        if self._separator is None or getattr(self._separator, 'model_name', None) != model:
-            try:
-                self._separator = demucs.api.Separator(model=model)
-            except Exception as e:
-                raise RuntimeError(f'Failed to load model "{model}": {e}')
-
-        if self.cancel_event.is_set():
-            raise RuntimeError('Cancelled')
-
-        if progress_callback:
-            progress_callback(0.1, 'Separating audio stems...')
-
-        # Run separation
-        try:
-            origin, separated = self._separator.separate_audio_file(input_path)
-        except Exception as e:
-            raise RuntimeError(f'Separation failed: {e}')
-
-        if self.cancel_event.is_set():
-            raise RuntimeError('Cancelled')
-
-        if progress_callback:
-            progress_callback(0.85, 'Saving stems...')
-
-        # Determine which stems to save
-        available_stems = list(separated.keys())
-        if stems:
-            save_stems = [s for s in stems if s in available_stems]
-        else:
-            save_stems = available_stems
-
-        if not save_stems:
-            raise RuntimeError(f'No matching stems found. Available: {available_stems}')
-
-        # Save each stem
         os.makedirs(output_dir, exist_ok=True)
         base_name = Path(input_path).stem
         outputs = {}
+        temp_dir = tempfile.mkdtemp(prefix='muxmelt-demucs-')
 
-        for i, stem_name in enumerate(save_stems):
+        try:
+            cmd = [
+                sys.executable,
+                '-m', 'modules.demucs_runner',
+                '-n', model,
+                '-o', temp_dir,
+                '--filename', '{track}_{stem}.{ext}',
+                input_path,
+            ]
+
+            if progress_callback:
+                progress_callback(0.1, 'Separating audio stems...')
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+            )
+            output_lines = []
+            while True:
+                if self.cancel_event.is_set():
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    raise RuntimeError('Cancelled')
+
+                try:
+                    stdout, _ = process.communicate(timeout=0.5)
+                    if stdout:
+                        output_lines.extend(line.rstrip() for line in stdout.splitlines())
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+
+            if process.returncode != 0:
+                details = '\n'.join(output_lines[-12:]).strip()
+                raise RuntimeError(f'Separation failed with Demucs exit code {process.returncode}: {details}')
+
             if self.cancel_event.is_set():
                 raise RuntimeError('Cancelled')
 
-            stem_tensor = separated[stem_name]
-            output_path = os.path.join(output_dir, f'{base_name}_{stem_name}.wav')
-
-            # Use demucs save utility
-            from demucs.api import save_audio
-            save_audio(stem_tensor, output_path, samplerate=self._separator.samplerate)
-
-            outputs[stem_name] = output_path
-
             if progress_callback:
-                pct = 0.85 + (0.15 * (i + 1) / len(save_stems))
-                progress_callback(pct, f'Saved {stem_name} stem')
+                progress_callback(0.85, 'Saving stems...')
+
+            demucs_output_dir = os.path.join(temp_dir, model)
+            available = {
+                p.stem.removeprefix(f'{base_name}_'): str(p)
+                for p in Path(demucs_output_dir).glob(f'{base_name}_*.wav')
+            }
+            save_stems = [s for s in (stems or available.keys()) if s in available]
+
+            if not save_stems:
+                raise RuntimeError(f'No matching stems found. Available: {list(available.keys())}')
+
+            for i, stem_name in enumerate(save_stems):
+                if self.cancel_event.is_set():
+                    raise RuntimeError('Cancelled')
+
+                output_path = os.path.join(output_dir, f'{base_name}_{stem_name}.wav')
+                shutil.move(available[stem_name], output_path)
+                outputs[stem_name] = output_path
+
+                if progress_callback:
+                    pct = 0.85 + (0.15 * (i + 1) / len(save_stems))
+                    progress_callback(pct, f'Saved {stem_name} stem')
+
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
         return outputs

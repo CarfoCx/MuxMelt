@@ -557,12 +557,20 @@ class Upscaler:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
         ext = os.path.splitext(output_path)[1].lower()
+        temp_output_path = output_path + '.tmp' + ext
+        if os.path.exists(temp_output_path):
+            os.remove(temp_output_path)
         if ext in ('.jpg', '.jpeg'):
-            cv2.imwrite(output_path, output, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            written = cv2.imwrite(temp_output_path, output, [cv2.IMWRITE_JPEG_QUALITY, 95])
         elif ext == '.webp':
-            cv2.imwrite(output_path, output, [cv2.IMWRITE_WEBP_QUALITY, 95])
+            written = cv2.imwrite(temp_output_path, output, [cv2.IMWRITE_WEBP_QUALITY, 95])
         else:
-            cv2.imwrite(output_path, output)
+            written = cv2.imwrite(temp_output_path, output)
+
+        if not written:
+            raise RuntimeError(f'Failed to write output image: {output_path}')
+
+        os.replace(temp_output_path, output_path)
 
         return output_path
 

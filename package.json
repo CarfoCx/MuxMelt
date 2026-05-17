@@ -85,7 +85,24 @@
       "node_modules/@img/**",
       "python/**"
     ],
+    "extraResources": [
+      {
+        "from": "build/bundle/python-env",
+        "to": "python-env",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/bundle/ffmpeg",
+        "to": "ffmpeg",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
+      "signAndEditExecutable": false,
       "target": "nsis",
       "icon": "build/icon.ico"
     },

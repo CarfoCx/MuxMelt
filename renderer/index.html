@@ -92,9 +92,12 @@
     <div class="main-area" role="main">
       <!-- Update banner (hidden by default) -->
       <div class="update-banner" id="updateBanner" role="alert" style="display: none;">
-        <span>A new version of MuxMelt is available!</span>
-        <a class="update-banner-link" id="updateLink">Download update</a>
-        <button class="update-banner-dismiss" id="updateDismiss" title="Dismiss">&times;</button>
+        <span id="updateBannerText">A new version of MuxMelt is available!</span>
+        <div class="update-banner-actions">
+          <button class="btn btn-primary btn-sm" id="updateDownloadBtn">Download</button>
+          <button class="btn btn-primary btn-sm" id="updateRestartBtn" style="display: none;">Restart to Update</button>
+          <button class="update-banner-dismiss" id="updateDismiss" title="Dismiss">&times;</button>
+        </div>
       </div>
 
       <!-- Tool content -->

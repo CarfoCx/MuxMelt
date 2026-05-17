@@ -38,6 +38,7 @@ async def tts_ws(ws: WebSocket):
                 output_dir = data.get('output_dir', '')
                 output_format = data.get('output_format', 'mp3')
                 rate = data.get('rate', '+0%')
+                pitch = data.get('pitch', '+0Hz')
                 is_preview = data.get('is_preview', False)
 
                 if is_preview and output_dir == 'TEMP':
@@ -64,7 +65,7 @@ async def tts_ws(ws: WebSocket):
                             'type': 'progress', 'progress': pct, 'status': status
                         })
 
-                    await synthesize(text, voice, output_path, rate=rate,
+                    await synthesize(text, voice, output_path, rate=rate, pitch=pitch,
                                      progress_callback=on_progress)
 
                     await ws.send_json({

@@ -131,6 +131,14 @@ function splitRedactionTerms(value) {
     .filter(Boolean);
 }
 
+function getPythonScriptPath(scriptName) {
+  const appRoot = path.join(__dirname, '..');
+  const unpackedRoot = appRoot.includes('app.asar')
+    ? appRoot.replace('app.asar', 'app.asar.unpacked')
+    : appRoot;
+  return path.join(unpackedRoot, 'python', scriptName);
+}
+
 async function runPythonPdfEdit(pythonInfo, options) {
   if (!pythonInfo || !pythonInfo.cmd) {
     throw new Error('Python was not found. Secure PDF redaction requires Python with PyMuPDF installed.');
@@ -139,7 +147,7 @@ async function runPythonPdfEdit(pythonInfo, options) {
   const jobPath = path.join(os.tmpdir(), `muxmelt-pdf-edit-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
   fs.writeFileSync(jobPath, JSON.stringify(options), 'utf8');
 
-  const scriptPath = path.join(__dirname, '..', 'python', 'pdf_redact.py');
+  const scriptPath = getPythonScriptPath('pdf_redact.py');
   let stdout = '';
   let stderr = '';
 
@@ -175,12 +183,10 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   // ---- MERGE ----
   ipcMain.handle('pdf-toolkit-merge', async (event, options) => {
     const { inputPaths, outputDir, outputName } = options;
-
     try {
       if (!inputPaths || inputPaths.length < 2) {
         return { success: false, error: 'At least 2 PDF files are required for merging' };
       }
-
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPaths[0]);
       fs.mkdirSync(outDir, { recursive: true });
       const safeName = validateOutputName(outputName) || 'merged.pdf';
@@ -188,23 +194,12 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       const win = getMainWindow();
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 0,
-          status: `Merging ${inputPaths.length} PDFs...`
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 0, status: `Merging ${inputPaths.length} PDFs...` });
       }
-
       await mergePDFs(inputPaths, outputPath);
-
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 100,
-          status: 'Done'
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 100, status: 'Done' });
       }
-
       return { success: true, output: outputPath };
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
@@ -214,30 +209,17 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   // ---- SPLIT ----
   ipcMain.handle('pdf-toolkit-split', async (event, options) => {
     const { inputPath, outputDir } = options;
-
     try {
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
       fs.mkdirSync(outDir, { recursive: true });
-
       const win = getMainWindow();
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 0,
-          status: 'Splitting PDF...'
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 0, status: 'Splitting PDF...' });
       }
-
       const outputs = await splitPDF(inputPath, outDir);
-
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 100,
-          status: 'Done'
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 100, status: 'Done' });
       }
-
       return { success: true, outputs, pageCount: outputs.length };
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
@@ -247,54 +229,91 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   // ---- EXTRACT PAGES ----
   ipcMain.handle('pdf-toolkit-extract', async (event, options) => {
     const { inputPath, outputDir, outputName, pages } = options;
-
     try {
-      if (!pages) {
-        return { success: false, error: 'No pages specified. Use a range like "1-3,5,8-10".' };
-      }
-
-      // Read page count for validation
+      if (!pages) return { success: false, error: 'No pages specified. Use a range like "1-3,5,8-10".' };
       const pdfBytes = fs.readFileSync(inputPath);
       const srcDoc = await PDFDocument.load(pdfBytes);
       const totalPages = srcDoc.getPageCount();
-
       const pageNumbers = parsePageRange(pages, totalPages);
-      if (pageNumbers.length === 0) {
-        return { success: false, error: `No valid pages found in range "${pages}". PDF has ${totalPages} pages.` };
-      }
+      if (pageNumbers.length === 0) return { success: false, error: `No valid pages found in range "${pages}". PDF has ${totalPages} pages.` };
 
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
       fs.mkdirSync(outDir, { recursive: true });
-
       const baseName = path.basename(inputPath, '.pdf');
       const safeName = validateOutputName(outputName) || `${baseName}_extracted.pdf`;
       const outputPath = path.join(outDir, safeName);
 
       const win = getMainWindow();
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 0,
-          status: `Extracting ${pageNumbers.length} pages...`
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 0, status: `Extracting ${pageNumbers.length} pages...` });
       }
-
       await extractPages(inputPath, outputPath, pageNumbers);
-
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 100,
-          status: 'Done'
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 100, status: 'Done' });
+      }
+      return { success: true, output: outputPath, extractedPages: pageNumbers, totalPages };
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  // ---- ROTATE PAGES ----
+  ipcMain.handle('pdf-toolkit-rotate', async (event, options) => {
+    const { inputPath, pageIndex, degrees } = options;
+    try {
+      const pdfBytes = fs.readFileSync(inputPath);
+      const doc = await PDFDocument.load(pdfBytes);
+      const page = doc.getPage(pageIndex);
+      const currentRotation = page.getRotation().angle;
+      page.setRotation({ angle: (currentRotation + degrees) % 360 });
+      const newBytes = await doc.save();
+      fs.writeFileSync(inputPath, newBytes);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  // ---- DELETE PAGE ----
+  ipcMain.handle('pdf-toolkit-delete', async (event, options) => {
+    const { inputPath, pageIndex } = options;
+    try {
+      const pdfBytes = fs.readFileSync(inputPath);
+      const doc = await PDFDocument.load(pdfBytes);
+      if (doc.getPageCount() <= 1) {
+        return { success: false, error: 'Cannot delete the only page in a PDF.' };
+      }
+      doc.removePage(pageIndex);
+      const newBytes = await doc.save();
+      fs.writeFileSync(inputPath, newBytes);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  // ---- REORDER PAGES ----
+  ipcMain.handle('pdf-toolkit-reorder', async (event, options) => {
+    const { inputPath, order } = options;
+    try {
+      const pdfBytes = fs.readFileSync(inputPath);
+      const srcDoc = await PDFDocument.load(pdfBytes);
+      const pageCount = srcDoc.getPageCount();
+      if (!Array.isArray(order) || order.length !== pageCount) {
+        return { success: false, error: 'Page order does not match the PDF page count.' };
+      }
+      const seen = new Set(order);
+      const valid = order.every((index) => Number.isInteger(index) && index >= 0 && index < pageCount) && seen.size === pageCount;
+      if (!valid) {
+        return { success: false, error: 'Page order contains an invalid or duplicate page index.' };
       }
 
-      return {
-        success: true,
-        output: outputPath,
-        extractedPages: pageNumbers,
-        totalPages
-      };
+      const newDoc = await PDFDocument.create();
+      const copiedPages = await newDoc.copyPages(srcDoc, order);
+      for (const page of copiedPages) newDoc.addPage(page);
+      const newBytes = await newDoc.save();
+      fs.writeFileSync(inputPath, newBytes);
+      return { success: true };
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
     }
@@ -302,27 +321,17 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
   // ---- EDIT / SECURE REDACT ----
   ipcMain.handle('pdf-toolkit-edit', async (event, options = {}) => {
-    const { inputPath, outputDir, redactTerms, rects, edits: textEdits } = options;
-
+    const { inputPath, outputDir, rects, covers, edits: textEdits } = options;
     try {
       if (!inputPath || !fs.existsSync(inputPath)) {
         return { success: false, error: 'Select one PDF to edit or redact.' };
       }
-
-      const terms = splitRedactionTerms(redactTerms);
       const win = getMainWindow();
-
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 0,
-          status: 'Applying PDF edits...'
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 0, status: 'Applying PDF edits...' });
       }
-
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
       fs.mkdirSync(outDir, { recursive: true });
-
       const baseName = path.basename(inputPath, '.pdf');
       const outputPath = path.join(outDir, `${baseName}_edited.pdf`);
 
@@ -331,17 +340,14 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         action: 'edit',
         inputPath,
         outputPath,
-        terms,
+        terms: [],
         rects: rects || [],
+        covers: covers || [],
         edits: textEdits || [],
       });
 
       if (win) {
-        win.webContents.send('tool-progress', {
-          tool: 'pdf-toolkit',
-          percent: 100,
-          status: 'Done'
-        });
+        win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 100, status: 'Done' });
       }
 
       return {
@@ -358,20 +364,22 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   // ---- RENDER PREVIEW ----
   ipcMain.handle('pdf-toolkit-render', async (event, options = {}) => {
     const { inputPath, dpi = 150 } = options;
-
     try {
-      if (!inputPath || !fs.existsSync(inputPath)) {
-        throw new Error('PDF file not found');
-      }
-
+      if (!inputPath || !fs.existsSync(inputPath)) throw new Error('PDF file not found');
       const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
-      const result = await runPythonPdfEdit(pythonInfo, {
-        action: 'render',
-        inputPath,
-        dpi
-      });
-
+      const result = await runPythonPdfEdit(pythonInfo, { action: 'render', inputPath, dpi });
       return result;
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  ipcMain.handle('pdf-toolkit-text-map', async (event, options = {}) => {
+    const { inputPath, ocr = false } = options;
+    try {
+      if (!inputPath || !fs.existsSync(inputPath)) throw new Error('PDF file not found');
+      const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
+      return await runPythonPdfEdit(pythonInfo, { action: 'text_map', inputPath, ocr });
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
     }
@@ -396,4 +404,4 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   });
 }
 
-module.exports = { registerIPC };
+module.exports = { registerIPC, getPythonScriptPath };

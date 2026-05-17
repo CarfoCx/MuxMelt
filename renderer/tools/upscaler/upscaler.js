@@ -7,12 +7,28 @@
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif']);
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
 
-let files = [];
-let scale = 2;
-let outputDir = '';
-let modelProfile = 'general';
+const persistedState = (() => {
+  window.__muxmeltToolState = window.__muxmeltToolState || {};
+  window.__muxmeltToolState.upscaler = window.__muxmeltToolState.upscaler || {
+    files: [],
+    scale: 2,
+    outputDir: '',
+    modelProfile: 'general',
+    outputFormat: null,
+    statusText: 'Waiting for File',
+    etaText: '',
+    footerProgress: 0,
+    footerProgressVisible: false
+  };
+  return window.__muxmeltToolState.upscaler;
+})();
+
+let files = persistedState.files;
+let scale = persistedState.scale || 2;
+let outputDir = persistedState.outputDir || '';
+let modelProfile = persistedState.modelProfile || 'general';
 let ws = null;
-let isProcessing = false;
+let isProcessing = !!persistedState.isProcessing;
 let pythonPort = null;
 let log = null;
 
@@ -29,7 +45,8 @@ const MAX_RECONNECT_DELAY = 30000;
 // DOM refs (set during init)
 let dropZone, browseBtn, browseFolderBtn, fileList, upscaleBtn, clearBtn;
 let openOutputBtn, outputDirBtn, statusText, etaText, processingIndicator, retryBtn;
-let outputFormat, modelProfileSelect, ffmpegWarning;
+let outputFormat, modelProfileSelect, ffmpegWarning, footerProgress, footerProgressFill;
+let overwriteModal, overwriteFileName, overwriteSkipBtn, overwriteAlwaysBtn, overwriteConfirmBtn;
 let previewModal, previewOverlay, previewClose, previewContainer;
 let previewBefore, previewAfter, previewBeforeClip, previewSlider, previewTitle;
 
@@ -56,9 +73,16 @@ function init(ctx) {
   statusText = document.getElementById('statusText');
   etaText = document.getElementById('etaText');
   processingIndicator = document.getElementById('processingIndicator');
+  footerProgress = document.getElementById('footerProgress');
+  footerProgressFill = document.getElementById('footerProgressFill');
   outputFormat = document.getElementById('outputFormat');
   modelProfileSelect = document.getElementById('modelProfile');
   ffmpegWarning = document.getElementById('ffmpegWarning');
+  overwriteModal = document.getElementById('overwriteModal');
+  overwriteFileName = document.getElementById('overwriteFileName');
+  overwriteSkipBtn = document.getElementById('overwriteSkipBtn');
+  overwriteAlwaysBtn = document.getElementById('overwriteAlwaysBtn');
+  overwriteConfirmBtn = document.getElementById('overwriteConfirmBtn');
 
   previewModal = document.getElementById('previewModal');
   previewOverlay = document.getElementById('previewOverlay');
@@ -74,15 +98,20 @@ function init(ctx) {
 
   loadSettings();
   bindEvents();
+  restoreViewState();
   connectWebSocket(pythonPort);
 
   _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
 
-  log('Upscaler initialized');
+  if (!persistedState.initialized) {
+    log('Upscaler initialized');
+    persistedState.initialized = true;
+  }
 }
 
 function cleanup() {
+  persistRuntimeState();
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
@@ -92,6 +121,50 @@ function cleanup() {
   if (_resizeHandler) window.removeEventListener('resize', _resizeHandler);
 }
 
+function persistRuntimeState() {
+  persistedState.files = files;
+  persistedState.scale = scale;
+  persistedState.outputDir = outputDir;
+  persistedState.modelProfile = modelProfile;
+  persistedState.outputFormat = outputFormat ? outputFormat.value : persistedState.outputFormat;
+  persistedState.statusText = statusText ? statusText.textContent : persistedState.statusText;
+  persistedState.etaText = etaText ? etaText.textContent : persistedState.etaText;
+  persistedState.isProcessing = isProcessing;
+}
+
+function restoreViewState() {
+  if (outputFormat) outputFormat.value = persistedState.outputFormat || outputFormat.value;
+  if (modelProfileSelect) modelProfileSelect.value = modelProfile;
+  if (statusText) statusText.textContent = persistedState.statusText || 'Waiting for File';
+  if (etaText) etaText.textContent = persistedState.etaText || '';
+  setFooterProgress(persistedState.footerProgress || 0, !!persistedState.footerProgressVisible);
+  if (processingIndicator) processingIndicator.classList.toggle('active', isProcessing);
+  if (upscaleBtn) {
+    upscaleBtn.textContent = isProcessing ? 'Cancel' : 'Upscale';
+    upscaleBtn.classList.toggle('btn-cancel', isProcessing);
+  }
+  renderFileList();
+  updateUpscaleButton();
+  if (retryBtn) {
+    const retryable = files.some(f => f.state === 'error' || f.state === 'cancelled');
+    retryBtn.style.display = retryable ? '' : 'none';
+  }
+  if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
+}
+
+function setFooterProgress(progress, visible = true) {
+  const pct = Math.max(0, Math.min(1, Number(progress) || 0));
+  persistedState.footerProgress = pct;
+  persistedState.footerProgressVisible = visible;
+  if (footerProgress) footerProgress.classList.toggle('active', visible);
+  if (footerProgressFill) footerProgressFill.style.width = `${Math.round(pct * 100)}%`;
+}
+
+function isNoisyProgressLog(message) {
+  if (typeof message !== 'string') return false;
+  return /\b\d{1,3}%\b/.test(message) && /download|upscal|process|frame|tile/i.test(message);
+}
+
 // ---- Settings ----
 async function loadSettings() {
   try {
@@ -99,20 +172,29 @@ async function loadSettings() {
     const s = all.upscaler || {};
     if (s.scale) {
       scale = s.scale;
+      persistedState.scale = scale;
       document.querySelectorAll('.scale-btn').forEach(b => {
         b.classList.toggle('active', parseInt(b.dataset.scale) === scale);
       });
     }
-    if (s.outputFormat) outputFormat.value = s.outputFormat;
-    if (s.modelProfile) { modelProfile = s.modelProfile; modelProfileSelect.value = modelProfile; }
+    if (s.outputFormat && !persistedState.outputFormat) {
+      outputFormat.value = s.outputFormat;
+      persistedState.outputFormat = s.outputFormat;
+    }
+    if (persistedState.outputFormat) outputFormat.value = persistedState.outputFormat;
+    if (s.modelProfile) { modelProfile = persistedState.modelProfile || s.modelProfile; modelProfileSelect.value = modelProfile; }
     if (s.outputDir) {
-      outputDir = s.outputDir;
+      outputDir = persistedState.outputDir || s.outputDir;
+      persistedState.outputDir = outputDir;
       const parts = outputDir.replace(/\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : outputDir;
       outputDirBtn.textContent = display;
       outputDirBtn.title = outputDir;
     }
-    if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
+    if (!outputDir && window.applyDefaultOutputDir) {
+      outputDir = window.applyDefaultOutputDir(outputDirBtn);
+      persistedState.outputDir = outputDir;
+    }
   } catch {}
 }
 
@@ -151,6 +233,7 @@ function bindEvents() {
       document.querySelectorAll('.scale-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       scale = parseInt(btn.dataset.scale);
+      persistedState.scale = scale;
       if (modelProfile === 'anime' && scale === 2) {
         log('Note: Anime 2x uses the same model as General 2x', 'info');
       }
@@ -161,19 +244,24 @@ function bindEvents() {
   modelProfileSelect.addEventListener('change', () => {
     if (isProcessing) return;
     modelProfile = modelProfileSelect.value;
+    persistedState.modelProfile = modelProfile;
     if (modelProfile === 'anime' && scale === 2) {
       log('Note: Anime 2x uses the same model as General 2x (no anime-specific 2x model exists)', 'info');
     }
     saveSettings();
   });
 
-  outputFormat.addEventListener('change', () => saveSettings());
+  outputFormat.addEventListener('change', () => {
+    persistedState.outputFormat = outputFormat.value;
+    saveSettings();
+  });
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
     const dir = await window.api.selectOutputDir();
     if (dir) {
       outputDir = dir;
+      persistedState.outputDir = outputDir;
       const parts = dir.replace(/\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : dir;
       outputDirBtn.textContent = display;
@@ -233,7 +321,7 @@ function bindEvents() {
     }
   });
 
-  upscaleBtn.addEventListener('click', () => {
+  upscaleBtn.addEventListener('click', async () => {
     if (isProcessing) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: 'cancel' }));
@@ -251,12 +339,28 @@ function bindEvents() {
       return;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const filesToProcess = files
-      .filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled')
-      .map(f => { f.state = 'pending'; f.progress = 0; f.status = 'Queued...'; return f.path; });
+    const pendingFiles = files.filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled');
+    const filesToProcess = [];
+    for (const file of pendingFiles) {
+      const targetPath = getOutputPath(file.path);
+      const overwrite = await confirmOverwrite(targetPath);
+      if (!overwrite || !overwrite.proceed) {
+        file.state = 'cancelled';
+        file.progress = 0;
+        file.status = 'Skipped: output exists';
+        log(`Skipped ${file.name}: output already exists`, 'warn');
+        renderFileItem(files.indexOf(file));
+        continue;
+      }
+      file.state = 'pending';
+      file.progress = 0;
+      file.status = 'Queued...';
+      filesToProcess.push(file.path);
+    }
     if (filesToProcess.length === 0) return;
 
     isProcessing = true;
+    persistedState.isProcessing = true;
     batchStartTime = Date.now();
     batchTotalFiles = filesToProcess.length;
     upscaleBtn.disabled = false;
@@ -265,6 +369,8 @@ function bindEvents() {
     processingIndicator.classList.add('active');
     statusText.textContent = `Processing ${filesToProcess.length} file(s)...`;
     etaText.textContent = 'ETA: calculating...';
+    setFooterProgress(0, true);
+    persistRuntimeState();
     renderFileList();
 
     log(`Starting upscale: ${filesToProcess.length} file(s), ${scale}x, profile=${modelProfile}, format=${outputFormat.value}`);
@@ -349,9 +455,25 @@ function connectWebSocket(port) {
 }
 
 function handleWSMessage(data) {
-  if (data.type === 'log') { log(data.message, data.level || 'info'); return; }
-  if (data.type === 'model_loading') { log(data.message || 'Loading model...'); statusText.textContent = data.message || 'Loading model...'; return; }
-  if (data.type === 'model_loaded') { log('Model loaded', 'success'); return; }
+  if (data.type === 'log') {
+    if (!isNoisyProgressLog(data.message)) log(data.message, data.level || 'info');
+    return;
+  }
+  if (data.type === 'model_loading') {
+    log(data.message || 'Loading model...');
+    statusText.textContent = data.message || 'Loading model...';
+    setFooterProgress(0, true);
+    persistRuntimeState();
+    return;
+  }
+  if (data.type === 'model_progress') {
+    const pct = typeof data.progress === 'number' ? data.progress : persistedState.footerProgress;
+    statusText.textContent = data.status || 'Loading model...';
+    setFooterProgress(pct, true);
+    persistRuntimeState();
+    return;
+  }
+  if (data.type === 'model_loaded') { log('Model loaded', 'success'); setFooterProgress(0, false); return; }
 
   const fileIndex = files.findIndex(f => f.path === data.file);
   if (fileIndex === -1 && data.type !== 'all_complete' && data.type !== 'fatal_error') return;
@@ -363,8 +485,11 @@ function handleWSMessage(data) {
       files[fileIndex].status = data.status || 'Processing...';
       if (files[fileIndex].state !== 'processing') log(`Processing: ${fname}`);
       files[fileIndex].state = 'processing';
+      statusText.textContent = `${fname}: ${files[fileIndex].status}`;
+      setFooterProgress(data.progress, true);
       renderFileItem(fileIndex);
       updateETA();
+      persistRuntimeState();
       if (window.setTaskbarProgress) window.setTaskbarProgress(data.progress);
       break;
     case 'complete':
@@ -372,25 +497,31 @@ function handleWSMessage(data) {
       files[fileIndex].status = 'Complete';
       files[fileIndex].state = 'complete';
       files[fileIndex].output = data.output;
+      setFooterProgress(1, true);
       renderFileItem(fileIndex);
       log(`Complete: ${fname} \u2192 ${data.output.replace(/\\/g, '/').split('/').pop()}`, 'success');
       updateETA();
+      persistRuntimeState();
       break;
     case 'error':
       files[fileIndex].progress = 0;
       files[fileIndex].status = `Error: ${data.error}`;
       files[fileIndex].state = data.error === 'Cancelled' ? 'cancelled' : 'error';
+      setFooterProgress(0, false);
       renderFileItem(fileIndex);
       log(data.error === 'Cancelled' ? `Cancelled: ${fname}` : `Error [${fname}]: ${data.error}`, data.error === 'Cancelled' ? 'warn' : 'error');
       updateETA();
+      persistRuntimeState();
       break;
     case 'all_complete':
       isProcessing = false;
+      persistedState.isProcessing = false;
       processingIndicator.classList.remove('active');
       upscaleBtn.disabled = false;
       upscaleBtn.textContent = 'Upscale';
       upscaleBtn.classList.remove('btn-cancel');
       etaText.textContent = '';
+      setFooterProgress(0, false);
       const completed = files.filter(f => f.state === 'complete').length;
       const errors = files.filter(f => f.state === 'error').length;
       const cancelled = files.filter(f => f.state === 'cancelled').length;
@@ -398,6 +529,8 @@ function handleWSMessage(data) {
       if (errors > 0) parts.push(`${errors} failed`);
       if (cancelled > 0) parts.push(`${cancelled} cancelled`);
       statusText.textContent = `Done! ${parts.join(', ')}`;
+      persistedState.statusText = statusText.textContent;
+      persistedState.etaText = '';
       log(`Batch finished: ${parts.join(', ')}`, errors > 0 ? 'warn' : 'success');
       if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
       if (window.showCompletionToast) {
@@ -405,15 +538,19 @@ function handleWSMessage(data) {
       }
       if (retryBtn) retryBtn.style.display = errors > 0 || cancelled > 0 ? '' : 'none';
       if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(outputDir || (files[0] && files[0].output ? files[0].output.replace(/\\/g, '/').split('/').slice(0, -1).join('/') : ''));
+      persistRuntimeState();
       break;
     case 'fatal_error':
       isProcessing = false;
+      persistedState.isProcessing = false;
       processingIndicator.classList.remove('active');
       upscaleBtn.disabled = false;
       upscaleBtn.textContent = 'Upscale';
       upscaleBtn.classList.remove('btn-cancel');
       etaText.textContent = '';
+      setFooterProgress(0, false);
       statusText.textContent = `Fatal error: ${data.error}`;
+      persistRuntimeState();
       log(`Fatal: ${data.error}`, 'error');
       if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
       break;
@@ -422,16 +559,17 @@ function handleWSMessage(data) {
 
 // ---- ETA ----
 function updateETA() {
-  if (!isProcessing || batchTotalFiles === 0) { etaText.textContent = ''; return; }
+  if (!isProcessing || batchTotalFiles === 0) { etaText.textContent = ''; persistedState.etaText = ''; return; }
   const elapsed = (Date.now() - batchStartTime) / 1000;
-  if (elapsed < 2) { etaText.textContent = 'ETA: calculating...'; return; }
+  if (elapsed < 2) { etaText.textContent = 'ETA: calculating...'; persistedState.etaText = etaText.textContent; return; }
   const completedFiles = files.filter(f => f.state === 'complete' || f.state === 'error' || f.state === 'cancelled').length;
   const current = files.find(f => f.state === 'processing');
   const effectiveCompleted = completedFiles + (current ? current.progress : 0);
-  if (effectiveCompleted < 0.05) { etaText.textContent = 'ETA: calculating...'; return; }
+  if (effectiveCompleted < 0.05) { etaText.textContent = 'ETA: calculating...'; persistedState.etaText = etaText.textContent; return; }
   const remaining = batchTotalFiles - effectiveCompleted;
   const eta = Math.max(0, Math.round((elapsed / effectiveCompleted) * remaining));
   etaText.textContent = `ETA: ${formatDuration(eta)}`;
+  persistedState.etaText = etaText.textContent;
 }
 
 function formatDuration(s) {
@@ -450,6 +588,69 @@ function getFileExtension(fp) {
 function getFileName(fp) { return fp.replace(/\\/g, '/').split('/').pop(); }
 function isImage(fp) { return IMAGE_EXTS.has(getFileExtension(fp)); }
 
+function getOutputPath(inputPath) {
+  const normalized = inputPath.replace(/\\/g, '/');
+  const slashIndex = normalized.lastIndexOf('/');
+  const sourceDir = slashIndex >= 0 ? inputPath.slice(0, slashIndex) : '';
+  const name = getFileName(inputPath);
+  const dotIndex = name.lastIndexOf('.');
+  const baseName = dotIndex > 0 ? name.slice(0, dotIndex) : name;
+  const inputExt = getFileExtension(inputPath);
+  const outExt = outputFormat.value === 'same' ? inputExt : `.${outputFormat.value}`;
+  const outDir = outputDir || sourceDir;
+  const separator = outDir.includes('\\') ? '\\' : '/';
+  return `${outDir}${outDir.endsWith('\\') || outDir.endsWith('/') ? '' : separator}${baseName}_${scale}x${outExt}`;
+}
+
+async function confirmOverwrite(filePath) {
+  if (!await window.api.pathExists(filePath)) return { proceed: true };
+
+  try {
+    const all = await window.loadAllSettings();
+    if (all.global && all.global.skipOverwriteConfirm) return { proceed: true };
+  } catch {}
+
+  return new Promise((resolve) => {
+    const finish = async (result) => {
+      overwriteModal.classList.remove('active');
+      overwriteModal.setAttribute('aria-hidden', 'true');
+      overwriteSkipBtn.removeEventListener('click', onSkip);
+      overwriteAlwaysBtn.removeEventListener('click', onAlways);
+      overwriteConfirmBtn.removeEventListener('click', onOverwrite);
+      document.removeEventListener('keydown', onKeyDown);
+
+      if (result.always) {
+        try {
+          const all = await window.loadAllSettings();
+          all.global = all.global || {};
+          all.global.skipOverwriteConfirm = true;
+          await window.saveAllSettings(all);
+        } catch {}
+      }
+
+      resolve({ proceed: result.proceed });
+    };
+
+    const onSkip = () => finish({ proceed: false });
+    const onAlways = () => finish({ proceed: true, always: true });
+    const onOverwrite = () => finish({ proceed: true });
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') finish({ proceed: false });
+      if (e.key === 'Enter') finish({ proceed: true });
+    };
+
+    overwriteFileName.textContent = getFileName(filePath);
+    overwriteFileName.title = filePath;
+    overwriteSkipBtn.addEventListener('click', onSkip);
+    overwriteAlwaysBtn.addEventListener('click', onAlways);
+    overwriteConfirmBtn.addEventListener('click', onOverwrite);
+    document.addEventListener('keydown', onKeyDown);
+    overwriteModal.classList.add('active');
+    overwriteModal.setAttribute('aria-hidden', 'false');
+    overwriteConfirmBtn.focus();
+  });
+}
+
 async function addFiles(paths) {
   let added = 0;
   for (const p of paths) {
@@ -464,19 +665,32 @@ async function addFiles(paths) {
     added++;
   }
   if (added > 0) log(`Added ${added} file(s)`);
+  persistedState.files = files;
+  persistedState.statusText = statusText ? statusText.textContent : persistedState.statusText;
   renderFileList();
   updateUpscaleButton();
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
 }
 
-function removeFile(index) { files.splice(index, 1); renderFileList(); updateUpscaleButton(); }
+function removeFile(index) {
+  files.splice(index, 1);
+  persistedState.files = files;
+  renderFileList();
+  updateUpscaleButton();
+  if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
+}
 
 function clearFiles() {
   files = [];
+  persistedState.files = files;
+  persistedState.statusText = 'Waiting for File';
+  persistedState.etaText = '';
+  persistedState.isProcessing = false;
   renderFileList();
   updateUpscaleButton();
   statusText.textContent = 'Waiting for File';
   etaText.textContent = '';
+  setFooterProgress(0, false);
   if (retryBtn) retryBtn.style.display = 'none';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([]);
@@ -486,6 +700,7 @@ function clearFiles() {
 function renderFileList() {
   if (files.length === 0) {
     fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    if (window.updateQueueSummary) window.updateQueueSummary([]);
     return;
   }
   fileList.innerHTML = '';
@@ -497,7 +712,39 @@ function renderFileItem(index) {
   if (window.updateQueueSummary) window.updateQueueSummary(files);
   const existing = fileList.children[index];
   if (!existing) return;
-  fileList.replaceChild(createFileElement(files[index], index), existing);
+  updateFileElement(existing, files[index]);
+}
+
+function updateFileElement(el, file) {
+  el.classList.toggle('file-previewable', file.state === 'complete' && file.type === 'image');
+
+  const status = el.querySelector('.file-status');
+  if (status) {
+    status.textContent = file.status;
+    status.classList.toggle('cancelled', file.state === 'cancelled');
+  }
+
+  const fill = el.querySelector('.file-progress-fill');
+  if (fill) {
+    fill.style.width = `${Math.round(file.progress * 100)}%`;
+    fill.classList.toggle('complete', file.state === 'complete');
+    fill.classList.toggle('error', file.state === 'error' || file.state === 'cancelled');
+  }
+
+  let previewBtn = el.querySelector('.file-preview-btn');
+  if (file.state === 'complete' && file.type === 'image') {
+    if (!previewBtn) {
+      previewBtn = document.createElement('button');
+      previewBtn.className = 'file-preview-btn';
+      previewBtn.title = 'Preview';
+      previewBtn.textContent = '\u{1F50D}';
+      previewBtn.addEventListener('click', (e) => { e.stopPropagation(); openPreview(file); });
+      const removeBtn = el.querySelector('.file-remove');
+      el.insertBefore(previewBtn, removeBtn);
+    }
+  } else if (previewBtn) {
+    previewBtn.remove();
+  }
 }
 
 function createFileElement(file, index) {

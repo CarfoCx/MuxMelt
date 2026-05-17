@@ -37,7 +37,7 @@ function validateOutputName(outputName) {
 /**
  * Common file extension sets used across tools for input validation.
  */
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif']);
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif', '.gif', '.svg', '.heic', '.heif']);
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov']);
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.aac', '.m4a', '.wma']);
 const PDF_EXTS = new Set(['.pdf']);
@@ -100,6 +100,9 @@ const MAGIC_BYTES = {
   '.tiff': [[0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A]],
   '.tif':  [[0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A]],
   '.webp': null, // RIFF header checked specially
+  '.svg':  null, // XML text checked specially
+  '.heic': null, // ISO BMFF ftyp checked specially
+  '.heif': null, // ISO BMFF ftyp checked specially
   '.pdf':  [0x25, 0x50, 0x44, 0x46],
   '.mp4':  null, // ftyp box checked specially
   '.mkv':  [0x1A, 0x45, 0xDF, 0xA3],
@@ -137,6 +140,18 @@ function validateMagicBytes(filePath) {
   if (ext === '.webp') {
     return header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
            header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50;
+  }
+  if (ext === '.svg') {
+    try {
+      const text = fs.readFileSync(filePath, 'utf8').trimStart().slice(0, 512).toLowerCase();
+      return text.startsWith('<svg') || (text.startsWith('<?xml') && text.includes('<svg'));
+    } catch {
+      return true;
+    }
+  }
+  if (ext === '.heic' || ext === '.heif') {
+    const brand = header.slice(8, 12).toString('ascii');
+    return ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'].includes(brand);
   }
   if (ext === '.mp4' || ext === '.mov') {
     // ftyp box at offset 4

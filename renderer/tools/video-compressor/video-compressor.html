@@ -24,7 +24,7 @@
   <div class="settings-bar" style="flex-wrap: wrap;">
     <div class="setting-group">
       <label title="Lower = better quality, bigger file">CRF:</label>
-      <input type="range" id="crfSlider" min="18" max="28" value="23">
+      <input type="range" id="crfSlider" min="18" max="35" value="23">
       <span class="range-value" id="crfValue">23</span>
       <span class="range-hint">(lower = better)</span>
     </div>
@@ -49,7 +49,7 @@
     </div>
 
     <div class="setting-group">
-      <label>Resolution:</label>
+      <label>Max resolution:</label>
       <select id="resolution">
         <option value="original">Original</option>
         <option value="1080p">1080p</option>
@@ -87,6 +87,10 @@
 <div class="tool-footer">
   <div class="tool-footer-left">
     <span class="status-text" id="statusText">Waiting for Video</span>
+    <div class="video-footer-progress" id="footerProgress" aria-hidden="true">
+      <div class="video-footer-progress-fill" id="footerProgressFill"></div>
+    </div>
+    <span class="video-progress-percent" id="progressPercent"></span>
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>

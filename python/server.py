@@ -115,6 +115,17 @@ def vram():
     }
 
 
+@app.get('/shutdown')
+async def shutdown():
+    """Allow Electron to stop the local backend before quitting."""
+    async def stop_server():
+        await asyncio.sleep(0.1)
+        os._exit(0)
+
+    asyncio.create_task(stop_server())
+    return {'status': 'shutting_down'}
+
+
 @app.websocket('/ws')
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
@@ -239,13 +250,23 @@ async def ensure_model_with_progress(ws, scale, profile, first_file):
     while not task.done():
         while not progress_q.empty():
             pct, status = progress_q.get_nowait()
-            await send_log(ws, status)
+            await ws.send_json({
+                'type': 'model_progress',
+                'file': first_file,
+                'progress': pct,
+                'status': status
+            })
         await asyncio.sleep(0.3)
 
     # Drain remaining
     while not progress_q.empty():
         pct, status = progress_q.get_nowait()
-        await send_log(ws, status)
+        await ws.send_json({
+            'type': 'model_progress',
+            'file': first_file,
+            'progress': pct,
+            'status': status
+        })
 
     await task  # Re-raise any exception
 

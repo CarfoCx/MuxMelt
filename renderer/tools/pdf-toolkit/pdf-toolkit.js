@@ -13,11 +13,11 @@ let progressCleanup = null;
 let dragSrcIndex = null;
 
 let dropZone, browseBtn, fileList, actionBtn, clearBtn, openOutputBtn;
-let outputDirBtn, statusText, processingIndicator, pageRange;
+let outputDirBtn, statusText, processingIndicator;
 let lastOutputDir = '';
 let _pasteHandler = null;
 
-let launchEditorBtn, redactTerms;
+let launchEditorBtn;
 let pdfEditorOverlay, closeEditorBtn, editorFileName, pagesContainer, editorSidebar, editorLoading;
 let toolSelect, toolRedact, toolText, textColorPicker, textSizeSelect, editorStatusText, editorPageInfo;
 let editorApplyBtn, editorClearBtn;
@@ -42,8 +42,6 @@ function init(ctx) {
   outputDirBtn = document.getElementById('outputDirBtn');
   statusText = document.getElementById('statusText');
   processingIndicator = document.getElementById('processingIndicator');
-  pageRange = document.getElementById('pageRange');
-  redactTerms = document.getElementById('redactTerms');
   openOutputBtn = document.getElementById('openOutputBtn');
   launchEditorBtn = document.getElementById('launchEditorBtn');
 
@@ -186,6 +184,17 @@ function setTool(tool) {
 async function openEditor() {
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
   if (pending.length === 0) return;
+
+  const result = await window.api.openPdfEditor({
+    filePath: pending[0].path,
+    outputDir
+  });
+  if (result && result.success) {
+    log(`Opened PDF editor: ${pending[0].name}`, 'success');
+    return;
+  }
+  log(`Editor error: ${result ? result.error : 'Could not open editor'}`, 'error');
+  return;
   
   currentEditorFile = pending[0];
   editorFileName.textContent = currentEditorFile.name;
@@ -429,7 +438,7 @@ function renderEditorActions() {
 }
 
 function updateActionButton() {
-  const labels = { merge: 'Merge', split: 'Split', extract: 'Extract', edit: 'Save Edited PDF' };
+  const labels = { merge: 'Merge', split: 'Split Pages', edit: 'Launch PDF Editor' };
   actionBtn.textContent = labels[currentOp] || 'Process';
   const hasPending = files.some(f => f.state === 'pending' || f.state === 'error');
   const hasRequiredFiles = currentOp === 'merge' ? files.length >= 2 : files.length >= 1;
@@ -442,6 +451,10 @@ function updateActionButton() {
 
 async function startOperation() {
   if (isProcessing) return;
+  if (currentOp === 'edit') {
+    await openEditor();
+    return;
+  }
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
   if (pending.length === 0) return;
   const processedFiles = currentOp === 'merge' ? files : pending.slice(0, 1);
@@ -463,27 +476,6 @@ async function startOperation() {
     outputDir: outputDir
   };
   
-  if (currentOp === 'extract') {
-    if (!pageRange.value.trim()) {
-      log('Please enter a page range (e.g. 1-3, 5, 8-10)', 'warn');
-      finishProcessingWithError('Page range required');
-      return;
-    }
-    pdfOpts.pageRange = pageRange.value.trim();
-  }
-  
-  if (currentOp === 'edit') {
-    pdfOpts.redactTerms = redactTerms ? redactTerms.value : '';
-    pdfOpts.rects = editorActions.rects;
-    pdfOpts.edits = editorActions.edits;
-    
-    if (!pdfOpts.redactTerms.trim() && pdfOpts.rects.length === 0 && pdfOpts.edits.length === 0) {
-      log('Add a redaction term or use the Interactive Editor before saving.', 'warn');
-      finishProcessingWithError('No changes specified');
-      return;
-    }
-  }
-
   log(`Starting PDF ${currentOp}: ${filePaths.length} file(s)`);
 
   try {

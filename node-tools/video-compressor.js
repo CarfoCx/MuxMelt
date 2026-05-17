@@ -18,7 +18,7 @@ function registerIPC(ipcMain, getMainWindow) {
     const {
       inputPath,
       outputDir,
-      crf,          // 18-28, default 23
+      crf,          // 18-35, default 23
       preset,       // ultrafast..veryslow, default 'medium'
       resolution,   // e.g. '1080p', '720p', '480p', 'custom', or null for original
       codec = 'h264',        // 'h264' or 'h265'
@@ -26,6 +26,8 @@ function registerIPC(ipcMain, getMainWindow) {
       audioBitrate, // e.g. '128k', default '128k'
       twoPass       // boolean, two-pass encoding
     } = options;
+
+    let tempOutputPath = null;
 
     try {
       if (!ffmpeg.findFfmpeg()) {
@@ -40,6 +42,7 @@ function registerIPC(ipcMain, getMainWindow) {
       const baseName = path.basename(inputPath, ext);
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
       const outputPath = path.join(outDir, baseName + '_compressed' + ext);
+      tempOutputPath = path.join(outDir, `${baseName}_compressed.${process.pid}.${Date.now()}.tmp${ext}`);
 
       fs.mkdirSync(outDir, { recursive: true });
 
@@ -47,13 +50,15 @@ function registerIPC(ipcMain, getMainWindow) {
       let inputSize = 0;
       try { inputSize = fs.statSync(inputPath).size; } catch (err) { console.warn('Could not read input size:', err.message); }
 
-      // Probe duration
-      const duration = await ffmpeg.probeDuration(inputPath);
+      const videoInfo = await ffmpeg.probeVideoInfo(inputPath);
+      const duration = videoInfo.duration || await ffmpeg.probeDuration(inputPath);
 
       const win = getMainWindow();
       if (win) {
         win.webContents.send('tool-progress', {
           tool: 'video-compressor',
+          type: 'progress',
+          file: inputPath,
           percent: 0,
           status: 'Compressing video...',
           inputSize,
@@ -82,12 +87,58 @@ function registerIPC(ipcMain, getMainWindow) {
       };
       if (resolution && resolution !== 'original') {
         if (resolutionMap[resolution]) {
-          commonArgs.push('-vf', resolutionMap[resolution]);
+          const targetHeight = parseInt(resolution, 10);
+          if (!videoInfo.height || targetHeight < videoInfo.height) {
+            commonArgs.push('-vf', resolutionMap[resolution]);
+          }
         } else if (resolution === 'custom' && customWidth) {
           const w = Math.max(128, Math.min(7680, parseInt(customWidth) || 1280));
-          commonArgs.push('-vf', `scale=${w}:-2`);
+          if (!videoInfo.width || w < videoInfo.width) {
+            commonArgs.push('-vf', `scale=${w}:-2`);
+          }
         }
       }
+
+      const runSinglePassEncode = async (encodeCrf, label) => {
+        const args = ['-i', inputPath, ...commonArgs];
+        const crfIndex = args.indexOf('-crf');
+        if (crfIndex !== -1) args[crfIndex + 1] = String(encodeCrf);
+        args.push('-c:a', 'aac', '-b:a', audioBr);
+        args.push('-movflags', '+faststart');
+        args.push(tempOutputPath);
+
+        const onProgress = (info) => {
+          const w = getMainWindow();
+          if (w) {
+            const estimatedSize = info.sizeKB ? info.sizeKB * 1024 : null;
+            const estimatedFinalSize = (estimatedSize && info.percent > 0)
+              ? Math.round(estimatedSize / (info.percent / 100))
+              : null;
+            const compressionRatio = (estimatedFinalSize && inputSize > 0)
+              ? (estimatedFinalSize / inputSize).toFixed(2)
+              : null;
+            const pct = Math.min(95, info.percent || 0);
+
+            w.webContents.send('tool-progress', {
+              tool: 'video-compressor',
+              type: 'progress',
+              file: inputPath,
+              percent: pct,
+              frame: info.frame,
+              speed: info.speed,
+              currentSizeKB: info.sizeKB,
+              estimatedFinalSize,
+              compressionRatio,
+              status: `${label}... ${Math.round(pct)}%`
+            });
+          }
+        };
+
+        const { promise, cancel } = ffmpeg.run({ args, durationSeconds: duration, onProgress });
+        activeCancel = cancel;
+        await promise;
+        activeCancel = null;
+      };
 
       if (twoPass) {
         // Two-pass encoding
@@ -98,6 +149,8 @@ function registerIPC(ipcMain, getMainWindow) {
         if (win) {
           win.webContents.send('tool-progress', {
             tool: 'video-compressor',
+            type: 'progress',
+            file: inputPath,
             percent: 0,
             status: 'Two-pass: analyzing (pass 1/2)...'
           });
@@ -108,10 +161,12 @@ function registerIPC(ipcMain, getMainWindow) {
         const onPass1Progress = (info) => {
           const w = getMainWindow();
           if (w) {
-            // Pass 1 accounts for 0-45%
-            const pct = Math.min(45, (info.percent || 0) * 0.45);
+            // Keep completion headroom for pass handoff and final file work.
+            const pct = Math.min(40, (info.percent || 0) * 0.4);
             w.webContents.send('tool-progress', {
               tool: 'video-compressor',
+              type: 'progress',
+              file: inputPath,
               percent: pct,
               frame: info.frame,
               speed: info.speed,
@@ -129,18 +184,20 @@ function registerIPC(ipcMain, getMainWindow) {
         if (win) {
           win.webContents.send('tool-progress', {
             tool: 'video-compressor',
+            type: 'progress',
+            file: inputPath,
             percent: 45,
-            status: 'Two-pass: encoding (pass 2/2)...'
+            status: 'Two-pass: analysis complete. Encoding (pass 2/2)...'
           });
         }
 
-        const pass2Args = ['-i', inputPath, ...commonArgs, '-pass', '2', '-passlogfile', passlogfile, '-c:a', 'aac', '-b:a', audioBr, '-movflags', '+faststart', outputPath];
+        const pass2Args = ['-i', inputPath, ...commonArgs, '-pass', '2', '-passlogfile', passlogfile, '-c:a', 'aac', '-b:a', audioBr, '-movflags', '+faststart', tempOutputPath];
 
         const onPass2Progress = (info) => {
           const w = getMainWindow();
           if (w) {
-            // Pass 2 accounts for 45-100%
-            const pct = 45 + Math.min(55, (info.percent || 0) * 0.55);
+            // Pass 2 accounts for 45-95%; final mux/stat work completes after ffmpeg exits.
+            const pct = 45 + Math.min(50, (info.percent || 0) * 0.5);
             const estimatedSize = info.sizeKB ? info.sizeKB * 1024 : null;
             const estimatedFinalSize = (estimatedSize && info.percent > 0)
               ? Math.round(estimatedSize / (info.percent / 100))
@@ -151,6 +208,8 @@ function registerIPC(ipcMain, getMainWindow) {
 
             w.webContents.send('tool-progress', {
               tool: 'video-compressor',
+              type: 'progress',
+              file: inputPath,
               percent: pct,
               frame: info.frame,
               speed: info.speed,
@@ -167,6 +226,16 @@ function registerIPC(ipcMain, getMainWindow) {
         await pass2.promise;
         activeCancel = null;
 
+        if (win) {
+          win.webContents.send('tool-progress', {
+            tool: 'video-compressor',
+            type: 'progress',
+            file: inputPath,
+            percent: 98,
+            status: 'Finalizing output...'
+          });
+        }
+
         // Clean up passlog files
         try {
           const tmpDir = os.tmpdir();
@@ -179,55 +248,71 @@ function registerIPC(ipcMain, getMainWindow) {
           }
         } catch {}
       } else {
-        // Single-pass encoding
-        const args = ['-i', inputPath, ...commonArgs];
-        args.push('-c:a', 'aac', '-b:a', audioBr);
-        args.push('-movflags', '+faststart');
-        args.push(outputPath);
+        await runSinglePassEncode(crfValue, 'Compressing');
 
-        const onProgress = (info) => {
-          const w = getMainWindow();
-          if (w) {
-            // Estimate output size based on current progress
-            const estimatedSize = info.sizeKB ? info.sizeKB * 1024 : null;
-            const estimatedFinalSize = (estimatedSize && info.percent > 0)
-              ? Math.round(estimatedSize / (info.percent / 100))
-              : null;
-            const compressionRatio = (estimatedFinalSize && inputSize > 0)
-              ? (estimatedFinalSize / inputSize).toFixed(2)
-              : null;
-
-            w.webContents.send('tool-progress', {
-              tool: 'video-compressor',
-              percent: info.percent || 0,
-              frame: info.frame,
-              speed: info.speed,
-              currentSizeKB: info.sizeKB,
-              estimatedFinalSize,
-              compressionRatio,
-              status: `Compressing... ${Math.round(info.percent || 0)}%`
-            });
-          }
-        };
-
-        const { promise, cancel } = ffmpeg.run({ args, durationSeconds: duration, onProgress });
-        activeCancel = cancel;
-
-        await promise;
-        activeCancel = null;
+        if (win) {
+          win.webContents.send('tool-progress', {
+            tool: 'video-compressor',
+            type: 'progress',
+            file: inputPath,
+            percent: 98,
+            status: 'Finalizing output...'
+          });
+        }
       }
 
       // Get output file size and compute ratio
       let outputSize = 0;
-      try { outputSize = fs.statSync(outputPath).size; } catch (err) { console.warn('Could not read output size:', err.message); }
+      try { outputSize = fs.statSync(tempOutputPath).size; } catch (err) { console.warn('Could not read output size:', err.message); }
+      const w = getMainWindow();
+
+      if (!twoPass && inputSize > 0 && outputSize >= inputSize) {
+        const retryCrfs = getRetryCrfs(crfValue);
+        for (const retryCrf of retryCrfs) {
+          try { fs.unlinkSync(tempOutputPath); } catch {}
+          if (w) {
+            w.webContents.send('tool-progress', {
+              tool: 'video-compressor',
+              type: 'progress',
+              file: inputPath,
+              percent: 0,
+              status: `Output was larger. Retrying at CRF ${retryCrf}...`
+            });
+          }
+          await runSinglePassEncode(retryCrf, `Retrying CRF ${retryCrf}`);
+          try { outputSize = fs.statSync(tempOutputPath).size; } catch { outputSize = 0; }
+          if (outputSize > 0 && outputSize < inputSize) break;
+        }
+      }
+
       const compressionRatio = inputSize > 0 ? (outputSize / inputSize).toFixed(2) : null;
       const savedBytes = inputSize - outputSize;
       const savedPercent = inputSize > 0 ? ((savedBytes / inputSize) * 100).toFixed(1) : 0;
 
-      const w = getMainWindow();
+      if (inputSize > 0 && outputSize >= inputSize) {
+        try { fs.unlinkSync(tempOutputPath); } catch {}
+        if (w) {
+          w.webContents.send('tool-progress', {
+            tool: 'video-compressor',
+            type: 'error',
+            file: inputPath,
+            error: `Compressed output would be larger (${formatBytes(outputSize)} vs ${formatBytes(inputSize)}). No output was saved.`
+          });
+        }
+        return {
+          success: false,
+          error: `Compressed output would be larger (${formatBytes(outputSize)} vs ${formatBytes(inputSize)}). Try a higher CRF, lower max resolution, or H.265.`
+        };
+      }
+
+      try { fs.rmSync(outputPath, { force: true }); } catch {}
+      fs.renameSync(tempOutputPath, outputPath);
+
       if (w) {
         w.webContents.send('tool-progress', {
           tool: 'video-compressor',
+          type: 'complete',
+          file: inputPath,
           percent: 100,
           status: 'Done'
         });
@@ -244,6 +329,9 @@ function registerIPC(ipcMain, getMainWindow) {
       };
     } catch (err) {
       activeCancel = null;
+      if (tempOutputPath) {
+        try { fs.unlinkSync(tempOutputPath); } catch {}
+      }
       return { success: false, error: formatToolError(err, 'Video Compressor') };
     }
   });
@@ -281,6 +369,34 @@ function registerIPC(ipcMain, getMainWindow) {
       return { success: false, error: formatToolError(err, 'Video Compressor') };
     }
   });
+
+  ipcMain.handle('video-compressor-probe', async (event, filePath) => {
+    try {
+      const info = await ffmpeg.probeVideoInfo(filePath);
+      return { success: true, ...info };
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'Video Compressor') };
+    }
+  });
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function getRetryCrfs(initialCrf) {
+  const candidates = [initialCrf + 4, initialCrf + 8, initialCrf + 12, 35]
+    .map((value) => Math.max(18, Math.min(35, Math.round(value))))
+    .filter((value) => value > initialCrf);
+  return [...new Set(candidates)];
 }
 
 module.exports = { registerIPC };

@@ -99,6 +99,48 @@ function probeDuration(filePath) {
   });
 }
 
+function probeVideoInfo(filePath) {
+  return new Promise((resolve) => {
+    const ffmpegCmd = findFfmpeg();
+    if (!ffmpegCmd) { resolve({ duration: 0, width: 0, height: 0 }); return; }
+
+    const probeCmd = ffmpegCmd.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1');
+    const args = [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height:format=duration',
+      '-of', 'json',
+      filePath
+    ];
+
+    const proc = spawn(probeCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.on('error', () => {
+      probeDuration(filePath).then((duration) => resolve({ duration, width: 0, height: 0 }));
+    });
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        probeDuration(filePath).then((duration) => resolve({ duration, width: 0, height: 0 }));
+        return;
+      }
+
+      try {
+        const info = JSON.parse(stdout);
+        const stream = Array.isArray(info.streams) ? info.streams[0] : null;
+        const duration = parseFloat(info.format && info.format.duration);
+        resolve({
+          duration: Number.isFinite(duration) ? duration : 0,
+          width: stream && Number.isFinite(Number(stream.width)) ? Number(stream.width) : 0,
+          height: stream && Number.isFinite(Number(stream.height)) ? Number(stream.height) : 0
+        });
+      } catch {
+        probeDuration(filePath).then((duration) => resolve({ duration, width: 0, height: 0 }));
+      }
+    });
+  });
+}
+
 function resolveViaFfmpeg(ffmpegCmd, filePath, resolve) {
   const proc = spawn(ffmpegCmd, ['-i', filePath], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '';
@@ -205,5 +247,6 @@ module.exports = {
   findFfmpeg,
   parseProgress,
   probeDuration,
+  probeVideoInfo,
   run
 };

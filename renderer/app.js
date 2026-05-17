@@ -25,24 +25,55 @@ const toolStylesheet = document.getElementById('toolStylesheet');
 // Log panel
 // ============================================================================
 
+const logsByTool = {};
+const MAX_LOG_ENTRIES_PER_TOOL = 200;
+
 logToggle.addEventListener('click', () => {
   logPanel.classList.toggle('collapsed');
   saveGlobalSettings();
 });
 
-function log(message, level = 'info') {
-  const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const entry = document.createElement('div');
-  entry.className = 'log-entry';
-  entry.innerHTML = `<span class="log-time">${time}</span><span class="log-msg ${level}">${escapeHtml(message)}</span>`;
-  logEntries.appendChild(entry);
-  while (logEntries.children.length > 200) {
-    logEntries.removeChild(logEntries.firstChild);
-  }
+function getLogToolId(toolId) {
+  return toolId || currentToolId || 'app';
+}
+
+function createLogEntry(entry) {
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+  el.innerHTML = `<span class="log-time">${entry.time}</span><span class="log-msg ${entry.level}">${escapeHtml(entry.message)}</span>`;
+  return el;
+}
+
+function renderLogEntries(toolId = currentToolId) {
+  const key = getLogToolId(toolId);
+  const entries = logsByTool[key] || [];
+  logEntries.innerHTML = '';
+  entries.forEach(entry => logEntries.appendChild(createLogEntry(entry)));
   logEntries.parentElement.scrollTop = logEntries.parentElement.scrollHeight;
 }
 
-function clearLog() {
+function log(message, level = 'info', toolId = currentToolId) {
+  const key = getLogToolId(toolId);
+  const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const entry = { time, message, level };
+
+  logsByTool[key] = logsByTool[key] || [];
+  logsByTool[key].push(entry);
+  while (logsByTool[key].length > MAX_LOG_ENTRIES_PER_TOOL) {
+    logsByTool[key].shift();
+  }
+
+  if (key === getLogToolId(currentToolId)) {
+    logEntries.appendChild(createLogEntry(entry));
+    while (logEntries.children.length > MAX_LOG_ENTRIES_PER_TOOL) {
+      logEntries.removeChild(logEntries.firstChild);
+    }
+    logEntries.parentElement.scrollTop = logEntries.parentElement.scrollHeight;
+  }
+}
+
+function clearLog(toolId = currentToolId) {
+  logsByTool[getLogToolId(toolId)] = [];
   logEntries.innerHTML = '';
 }
 
@@ -564,6 +595,7 @@ async function loadTool(toolId) {
 
   currentToolId = toolId;
   if (window.updateQueueSummary) window.updateQueueSummary([]);
+  renderLogEntries(toolId);
 
   // Update window title
   const toolLabel = document.querySelector(`.sidebar-item[data-tool="${toolId}"] .sidebar-label`);
@@ -607,7 +639,9 @@ async function loadTool(toolId) {
         if (toolRegistry[toolId]) {
           currentToolModule = toolRegistry[toolId];
           if (currentToolModule.init) {
-            currentToolModule.init({ pythonPort, log, escapeHtml, clearLog });
+            const toolLog = (message, level = 'info') => log(message, level, toolId);
+            const toolClearLog = () => clearLog(toolId);
+            currentToolModule.init({ pythonPort, log: toolLog, escapeHtml, clearLog: toolClearLog });
           }
         }
         resolve();
@@ -675,31 +709,83 @@ async function init() {
   checkForAppUpdates();
 
   // Load last used tool or default to upscaler
-  const startTool = allSettings.global?.lastTool || 'upscaler';
+  const savedTool = allSettings.global?.lastTool || 'upscaler';
+  const startTool = document.querySelector(`.sidebar-item[data-tool="${savedTool}"]`) ? savedTool : 'upscaler';
   loadTool(startTool);
 }
 
 async function checkForAppUpdates() {
   try {
-    const update = await window.api.checkForUpdates();
-    if (update && !update.upToDate && update.releaseUrl) {
-      const banner = document.getElementById('updateBanner');
-      const link = document.getElementById('updateLink');
-      const dismiss = document.getElementById('updateDismiss');
-      if (banner && link) {
-        banner.style.display = 'flex';
-        link.addEventListener('click', () => {
-          window.api.openExternal(update.releaseUrl);
-        });
-        if (dismiss) {
-          dismiss.addEventListener('click', () => {
-            banner.style.display = 'none';
-          });
-        }
-        log(`Update available: ${update.latestVersion}`, 'info');
-      }
+    await window.api.checkForUpdates();
+  } catch (err) {
+    console.error('Update check failed:', err);
+  }
+}
+
+// Auto-update event listeners
+const updateBanner = document.getElementById('updateBanner');
+const updateBannerText = document.getElementById('updateBannerText');
+const updateDownloadBtn = document.getElementById('updateDownloadBtn');
+const updateRestartBtn = document.getElementById('updateRestartBtn');
+const updateDismiss = document.getElementById('updateDismiss');
+
+if (window.api.onUpdateAvailable) {
+  window.api.onUpdateAvailable((info) => {
+    if (updateBanner && updateBannerText && updateDownloadBtn) {
+      updateBannerText.textContent = `A new version (v${info.version}) is available!`;
+      updateBanner.style.display = 'flex';
+      updateDownloadBtn.style.display = 'inline-block';
+      updateRestartBtn.style.display = 'none';
     }
-  } catch {}
+    log(`Update available: ${info.version}`, 'info');
+  });
+}
+
+if (window.api.onUpdateDownloaded) {
+  window.api.onUpdateDownloaded((info) => {
+    if (updateBanner && updateBannerText && updateDownloadBtn && updateRestartBtn) {
+      updateBannerText.textContent = `Version ${info.version} is ready to install.`;
+      updateDownloadBtn.style.display = 'none';
+      updateRestartBtn.style.display = 'inline-block';
+      updateBanner.style.display = 'flex';
+    }
+    log(`Update downloaded: ${info.version}`, 'success');
+  });
+}
+
+if (window.api.onUpdateDownloadProgress) {
+  window.api.onUpdateDownloadProgress((progress) => {
+    if (updateBannerText) {
+      const pct = Math.round(progress.percent);
+      updateBannerText.textContent = `Downloading update... ${pct}%`;
+    }
+  });
+}
+
+if (window.api.onUpdateError) {
+  window.api.onUpdateError((err) => {
+    log(`Update error: ${err}`, 'error');
+  });
+}
+
+if (updateDownloadBtn) {
+  updateDownloadBtn.addEventListener('click', () => {
+    window.api.downloadUpdate();
+    updateDownloadBtn.disabled = true;
+    updateDownloadBtn.textContent = 'Downloading...';
+  });
+}
+
+if (updateRestartBtn) {
+  updateRestartBtn.addEventListener('click', () => {
+    window.api.restartToUpdate();
+  });
+}
+
+if (updateDismiss) {
+  updateDismiss.addEventListener('click', () => {
+    if (updateBanner) updateBanner.style.display = 'none';
+  });
 }
 
 // ============================================================================
