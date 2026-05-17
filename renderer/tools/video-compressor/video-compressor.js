@@ -5,18 +5,39 @@
 (function() {
 
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
+const DOWNSCALE_TARGETS = [
+  { value: '1080p', label: '1080p', height: 1080 },
+  { value: '720p', label: '720p', height: 720 },
+  { value: '480p', label: '480p', height: 480 }
+];
 
-let files = [];
-let outputDir = '';
-let isProcessing = false;
+const persistedState = (() => {
+  window.__muxmeltToolState = window.__muxmeltToolState || {};
+  window.__muxmeltToolState.videoCompressor = window.__muxmeltToolState.videoCompressor || {
+    files: [],
+    outputDir: '',
+    lastOutputDir: '',
+    isProcessing: false,
+    statusText: 'Waiting for Video',
+    etaText: '',
+    footerProgress: 0,
+    footerProgressVisible: false
+  };
+  return window.__muxmeltToolState.videoCompressor;
+})();
+
+let files = persistedState.files;
+let outputDir = persistedState.outputDir || '';
+let isProcessing = !!persistedState.isProcessing;
 let log = null;
 let progressCleanup = null;
 let batchStartTime = 0;
 let batchTotalFiles = 0;
 
 let dropZone, browseBtn, fileList, compressBtn, clearBtn, openOutputBtn, retryBtn;
-let lastOutputDir = '';
+let lastOutputDir = persistedState.lastOutputDir || '';
 let outputDirBtn, statusText, processingIndicator, etaText;
+let footerProgress, footerProgressFill, progressPercent;
 let crfSlider, crfValue, preset, resolution, codec, customWidth, twoPassCheck;
 let _pasteHandler = null;
 
@@ -34,6 +55,9 @@ function init(ctx) {
   statusText = document.getElementById('statusText');
   processingIndicator = document.getElementById('processingIndicator');
   etaText = document.getElementById('etaText');
+  footerProgress = document.getElementById('footerProgress');
+  footerProgressFill = document.getElementById('footerProgressFill');
+  progressPercent = document.getElementById('progressPercent');
   crfSlider = document.getElementById('crfSlider');
   crfValue = document.getElementById('crfValue');
   preset = document.getElementById('preset');
@@ -47,12 +71,43 @@ function init(ctx) {
   document.addEventListener('paste-files', _pasteHandler);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   loadToolSettings();
-  log('Video Compressor initialized');
+  restoreViewState();
+  if (!persistedState.initialized) {
+    log('Video Compressor initialized');
+    persistedState.initialized = true;
+  }
 }
 
 function cleanup() {
+  persistRuntimeState();
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
   if (progressCleanup) { progressCleanup(); progressCleanup = null; }
+}
+
+function persistRuntimeState() {
+  persistedState.files = files;
+  persistedState.outputDir = outputDir;
+  persistedState.lastOutputDir = lastOutputDir;
+  persistedState.isProcessing = isProcessing;
+  persistedState.statusText = statusText ? statusText.textContent : persistedState.statusText;
+  persistedState.etaText = etaText ? etaText.textContent : persistedState.etaText;
+}
+
+function restoreViewState() {
+  if (statusText) statusText.textContent = persistedState.statusText || 'Waiting for Video';
+  if (etaText) etaText.textContent = persistedState.etaText || '';
+  setFooterProgress(persistedState.footerProgress || 0, !!persistedState.footerProgressVisible);
+  if (processingIndicator) processingIndicator.classList.toggle('active', isProcessing);
+  if (compressBtn) {
+    compressBtn.textContent = isProcessing ? 'Cancel' : 'Compress';
+    compressBtn.classList.toggle('btn-cancel', isProcessing);
+  }
+  if (openOutputBtn) openOutputBtn.style.display = lastOutputDir ? '' : 'none';
+  if (retryBtn) retryBtn.style.display = files.some(f => f.state === 'error') ? '' : 'none';
+  updateResolutionOptions();
+  renderFileList();
+  updateButton();
+  if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
 }
 
 function bindEvents() {
@@ -64,10 +119,13 @@ function bindEvents() {
   preset.addEventListener('change', () => { saveToolSettings(); });
   codec.addEventListener('change', () => { saveToolSettings(); });
   resolution.addEventListener('change', () => {
-    customWidth.style.display = resolution.value === 'custom' ? '' : 'none';
+    updateCustomWidthState();
     saveToolSettings();
   });
-  customWidth.addEventListener('change', () => { saveToolSettings(); });
+  customWidth.addEventListener('change', () => {
+    updateCustomWidthState();
+    saveToolSettings();
+  });
   twoPassCheck.addEventListener('change', () => { saveToolSettings(); });
 
   outputDirBtn.addEventListener('click', async () => {
@@ -75,6 +133,7 @@ function bindEvents() {
     const dir = await window.api.selectOutputDir();
     if (dir) {
       outputDir = dir;
+      persistedState.outputDir = outputDir;
       const parts = dir.replace(/\\\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : dir;
       outputDirBtn.textContent = display;
@@ -134,6 +193,7 @@ function bindEvents() {
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
       files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Waiting for Video'; } });
+      persistRuntimeState();
       retryBtn.style.display = 'none';
       renderFileList();
       updateButton();
@@ -158,6 +218,7 @@ async function startCompression() {
   if (pending.length === 0) return;
 
   isProcessing = true;
+  persistedState.isProcessing = true;
   batchStartTime = Date.now();
   batchTotalFiles = pending.length;
   if (etaText) etaText.textContent = 'ETA: calculating...';
@@ -167,15 +228,18 @@ async function startCompression() {
   compressBtn.classList.add('btn-cancel');
   processingIndicator.classList.add('active');
   statusText.textContent = `Compressing ${pending.length} file(s)...`;
+  setFooterProgress(0, true);
 
   pending.forEach(f => { f.state = 'processing'; f.progress = 0; f.status = 'Queued...'; });
+  persistRuntimeState();
   renderFileList();
 
-  log(`Starting compression: ${pending.length} file(s), codec=${codec.value}, CRF=${crfSlider.value}, preset=${preset.value}, resolution=${resolution.value}${resolution.value === 'custom' ? ' (' + (parseInt(customWidth.value) || 1280) + 'px)' : ''}${twoPassCheck.checked ? ', two-pass' : ''}`);
+  log(`Starting compression: ${pending.length} file(s), codec=${codec.value}, CRF=${crfSlider.value}, preset=${preset.value}, max resolution=${resolution.value}${resolution.value === 'custom' ? ' (' + (parseInt(customWidth.value) || 1280) + 'px)' : ''}${twoPassCheck.checked ? ', two-pass' : ''}`);
 
   for (const file of pending) {
     file.state = 'processing';
     file.status = 'Compressing...';
+    persistRuntimeState();
     renderFileItem(files.indexOf(file));
 
     try {
@@ -193,7 +257,10 @@ async function startCompression() {
       if (result && result.success) {
         file.state = 'complete';
         file.progress = 1;
-        if (result.output) lastOutputDir = result.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        if (result.output) {
+          lastOutputDir = result.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+          persistedState.lastOutputDir = lastOutputDir;
+        }
         file.status = result.savedPercent ? `Done (${result.savedPercent}% smaller)` : 'Complete';
         log(`Compressed: ${file.name}${result.savedPercent ? ` — ${result.savedPercent}% smaller` : ''}`, 'success');
       } else {
@@ -206,12 +273,15 @@ async function startCompression() {
       file.status = `Error: ${err.message}`;
       log(`Error [${file.name}]: ${err.message}`, 'error');
     }
+    persistRuntimeState();
     renderFileItem(files.indexOf(file));
   }
 
   isProcessing = false;
+  persistedState.isProcessing = false;
   if (etaText) etaText.textContent = '';
   if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
+  setFooterProgress(0, false);
   compressBtn.textContent = 'Compress';
   compressBtn.classList.remove('btn-cancel');
   compressBtn.disabled = files.filter(f => f.state === 'pending' || f.state === 'error').length === 0;
@@ -219,11 +289,14 @@ async function startCompression() {
   const completed = files.filter(f => f.state === 'complete').length;
   const errors = files.filter(f => f.state === 'error').length;
   statusText.textContent = `Done! ${completed} compressed${errors > 0 ? `, ${errors} failed` : ''}`;
+  persistedState.statusText = statusText.textContent;
+  persistedState.etaText = '';
   if (completed > 0 && lastOutputDir) openOutputBtn.style.display = '';
   if (retryBtn) retryBtn.style.display = errors > 0 ? '' : 'none';
   log(`Compression finished: ${completed} completed, ${errors} failed`, errors > 0 ? 'warn' : 'success');
   if (window.showCompletionToast) window.showCompletionToast('Compression complete: ' + completed + ' compressed' + (errors > 0 ? ', ' + errors + ' failed' : ''), errors > 0);
   if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+  persistRuntimeState();
 }
 
 function handleProgress(data) {
@@ -231,25 +304,52 @@ function handleProgress(data) {
   if (idx === -1) return;
 
   if (data.type === 'progress') {
-    files[idx].progress = data.progress;
+    const progress = normalizeProgress(data);
+    files[idx].progress = progress;
     files[idx].status = data.status || 'Compressing...';
     files[idx].state = 'processing';
-    if (window.setTaskbarProgress) window.setTaskbarProgress(data.progress);
+    statusText.textContent = `${files[idx].name}: ${files[idx].status}`;
+    setFooterProgress(progress, true);
+    if (window.setTaskbarProgress) window.setTaskbarProgress(progress);
     if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files);
+    persistRuntimeState();
   } else if (data.type === 'complete') {
     files[idx].progress = 1;
     files[idx].status = 'Complete';
     files[idx].state = 'complete';
+    setFooterProgress(1, true);
     log(`Compressed: ${files[idx].name}`, 'success');
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
+    persistRuntimeState();
   } else if (data.type === 'error') {
     files[idx].progress = 0;
     files[idx].status = `Error: ${data.error}`;
     files[idx].state = 'error';
+    setFooterProgress(0, false);
     log(`Error [${files[idx].name}]: ${data.error}`, 'error');
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
+    persistRuntimeState();
   }
   renderFileItem(idx);
+}
+
+function normalizeProgress(data) {
+  const raw = typeof data.progress === 'number' ? data.progress : data.percent;
+  if (typeof raw !== 'number' || Number.isNaN(raw)) return 0;
+  return Math.max(0, Math.min(1, raw > 1 ? raw / 100 : raw));
+}
+
+function setFooterProgress(progress, visible = true) {
+  const pct = Math.max(0, Math.min(1, Number(progress) || 0));
+  const label = `${Math.round(pct * 100)}%`;
+  persistedState.footerProgress = pct;
+  persistedState.footerProgressVisible = visible;
+  if (footerProgress) footerProgress.classList.toggle('active', visible);
+  if (footerProgressFill) footerProgressFill.style.width = label;
+  if (progressPercent) {
+    progressPercent.classList.toggle('active', visible);
+    progressPercent.textContent = visible ? label : '';
+  }
 }
 
 // ---- File management ----
@@ -267,29 +367,100 @@ async function addFiles(paths) {
     if (!VIDEO_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) continue;
     const size = await window.api.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Video', state: 'pending' });
+    const info = await probeVideoInfo(p);
+    files.push({ path: p, name: getFileName(p), size, width: info.width, height: info.height, progress: 0, status: 'Waiting for Video', state: 'pending' });
     added++;
   }
   if (added > 0) log(`Added ${added} video file(s)`);
+  updateResolutionOptions();
+  persistRuntimeState();
   renderFileList();
   updateButton();
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
 }
 
-function removeFile(index) { files.splice(index, 1); renderFileList(); updateButton(); }
+async function probeVideoInfo(filePath) {
+  try {
+    if (!window.api.probeVideo) return {};
+    const result = await window.api.probeVideo(filePath);
+    if (result && result.success) return result;
+  } catch {}
+  return {};
+}
+
+function removeFile(index) {
+  files.splice(index, 1);
+  updateResolutionOptions();
+  persistRuntimeState();
+  renderFileList();
+  updateButton();
+}
 
 function clearFiles() {
   files = [];
+  persistedState.files = files;
+  persistedState.isProcessing = false;
+  persistedState.statusText = 'Waiting for Video';
+  persistedState.etaText = '';
+  updateResolutionOptions();
   renderFileList();
   updateButton();
   statusText.textContent = 'Waiting for Video';
+  if (etaText) etaText.textContent = '';
+  setFooterProgress(0, false);
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }
 
+function getSmallestVideoBounds() {
+  const known = files.filter(f => f.width > 0 || f.height > 0);
+  if (known.length === 0) return { width: 0, height: 0 };
+  return known.reduce((bounds, file) => ({
+    width: file.width > 0 ? Math.min(bounds.width || file.width, file.width) : bounds.width,
+    height: file.height > 0 ? Math.min(bounds.height || file.height, file.height) : bounds.height
+  }), { width: 0, height: 0 });
+}
+
+function updateResolutionOptions() {
+  const previous = resolution.value || 'original';
+  const { width, height } = getSmallestVideoBounds();
+  const validTargets = height > 0
+    ? DOWNSCALE_TARGETS.filter(target => target.height < height)
+    : DOWNSCALE_TARGETS;
+
+  resolution.innerHTML = '';
+  resolution.appendChild(new Option('Original', 'original'));
+  validTargets.forEach(target => {
+    resolution.appendChild(new Option(`${target.label} or lower`, target.value));
+  });
+
+  const allowCustom = files.length === 0 || width > 128;
+  if (allowCustom) {
+    resolution.appendChild(new Option('Custom lower width...', 'custom'));
+  }
+
+  const stillValid = Array.from(resolution.options).some(option => option.value === previous);
+  resolution.value = stillValid ? previous : 'original';
+  updateCustomWidthState(width);
+}
+
+function updateCustomWidthState(maxWidth) {
+  const bounds = maxWidth == null ? getSmallestVideoBounds() : { width: maxWidth };
+  customWidth.style.display = resolution.value === 'custom' ? '' : 'none';
+  if (bounds.width > 0) {
+    customWidth.max = String(bounds.width - 1);
+    if (resolution.value === 'custom') {
+      const current = parseInt(customWidth.value, 10);
+      if (!current || current >= bounds.width) customWidth.value = String(Math.max(128, bounds.width - 1));
+    }
+  } else {
+    customWidth.max = '7680';
+  }
+}
+
 function updateButton() {
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
-  compressBtn.disabled = pending.length === 0 || isProcessing;
+  compressBtn.disabled = pending.length === 0 && !isProcessing;
 }
 
 // ---- Rendering ----
@@ -307,7 +478,22 @@ function renderFileItem(index) {
   if (window.updateQueueSummary) window.updateQueueSummary(files);
   const existing = fileList.children[index];
   if (!existing) return;
-  fileList.replaceChild(createFileElement(files[index], index), existing);
+  updateFileElement(existing, files[index]);
+}
+
+function updateFileElement(el, file) {
+  const status = el.querySelector('.file-status');
+  if (status) status.textContent = file.status;
+
+  const fill = el.querySelector('.file-progress-fill');
+  if (fill) {
+    fill.style.width = `${Math.round(file.progress * 100)}%`;
+    fill.classList.toggle('complete', file.state === 'complete');
+    fill.classList.toggle('error', file.state === 'error');
+  }
+
+  const removeBtn = el.querySelector('.file-remove');
+  if (removeBtn) removeBtn.disabled = isProcessing;
 }
 
 function createFileElement(file, index) {
@@ -351,9 +537,10 @@ async function loadToolSettings() {
     if (s.resolution) resolution.value = s.resolution;
     if (s.customWidth) customWidth.value = s.customWidth;
     if (s.twoPass) twoPassCheck.checked = s.twoPass;
-    customWidth.style.display = resolution.value === 'custom' ? '' : 'none';
+    updateResolutionOptions();
     if (s.outputDir) {
-      outputDir = s.outputDir;
+      outputDir = persistedState.outputDir || s.outputDir;
+      persistedState.outputDir = outputDir;
       const parts = outputDir.replace(/\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : outputDir;
       outputDirBtn.textContent = display;

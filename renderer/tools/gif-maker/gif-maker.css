@@ -32,6 +32,39 @@
   color: var(--text-secondary);
 }
 
+.gif-footer-progress {
+  display: none;
+  width: 180px;
+  height: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+}
+
+.gif-footer-progress.active {
+  display: block;
+}
+
+.gif-footer-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.18s ease;
+}
+
+.gif-progress-percent {
+  display: none;
+  min-width: 36px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.gif-progress-percent.active {
+  display: inline-block;
+}
+
 .gif-video-info {
   display: flex;
   align-items: center;

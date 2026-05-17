@@ -24,3 +24,36 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+.audio-footer-progress {
+  display: none;
+  width: 180px;
+  height: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+}
+
+.audio-footer-progress.active {
+  display: block;
+}
+
+.audio-footer-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.18s ease;
+}
+
+.audio-progress-percent {
+  display: none;
+  min-width: 36px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-progress-percent.active {
+  display: inline-block;
+}

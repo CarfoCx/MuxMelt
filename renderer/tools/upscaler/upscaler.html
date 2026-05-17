@@ -82,6 +82,9 @@
 <div class="tool-footer">
   <div class="tool-footer-left">
     <span class="status-text" id="statusText">Waiting for File</span>
+    <div class="upscaler-footer-progress" id="footerProgress" aria-hidden="true">
+      <div class="upscaler-footer-progress-fill" id="footerProgressFill"></div>
+    </div>
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
@@ -93,6 +96,21 @@
     <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
     <button class="btn btn-secondary" id="openOutputBtn">Open Output</button>
     <button class="btn btn-primary" id="upscaleBtn" disabled>Upscale</button>
+  </div>
+</div>
+
+<!-- Overwrite modal -->
+<div class="upscaler-overwrite-modal" id="overwriteModal" aria-hidden="true">
+  <div class="upscaler-overwrite-overlay"></div>
+  <div class="upscaler-overwrite-dialog" role="dialog" aria-modal="true" aria-labelledby="overwriteTitle">
+    <div class="upscaler-overwrite-title" id="overwriteTitle">File already exists</div>
+    <div class="upscaler-overwrite-name" id="overwriteFileName"></div>
+    <div class="upscaler-overwrite-detail">Choose whether to replace the existing output file.</div>
+    <div class="upscaler-overwrite-actions">
+      <button class="btn btn-secondary" id="overwriteSkipBtn">Skip</button>
+      <button class="btn btn-secondary" id="overwriteAlwaysBtn">Always Overwrite</button>
+      <button class="btn btn-primary" id="overwriteConfirmBtn">Overwrite</button>
+    </div>
   </div>
 </div>
 

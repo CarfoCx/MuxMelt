@@ -15,12 +15,38 @@ let reconnectAttempts = 0;
 let reconnectTimerId = null;
 const MAX_RECONNECT_DELAY = 30000;
 
-let ttsText, languageSelect, voiceSelect, speedSlider, speedValue, outputFormat;
+let ttsText, languageSelect, voiceSelect, speedSlider, speedValue, pitchSlider, pitchValue, outputFormat;
 let outputDirBtn, generateBtn, previewBtn, clearBtn, statusText, processingIndicator;
 let resultArea, charCount, openOutputBtn;
 
 let allVoices = [];
 let isPreviewing = false;
+
+const ENGLISH_VOICE_PRESETS = [
+  { id: 'en-US-AvaNeural', label: 'Soothing - Ava', detail: 'US female, calm and polished', group: 'Soft and warm' },
+  { id: 'en-US-EmmaNeural', label: 'Warm - Emma', detail: 'US female, friendly and natural', group: 'Soft and warm' },
+  { id: 'en-US-JennyNeural', label: 'Gentle - Jenny', detail: 'US female, smooth narration', group: 'Soft and warm' },
+  { id: 'en-GB-SoniaNeural', label: 'Relaxed - Sonia', detail: 'UK female, rounded and steady', group: 'Soft and warm' },
+  { id: 'en-AU-NatashaNeural', label: 'Clean - Natasha', detail: 'AU female, clear and easygoing', group: 'Soft and warm' },
+
+  { id: 'en-US-BrianNeural', label: 'Grounded - Brian', detail: 'US male, warm and conversational', group: 'Natural male' },
+  { id: 'en-US-AndrewNeural', label: 'Clear - Andrew', detail: 'US male, balanced and modern', group: 'Natural male' },
+  { id: 'en-US-ChristopherNeural', label: 'Narrator - Christopher', detail: 'US male, deeper presentation voice', group: 'Natural male' },
+  { id: 'en-GB-RyanNeural', label: 'Direct - Ryan', detail: 'UK male, crisp and confident', group: 'Natural male' },
+  { id: 'en-CA-LiamNeural', label: 'Bright - Liam', detail: 'CA male, open and approachable', group: 'Natural male' },
+
+  { id: 'en-US-AriaNeural', label: 'Expressive - Aria', detail: 'US female, lively and versatile', group: 'Sharper and brighter' },
+  { id: 'en-US-MichelleNeural', label: 'Precise - Michelle', detail: 'US female, focused and articulate', group: 'Sharper and brighter' },
+  { id: 'en-US-SteffanNeural', label: 'Sharp - Steffan', detail: 'US male, firm and polished', group: 'Sharper and brighter' },
+  { id: 'en-US-RogerNeural', label: 'Bold - Roger', detail: 'US male, strong announcer tone', group: 'Sharper and brighter' },
+  { id: 'en-GB-LibbyNeural', label: 'Bright UK - Libby', detail: 'UK female, crisp and upbeat', group: 'Sharper and brighter' },
+
+  { id: 'en-IN-NeerjaExpressiveNeural', label: 'Expressive - Neerja', detail: 'IN female, animated preview voice', group: 'Regional English' },
+  { id: 'en-IN-PrabhatNeural', label: 'Clear - Prabhat', detail: 'IN male, steady and articulate', group: 'Regional English' },
+  { id: 'en-IE-EmilyNeural', label: 'Soft - Emily', detail: 'IE female, gentle and light', group: 'Regional English' },
+  { id: 'en-NZ-MollyNeural', label: 'Natural - Molly', detail: 'NZ female, relaxed and clear', group: 'Regional English' },
+  { id: 'en-ZA-LeahNeural', label: 'Smooth - Leah', detail: 'ZA female, even and pleasant', group: 'Regional English' }
+];
 
 function init(ctx) {
   pythonPort = ctx.pythonPort;
@@ -31,6 +57,8 @@ function init(ctx) {
   voiceSelect = document.getElementById('voiceSelect');
   speedSlider = document.getElementById('speedSlider');
   speedValue = document.getElementById('speedValue');
+  pitchSlider = document.getElementById('pitchSlider');
+  pitchValue = document.getElementById('pitchValue');
   outputFormat = document.getElementById('outputFormat');
   outputDirBtn = document.getElementById('outputDirBtn');
   generateBtn = document.getElementById('generateBtn');
@@ -176,26 +204,67 @@ function populateLanguages() {
 function populateVoices() {
   const lang = languageSelect.value;
   const filtered = allVoices.filter(v => v.locale.startsWith(lang));
-  
-  // Simplify: only take a few male and female variants
-  const simplified = [];
-  const genders = { 'Male': 0, 'Female': 0 };
-  const MAX_VARIANTS = 3;
-
-  filtered.forEach(v => {
-    if (genders[v.gender] < MAX_VARIANTS) {
-      simplified.push(v);
-      genders[v.gender]++;
-    }
-  });
 
   voiceSelect.innerHTML = '';
-  simplified.forEach(v => {
+
+  if (lang === 'en') {
+    const byId = new Map(filtered.map(v => [v.id, v]));
+    const groups = new Map();
+
+    ENGLISH_VOICE_PRESETS.forEach(preset => {
+      const providerVoice = byId.get(preset.id);
+      if (!providerVoice) return;
+      if (!groups.has(preset.group)) groups.set(preset.group, []);
+      groups.get(preset.group).push({ ...preset, providerVoice });
+    });
+
+    groups.forEach((presets, groupName) => {
+      const group = document.createElement('optgroup');
+      group.label = groupName;
+      presets.forEach(preset => {
+        const opt = document.createElement('option');
+        opt.value = preset.id;
+        opt.textContent = `${preset.label} (${preset.detail})`;
+        group.appendChild(opt);
+      });
+      voiceSelect.appendChild(group);
+    });
+
+    const remaining = filtered
+      .filter(v => !ENGLISH_VOICE_PRESETS.some(p => p.id === v.id))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    if (remaining.length) {
+      const group = document.createElement('optgroup');
+      group.label = 'More English voices';
+      remaining.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${v.gender.toLowerCase()})`;
+        group.appendChild(opt);
+      });
+      voiceSelect.appendChild(group);
+    }
+
+    if (byId.has('en-US-AvaNeural')) voiceSelect.value = 'en-US-AvaNeural';
+    return;
+  }
+
+  filtered.forEach(v => {
     const opt = document.createElement('option');
     opt.value = v.id;
-    opt.textContent = `${v.gender} variant ${simplified.filter(sv => sv.gender === v.gender).indexOf(v) + 1}`;
+    opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${v.gender.toLowerCase()})`;
     voiceSelect.appendChild(opt);
   });
+}
+
+function cleanVoiceName(voice) {
+  return (voice.name || voice.id)
+    .replace(/^Microsoft\s+/i, '')
+    .replace(/\s+Online\s+\(Natural\)/i, '')
+    .replace(/\s+-\s+English.*$/i, '')
+    .replace(/\s+\(Preview\)$/i, '')
+    .trim();
 }
 
 function updateProgress(progress, status) {
@@ -261,6 +330,11 @@ function bindEvents() {
 
   speedSlider.addEventListener('input', () => {
     speedValue.textContent = `${parseFloat(speedSlider.value).toFixed(1)}x`;
+  });
+
+  pitchSlider.addEventListener('input', () => {
+    const pitch = parseInt(pitchSlider.value, 10);
+    pitchValue.textContent = `${pitch > 0 ? '+' : ''}${pitch}Hz`;
   });
 
   outputDirBtn.addEventListener('click', async () => {
@@ -339,10 +413,12 @@ function startSynthesis(isPreview) {
 
   const voice = voiceSelect.value;
   const speed = parseFloat(speedSlider.value);
+  const pitchHz = parseInt(pitchSlider.value, 10);
   const format = outputFormat.value;
 
   const ratePercent = Math.round((speed - 1.0) * 100);
   const rate = ratePercent >= 0 ? `+${ratePercent}%` : `${ratePercent}%`;
+  const pitch = pitchHz >= 0 ? `+${pitchHz}Hz` : `${pitchHz}Hz`;
 
   if (!isPreview) {
     log(`Generating TTS: ${text.length} chars, voice=${voice}, speed=${speed}x`);
@@ -353,6 +429,7 @@ function startSynthesis(isPreview) {
     text: text,
     voice: voice,
     rate: rate,
+    pitch: pitch,
     output_format: format,
     output_dir: isPreview ? 'TEMP' : outputDir,
     is_preview: isPreview

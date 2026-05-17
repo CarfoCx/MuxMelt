@@ -53,6 +53,11 @@ const BUNDLED_PYTHON = RESOURCES_PATH
     ? path.join(RESOURCES_PATH, 'python-env', 'python', 'python.exe')
     : path.join(RESOURCES_PATH, 'python-env', 'python', 'bin', 'python3'))
   : null;
+const DEV_PYTHON = !IS_PACKAGED
+  ? (IS_WIN
+    ? path.join(__dirname, 'build', 'bundle', 'python-env', 'python', 'python.exe')
+    : path.join(__dirname, 'build', 'bundle', 'python-env', 'python', 'bin', 'python3'))
+  : null;
 const BUNDLED_FFMPEG = RESOURCES_PATH ? path.join(RESOURCES_PATH, 'ffmpeg') : null;
 const DEV_FFMPEG = !IS_PACKAGED ? path.join(__dirname, 'build', 'bundle', 'ffmpeg') : null;
 const IS_SLIM = BUNDLED_PYTHON && fs.existsSync(path.join(RESOURCES_PATH, 'python-env', '.slim'));
@@ -107,11 +112,12 @@ function clearChromiumGpuCaches() {
 
 function findPython() {
   // Check for bundled Python (full build)
-  if (BUNDLED_PYTHON && fs.existsSync(BUNDLED_PYTHON)) {
+  const preparedPython = BUNDLED_PYTHON || DEV_PYTHON;
+  if (preparedPython && fs.existsSync(preparedPython)) {
     try {
-      const result = execSync(`"${BUNDLED_PYTHON}" --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
+      const result = execSync(`"${preparedPython}" --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
       if (result.includes('Python 3.')) {
-        return { cmd: BUNDLED_PYTHON, args: [], version: result + ' (bundled)' };
+        return { cmd: preparedPython, args: [], version: result + ' (bundled)' };
       }
     } catch {}
   }
@@ -251,7 +257,7 @@ function startPythonServer() {
   return waitForServer();
 }
 
-function waitForServer(retries = 30) {
+function waitForServer(retries = 90) {
   return new Promise((resolve, reject) => {
     const check = (attempt) => {
       const req = http.get(`http://127.0.0.1:${PYTHON_PORT}/health`, (res) => {
@@ -259,7 +265,7 @@ function waitForServer(retries = 30) {
       });
       req.on('error', () => {
         if (attempt >= retries) {
-          reject(new Error('Python server failed to start after 30 seconds'));
+          reject(new Error(`Python server failed to start after ${retries} seconds`));
         } else {
           setTimeout(() => check(attempt + 1), 1000);
         }
@@ -277,7 +283,7 @@ function waitForServer(retries = 30) {
   });
 }
 
-function killPython() {
+function killPython(immediate = false) {
   if (pythonProcess) {
     // Try graceful shutdown first
     try {
@@ -285,13 +291,15 @@ function killPython() {
       req.on('error', () => {});
       req.setTimeout(1000, () => req.destroy());
     } catch {}
-    // Give it a moment then force kill
-    setTimeout(() => {
+    // Give graceful shutdown a moment, or force-kill immediately during failed startup.
+    const forceKill = () => {
       if (pythonProcess) {
         pythonProcess.kill();
         pythonProcess = null;
       }
-    }, 2000);
+    };
+    if (immediate) forceKill();
+    else setTimeout(forceKill, 2000);
   }
 }
 
@@ -300,7 +308,7 @@ function killPython() {
 // ---------------------------------------------------------------------------
 
 const SUPPORTED_EXTS = new Set([
-  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif',
+  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif',
   '.mp4', '.avi', '.mkv', '.mov', '.webm'
 ]);
 
@@ -464,7 +472,7 @@ ipcMain.handle('select-output-dir', async () => {
 
 ipcMain.handle('select-files', async (event, options) => {
   const defaultFilters = [
-    { name: 'Images & Videos', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif', 'mp4', 'avi', 'mkv', 'mov', 'webm'] }
+    { name: 'Images & Videos', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif', 'avif', 'gif', 'svg', 'heic', 'heif', 'mp4', 'avi', 'mkv', 'mov', 'webm'] }
   ];
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
@@ -526,12 +534,33 @@ ipcMain.handle('resolve-dropped-paths', async (event, paths) => {
   return results;
 });
 
+ipcMain.handle('read-image-preview', async (event, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const ext = path.extname(filePath).slice(1).toLowerCase() || 'png';
+    const mime = ext === 'jpg' ? 'jpeg' : ext;
+    const data = fs.readFileSync(filePath).toString('base64');
+    return `data:image/${mime};base64,${data}`;
+  } catch (err) {
+    console.warn(`Failed to read image preview ${filePath}: ${err.message}`);
+    return null;
+  }
+});
+
 ipcMain.handle('get-file-size', async (event, filePath) => {
   try {
     const stat = fs.statSync(filePath);
     return stat.size;
   } catch {
     return 0;
+  }
+});
+
+ipcMain.handle('path-exists', async (event, filePath) => {
+  try {
+    return !!filePath && fs.existsSync(filePath);
+  } catch {
+    return false;
   }
 });
 
@@ -591,9 +620,10 @@ ipcMain.handle('open-pdf-editor', async (event, options = {}) => {
   editorWindow.setMenuBarVisibility(false);
   editorWindow.setTitle(`${path.basename(filePath)} - MuxMelt PDF`);
 
-  // Load the new React-based MuxMelt PDF UI
-  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
-  if (isDev && !options.useBuilt) {
+  // Load the new React-based MuxMelt PDF UI. Default to the built editor so
+  // normal local Electron runs do not require a separate Vite dev server.
+  const useDevServer = process.env.NODE_ENV === 'development' && options.useDevServer;
+  if (useDevServer) {
     editorWindow.loadURL(`http://localhost:5173/index.html?sessionId=${sessionId}`);
   } else {
     editorWindow.loadFile(path.join(__dirname, 'renderer', 'tools', 'pdf-toolkit', 'dist', 'index.html'), {
@@ -702,10 +732,6 @@ ipcMain.handle('set-progress', (event, value) => {
   }
 });
 
-ipcMain.handle('check-for-updates', async () => {
-  return checkForUpdates();
-});
-
 ipcMain.handle('get-app-version', () => {
   const pkg = require('./package.json');
   const baseVersion = pkg.version;
@@ -765,7 +791,6 @@ try { require('./node-tools/url-downloader').registerIPC(ipcMain, getMainWindow,
 try { require('./node-tools/bulk-imager').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load bulk-imager:', e.message); }
 try { require('./node-tools/pdf-toolkit').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load pdf-toolkit:', e.message); }
 try { require('./node-tools/qr-studio').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load qr-studio:', e.message); }
-try { require('./node-tools/chatbot-trainer').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load chatbot-trainer:', e.message); }
 
 // ---------------------------------------------------------------------------
 // App lifecycle
@@ -962,9 +987,14 @@ app.whenReady().then(async () => {
     PYTHON_PORT = await findAvailablePort(PYTHON_PORT);
     await startPythonServer();
     createWindow();
-    initAutoUpdater();
+    if (app.isPackaged) {
+      initAutoUpdater();
+    } else {
+      console.log('Skipping auto-updater in development mode.');
+    }
   } catch (err) {
     console.error('Startup failed:', err.message);
+    killPython(true);
     dialog.showErrorBox(
       'Startup Error',
       'Failed to start the Python backend.\n\n' +
@@ -977,10 +1007,10 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  killPython();
+  killPython(true);
   app.quit();
 });
 
 app.on('before-quit', () => {
-  killPython();
+  killPython(true);
 });

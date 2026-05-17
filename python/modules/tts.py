@@ -27,7 +27,7 @@ async def get_voices():
     ]
 
 
-async def synthesize(text, voice, output_path, rate='+0%', progress_callback=None):
+async def synthesize(text, voice, output_path, rate='+0%', pitch='+0Hz', progress_callback=None):
     if not _available:
         raise RuntimeError('edge-tts is not installed. Run: pip install edge-tts')
 
@@ -36,7 +36,7 @@ async def synthesize(text, voice, output_path, rate='+0%', progress_callback=Non
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
+    communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
     await communicate.save(output_path)
 
     if progress_callback:

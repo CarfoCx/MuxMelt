@@ -1,7 +1,7 @@
 <!-- Tool body -->
 <div class="tool-body">
   <div class="module-banner">
-    <strong>PDF Toolkit.</strong> Merge, split, extract pages, add text, and securely redact matching PDF text.
+    <strong>PDF Toolkit.</strong> Edit detected text, securely redact content, merge PDFs, and split pages.
   </div>
 
   <!-- Drop zone -->
@@ -21,9 +21,8 @@
   <!-- Operation tabs -->
   <div class="operation-tabs">
     <button class="op-tab active" data-op="merge">Merge</button>
-    <button class="op-tab" data-op="split">Split</button>
-    <button class="op-tab" data-op="extract">Extract Pages</button>
-    <button class="op-tab" data-op="edit">Edit / Redact</button>
+    <button class="op-tab" data-op="split">Split Pages</button>
+    <button class="op-tab" data-op="edit">Edit Text / Redact</button>
   </div>
 
   <!-- Operation panels -->
@@ -42,33 +41,13 @@
       </div>
     </div>
 
-    <!-- Extract panel -->
-    <div class="op-panel" id="panel-extract">
-      <div class="settings-bar">
-        <div class="setting-group">
-          <label>Page Range:</label>
-          <input type="text" id="pageRange" placeholder="e.g. 1-3, 5, 8-10" style="width: 200px;">
-        </div>
-      </div>
-    </div>
-
     <!-- Edit / redact panel -->
     <div class="op-panel" id="panel-edit">
       <div class="pdf-edit-intro">
         <div class="pdf-edit-icon">&#9999;</div>
         <h3>Interactive PDF Editor</h3>
-        <p>Open the editor to visually redact content, add text, and modify pages with a live preview.</p>
+        <p>Open the editor to detect editable text with OCR, add new text, and create secure redactions.</p>
         <button class="btn btn-primary" id="launchEditorBtn" disabled>Launch PDF Editor</button>
-      </div>
-      
-      <div class="pdf-edit-divider"><span>OR</span></div>
-
-      <div class="pdf-edit-grid">
-        <div class="pdf-edit-section">
-          <label for="redactTerms">Bulk secure redaction terms</label>
-          <textarea id="redactTerms" rows="3" placeholder="One term per line, or comma-separated"></textarea>
-          <div class="pdf-edit-hint">Matched text is removed from the output PDF content throughout the document.</div>
-        </div>
       </div>
     </div>
   </div>

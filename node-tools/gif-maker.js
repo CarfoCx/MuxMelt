@@ -6,6 +6,18 @@ const os = require('os');
 const ffmpeg = require('./ffmpeg-runner');
 const { validateOutputDir, formatToolError } = require('./path-utils');
 
+function parseTimeToSeconds(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  if (/^\d+(\.\d+)?$/.test(raw)) return Math.max(0, parseFloat(raw));
+
+  const parts = raw.split(':').map(Number);
+  if (parts.some(Number.isNaN)) return 0;
+  if (parts.length === 3) return Math.max(0, parts[0] * 3600 + parts[1] * 60 + parts[2]);
+  if (parts.length === 2) return Math.max(0, parts[0] * 60 + parts[1]);
+  return 0;
+}
+
 function registerIPC(ipcMain, getMainWindow) {
   let activeCancel = null;
 
@@ -43,7 +55,11 @@ function registerIPC(ipcMain, getMainWindow) {
 
       // Probe total duration for progress calculation
       const totalDuration = await ffmpeg.probeDuration(inputPath);
-      const clipDuration = duration || totalDuration;
+      const startSeconds = parseTimeToSeconds(startTime);
+      const requestedDuration = Number.parseFloat(duration);
+      const constrainedDuration = Math.max(0.5, Math.min(60, Number.isFinite(requestedDuration) ? requestedDuration : 5));
+      const availableDuration = totalDuration > 0 ? Math.max(0.5, totalDuration - startSeconds) : constrainedDuration;
+      const clipDuration = Math.min(constrainedDuration, availableDuration);
 
       const win = getMainWindow();
       if (win) {
@@ -54,15 +70,13 @@ function registerIPC(ipcMain, getMainWindow) {
         });
       }
 
-      // Build input seek / duration args
-      const inputArgs = [];
-      if (startTime && startTime !== '00:00:00' && startTime !== '0') {
-        inputArgs.push('-ss', String(startTime));
+      // Clip the video input before both passes. Keeping -t before the video
+      // input avoids it being interpreted against the palette input in pass 2.
+      const videoInputArgs = [];
+      if (startSeconds > 0) {
+        videoInputArgs.push('-ss', String(startSeconds));
       }
-      inputArgs.push('-i', inputPath);
-      if (duration && duration > 0) {
-        inputArgs.push('-t', String(duration));
-      }
+      videoInputArgs.push('-t', String(clipDuration), '-i', inputPath);
 
       const filterScale = reverse
         ? `fps=${gifFps},scale=${gifWidth}:-1:flags=lanczos,reverse`
@@ -80,7 +94,7 @@ function registerIPC(ipcMain, getMainWindow) {
 
       // ------- PASS 1: Generate palette -------
       const pass1Args = [
-        ...inputArgs,
+        ...videoInputArgs,
         '-vf', `${filterScale},palettegen=max_colors=${colors}:stats_mode=diff`,
         palettePath
       ];
@@ -88,10 +102,11 @@ function registerIPC(ipcMain, getMainWindow) {
       const onPass1Progress = (info) => {
         const w = getMainWindow();
         if (w) {
-          // Pass 1 accounts for 0-40%
-          const pct = Math.min(40, (info.percent || 0) * 0.4);
+          // Pass 1 accounts for 0-35%. The step only reaches 40 once ffmpeg exits.
+          const pct = Math.min(35, (info.percent || 0) * 0.35);
           w.webContents.send('tool-progress', {
             tool: 'gif-maker',
+            type: 'progress',
             percent: pct,
             status: `Generating palette... ${Math.round(pct)}%`
           });
@@ -107,17 +122,27 @@ function registerIPC(ipcMain, getMainWindow) {
       await pass1.promise;
       activeCancel = null;
 
+      if (win) {
+        win.webContents.send('tool-progress', {
+          tool: 'gif-maker',
+          type: 'progress',
+          percent: 40,
+          status: 'Palette generated. Creating GIF (pass 2/2)...'
+        });
+      }
+
       // ------- PASS 2: Create GIF using palette -------
       if (win) {
         win.webContents.send('tool-progress', {
           tool: 'gif-maker',
+          type: 'progress',
           percent: 40,
           status: 'Creating GIF (pass 2/2)...'
         });
       }
 
       const pass2Args = [
-        ...inputArgs,
+        ...videoInputArgs,
         '-i', palettePath,
         '-lavfi', `${filterScale} [x]; [x][1:v] paletteuse=${ditherStr}`,
         outputPath
@@ -126,10 +151,11 @@ function registerIPC(ipcMain, getMainWindow) {
       const onPass2Progress = (info) => {
         const w = getMainWindow();
         if (w) {
-          // Pass 2 accounts for 40-100%
-          const pct = 40 + Math.min(60, (info.percent || 0) * 0.6);
+          // Pass 2 accounts for 40-95%. 100 is reserved for actual completion.
+          const pct = 40 + Math.min(55, (info.percent || 0) * 0.55);
           w.webContents.send('tool-progress', {
             tool: 'gif-maker',
+            type: 'progress',
             percent: pct,
             status: `Creating GIF... ${Math.round(pct)}%`
           });
@@ -145,6 +171,15 @@ function registerIPC(ipcMain, getMainWindow) {
       await pass2.promise;
       activeCancel = null;
 
+      if (win) {
+        win.webContents.send('tool-progress', {
+          tool: 'gif-maker',
+          type: 'progress',
+          percent: 98,
+          status: 'Finalizing GIF...'
+        });
+      }
+
       // Clean up palette
       try { fs.unlinkSync(palettePath); } catch {}
 
@@ -156,6 +191,7 @@ function registerIPC(ipcMain, getMainWindow) {
       if (w) {
         w.webContents.send('tool-progress', {
           tool: 'gif-maker',
+          type: 'complete',
           percent: 100,
           status: 'Done'
         });

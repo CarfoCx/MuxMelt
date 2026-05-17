@@ -48,6 +48,14 @@ async function loadCurrentSettings() {
   const u = all.upscaler || {};
   if (u.scale) document.getElementById('defaultScale').value = String(u.scale);
   if (u.modelProfile) document.getElementById('defaultModelProfile').value = u.modelProfile;
+
+  // Update folder
+  const updateBtn = document.getElementById('updateFolderBtn');
+  if (g.updateFolderPath) {
+    const parts = g.updateFolderPath.replace(/\\/g, '/').split('/');
+    updateBtn.textContent = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : g.updateFolderPath;
+    updateBtn.title = g.updateFolderPath;
+  }
 }
 
 function bindEvents() {
@@ -146,28 +154,56 @@ function bindEvents() {
     window.api.openExternal('https://github.com/CarfoCx/MuxMelt/issues');
   });
 
+  // Update folder path
+  document.getElementById('updateFolderBtn').addEventListener('click', async () => {
+    const dir = await window.api.selectOutputDir(); // reusing dir selector logic
+    if (!dir) return;
+
+    const all = await window.loadAllSettings();
+    all.global = all.global || {};
+    all.global.updateFolderPath = dir;
+    await window.saveAllSettings(all);
+
+    const parts = dir.replace(/\\/g, '/').split('/');
+    const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : dir;
+    const btn = document.getElementById('updateFolderBtn');
+    btn.textContent = display;
+    btn.title = dir;
+
+    log(`Update source folder set to: ${dir}`, 'success');
+  });
+
+  document.getElementById('resetUpdateFolder').addEventListener('click', async () => {
+    const all = await window.loadAllSettings();
+    if (all.global) delete all.global.updateFolderPath;
+    await window.saveAllSettings(all);
+
+    document.getElementById('updateFolderBtn').textContent = 'Not set';
+    document.getElementById('updateFolderBtn').title = '';
+    log('Update source folder reset', 'success');
+  });
+
   // Check for updates button
   document.getElementById('checkUpdateBtn').addEventListener('click', async () => {
     const btn = document.getElementById('checkUpdateBtn');
     const label = document.getElementById('updateStatusLabel');
     const hint = document.getElementById('updateStatusHint');
+    
     btn.disabled = true;
     btn.textContent = 'Checking...';
+    label.textContent = 'Checking for updates...';
+    hint.textContent = 'Comparing current version with latest release';
+    
     try {
-      const result = await window.api.checkForUpdates();
-      if (result.upToDate) {
-        label.textContent = 'You are up to date!';
-        hint.textContent = `Current version: ${result.currentVersion}`;
-        btn.textContent = 'Up to Date';
-      } else {
-        label.textContent = `Update available: ${result.latestVersion}`;
-        hint.textContent = `Current: ${result.currentVersion}`;
-        btn.textContent = 'Download Update';
+      await window.api.checkForUpdates();
+      // The results will be handled by global listeners in app.js
+      setTimeout(() => {
         btn.disabled = false;
-        btn.onclick = () => window.api.openExternal(result.releaseUrl);
-      }
-    } catch {
+        btn.textContent = 'Check again';
+      }, 3000);
+    } catch (err) {
       label.textContent = 'Failed to check for updates';
+      hint.textContent = err.message;
       btn.textContent = 'Retry';
       btn.disabled = false;
     }

@@ -4,8 +4,26 @@
 
 (function() {
 
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif']);
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif']);
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
+const FORMAT_OPTIONS = {
+  image: [
+    { value: 'png', label: 'PNG' },
+    { value: 'jpg', label: 'JPG' },
+    { value: 'webp', label: 'WebP' },
+    { value: 'gif', label: 'GIF' },
+    { value: 'ico', label: 'ICO' },
+    { value: 'tiff', label: 'TIFF' },
+    { value: 'avif', label: 'AVIF' }
+  ],
+  video: [
+    { value: 'mp4', label: 'MP4' },
+    { value: 'mkv', label: 'MKV' },
+    { value: 'webm', label: 'WebM' },
+    { value: 'avi', label: 'AVI' },
+    { value: 'mov', label: 'MOV' }
+  ]
+};
 
 let files = [];
 let outputDir = '';
@@ -17,8 +35,9 @@ let batchTotalFiles = 0;
 
 let dropZone, browseBtn, fileList, convertBtn, clearBtn, openOutputBtn, retryBtn;
 let outputDirBtn, statusText, processingIndicator, etaText;
-let outputFormat, qualitySlider, qualityValue, keepMetadata;
+let formatGroup, outputFormat, qualitySlider, qualityValue, keepMetadata;
 let lastOutputDir = '';
+let preferredOutputFormat = 'png';
 let _pasteHandler = null;
 
 function init(ctx) {
@@ -35,6 +54,7 @@ function init(ctx) {
   statusText = document.getElementById('statusText');
   processingIndicator = document.getElementById('processingIndicator');
   etaText = document.getElementById('etaText');
+  formatGroup = document.getElementById('formatGroup');
   outputFormat = document.getElementById('outputFormat');
   qualitySlider = document.getElementById('qualitySlider');
   qualityValue = document.getElementById('qualityValue');
@@ -60,6 +80,7 @@ function bindEvents() {
   });
 
   outputFormat.addEventListener('change', () => {
+    if (outputFormat.value) preferredOutputFormat = outputFormat.value;
     saveToolSettings();
   });
 
@@ -152,6 +173,10 @@ async function startConversion() {
   }
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
   if (pending.length === 0) return;
+  if (!outputFormat.value || getQueueMediaType() === 'mixed') {
+    log('Choose either image files or video files before converting', 'warn');
+    return;
+  }
 
   isProcessing = true;
   batchStartTime = Date.now();
@@ -165,7 +190,7 @@ async function startConversion() {
   statusText.textContent = `Converting ${pending.length} file(s)...`;
 
   const targetFmt = outputFormat.value;
-  const imageFormats = new Set(['png', 'jpg', 'webp', 'avif', 'tiff']);
+  const imageFormats = new Set(['png', 'jpg', 'webp', 'gif', 'ico', 'avif', 'tiff']);
   const videoFormats = new Set(['mp4', 'mkv', 'webm', 'avi', 'mov']);
   const targetIsImage = imageFormats.has(targetFmt);
   const targetIsVideo = videoFormats.has(targetFmt);
@@ -275,6 +300,46 @@ function getFileExtension(fp) {
 
 function getFileName(fp) { return fp.replace(/\\/g, '/').split('/').pop(); }
 
+function getQueueMediaType() {
+  if (files.length === 0) return null;
+  const hasImage = files.some(f => IMAGE_EXTS.has(getFileExtension(f.path)));
+  const hasVideo = files.some(f => VIDEO_EXTS.has(getFileExtension(f.path)));
+  if (hasImage && hasVideo) return 'mixed';
+  if (hasImage) return 'image';
+  if (hasVideo) return 'video';
+  return null;
+}
+
+function updateFormatOptions() {
+  const mediaType = getQueueMediaType();
+
+  if (!mediaType) {
+    formatGroup.hidden = true;
+    outputFormat.disabled = true;
+    outputFormat.innerHTML = '';
+    return;
+  }
+
+  formatGroup.hidden = false;
+
+  if (mediaType === 'mixed') {
+    outputFormat.disabled = true;
+    outputFormat.innerHTML = '<option value="">Use either images or videos</option>';
+    outputFormat.value = '';
+    return;
+  }
+
+  const options = FORMAT_OPTIONS[mediaType];
+  const values = options.map(o => o.value);
+  const selected = values.includes(preferredOutputFormat) ? preferredOutputFormat : values[0];
+  outputFormat.disabled = false;
+  outputFormat.innerHTML = options
+    .map(o => `<option value="${o.value}">${o.label}</option>`)
+    .join('');
+  outputFormat.value = selected;
+  preferredOutputFormat = selected;
+}
+
 async function addFiles(paths) {
   let added = 0;
   for (const p of paths) {
@@ -286,15 +351,22 @@ async function addFiles(paths) {
     added++;
   }
   if (added > 0) log(`Added ${added} file(s)`);
+  updateFormatOptions();
   renderFileList();
   updateButton();
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
 }
 
-function removeFile(index) { files.splice(index, 1); renderFileList(); updateButton(); }
+function removeFile(index) {
+  files.splice(index, 1);
+  updateFormatOptions();
+  renderFileList();
+  updateButton();
+}
 
 function clearFiles() {
   files = [];
+  updateFormatOptions();
   renderFileList();
   updateButton();
   statusText.textContent = 'Waiting for File';
@@ -304,7 +376,7 @@ function clearFiles() {
 
 function updateButton() {
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
-  convertBtn.disabled = pending.length === 0 || isProcessing;
+  convertBtn.disabled = pending.length === 0 || isProcessing || !outputFormat.value || getQueueMediaType() === 'mixed';
 }
 
 // ---- Rendering ----
@@ -371,7 +443,7 @@ async function loadToolSettings() {
   try {
     const all = await window.loadAllSettings();
     const s = all['format-converter'] || {};
-    if (s.outputFormat) outputFormat.value = s.outputFormat;
+    if (s.outputFormat) preferredOutputFormat = s.outputFormat;
     if (s.quality) { qualitySlider.value = s.quality; qualityValue.textContent = s.quality; }
     if (s.keepMetadata != null) keepMetadata.checked = s.keepMetadata;
     if (s.outputDir) {
@@ -381,6 +453,8 @@ async function loadToolSettings() {
       outputDirBtn.textContent = display;
       outputDirBtn.title = outputDir;
     }
+    updateFormatOptions();
+    updateButton();
   } catch {}
 }
 
@@ -389,7 +463,7 @@ function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
     window.loadAllSettings().then(all => {
-      all['format-converter'] = { outputFormat: outputFormat.value, quality: qualitySlider.value, keepMetadata: keepMetadata.checked, outputDir };
+      all['format-converter'] = { outputFormat: preferredOutputFormat, quality: qualitySlider.value, keepMetadata: keepMetadata.checked, outputDir };
       window.saveAllSettings(all);
     });
   }, 300);

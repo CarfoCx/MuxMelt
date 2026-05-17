@@ -298,6 +298,7 @@ async function prepareFfmpeg() {
 async function preparePythonFull() {
   console.log(`\n=== Preparing standalone Python (${process.platform}/${TARGET_ARCH}) ===`);
   fs.mkdirSync(PYTHON_ENV_DIR, { recursive: true });
+  fs.rmSync(path.join(PYTHON_ENV_DIR, '.slim'), { force: true });
 
   // The standalone Python extracts a "python/" directory
   const pythonBin = IS_WIN
@@ -404,6 +405,7 @@ async function main() {
     await preparePythonFull();
   } else {
     // Slim mode — create empty python-env dir with marker
+    fs.rmSync(PYTHON_ENV_DIR, { recursive: true, force: true });
     fs.mkdirSync(PYTHON_ENV_DIR, { recursive: true });
     fs.writeFileSync(
       path.join(PYTHON_ENV_DIR, '.slim'),

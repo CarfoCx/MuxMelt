@@ -6,8 +6,9 @@ const sharp = require('sharp');
 const ffmpeg = require('./ffmpeg-runner');
 const { validateOutputDir, formatToolError, validateMagicBytes } = require('./path-utils');
 
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif']);
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif', '.gif', '.svg', '.heic', '.heif']);
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov']);
+const IMAGE_OUTPUT_FORMATS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif', 'tiff', 'gif', 'ico']);
 
 /**
  * Map a 1-100 quality slider value to a CRF value for video encoding.
@@ -32,15 +33,63 @@ function sharpOutputOptions(format, quality) {
     case 'webp': return { format: 'webp', options: { quality: q } };
     case 'tiff': return { format: 'tiff', options: { quality: q } };
     case 'avif': return { format: 'avif', options: { quality: q } };
+    case 'gif':  return { format: 'gif',  options: { colours: 256, effort: 7 } };
     case 'bmp':  return { format: 'raw',  options: {} }; // sharp doesn't natively export BMP, use png as fallback
     default:     return { format: 'png',  options: {} };
   }
+}
+
+async function createIcoBuffer(inputPath) {
+  const sizes = [16, 32, 48, 64, 128, 256];
+  const images = await Promise.all(sizes.map(async (size) => {
+    const buffer = await sharp(inputPath, { animated: false })
+      .resize(size, size, {
+        fit: 'contain',
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      })
+      .png()
+      .toBuffer();
+    return { size, buffer };
+  }));
+
+  const headerSize = 6;
+  const directorySize = images.length * 16;
+  let offset = headerSize + directorySize;
+  const header = Buffer.alloc(headerSize + directorySize);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(images.length, 4);
+
+  images.forEach((image, index) => {
+    const entry = headerSize + index * 16;
+    header.writeUInt8(image.size === 256 ? 0 : image.size, entry);
+    header.writeUInt8(image.size === 256 ? 0 : image.size, entry + 1);
+    header.writeUInt8(0, entry + 2);
+    header.writeUInt8(0, entry + 3);
+    header.writeUInt16LE(1, entry + 4);
+    header.writeUInt16LE(32, entry + 6);
+    header.writeUInt32LE(image.buffer.length, entry + 8);
+    header.writeUInt32LE(offset, entry + 12);
+    offset += image.buffer.length;
+  });
+
+  return Buffer.concat([header, ...images.map((image) => image.buffer)]);
 }
 
 /**
  * Convert a single image file using sharp.
  */
 async function convertImage(inputPath, outputPath, targetFormat, quality, keepMetadata) {
+  if (!IMAGE_OUTPUT_FORMATS.has(targetFormat)) {
+    throw new Error(`Unsupported image output format: ${targetFormat}`);
+  }
+
+  if (targetFormat === 'ico') {
+    const icoBuffer = await createIcoBuffer(inputPath);
+    fs.writeFileSync(outputPath, icoBuffer);
+    return outputPath;
+  }
+
   const { format, options } = sharpOutputOptions(targetFormat, quality);
 
   if (targetFormat === 'bmp') {
@@ -166,7 +215,7 @@ function registerIPC(ipcMain, getMainWindow) {
 
   ipcMain.handle('format-converter-formats', async () => {
     return {
-      image: ['png', 'jpg', 'webp', 'tiff', 'avif'],
+      image: ['png', 'jpg', 'webp', 'gif', 'ico', 'tiff', 'avif'],
       video: ['mp4', 'mkv', 'webm', 'avi', 'mov'],
       ffmpegAvailable: !!ffmpeg.findFfmpeg()
     };

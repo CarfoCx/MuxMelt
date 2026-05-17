@@ -5,6 +5,8 @@
 (function() {
 
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
+const MIN_GIF_DURATION = 0.5;
+const MAX_GIF_DURATION = 60;
 
 let videoFile = null;
 let outputDir = '';
@@ -14,10 +16,12 @@ let progressCleanup = null;
 
 let dropZone, browseBtn, createBtn, clearBtn, openOutputBtn;
 let outputDirBtn, statusText, processingIndicator;
-let fpsSlider, fpsValue, widthInput, startTime, duration;
+let footerProgress, footerProgressFill, progressPercent;
+let fpsSlider, fpsValue, widthInput, startTime, endTime, duration;
 let ditherSelect, maxColorsSlider, maxColorsValue, reverseCheck;
 let videoInfo, videoName, removeVideoBtn, previewArea;
 let lastOutputDir = '';
+let syncingTimeFields = false;
 
 function init(ctx) {
   log = ctx.log;
@@ -29,10 +33,14 @@ function init(ctx) {
   outputDirBtn = document.getElementById('outputDirBtn');
   statusText = document.getElementById('statusText');
   processingIndicator = document.getElementById('processingIndicator');
+  footerProgress = document.getElementById('footerProgress');
+  footerProgressFill = document.getElementById('footerProgressFill');
+  progressPercent = document.getElementById('progressPercent');
   fpsSlider = document.getElementById('fpsSlider');
   fpsValue = document.getElementById('fpsValue');
   widthInput = document.getElementById('widthInput');
   startTime = document.getElementById('startTime');
+  endTime = document.getElementById('endTime');
   duration = document.getElementById('duration');
   ditherSelect = document.getElementById('dither');
   maxColorsSlider = document.getElementById('maxColors');
@@ -61,7 +69,19 @@ function bindEvents() {
   });
 
   widthInput.addEventListener('change', () => { saveToolSettings(); });
-  duration.addEventListener('change', () => { saveToolSettings(); });
+  startTime.addEventListener('change', () => {
+    updateEndFromDuration();
+    saveToolSettings();
+  });
+  endTime.addEventListener('change', () => {
+    updateDurationFromEnd();
+    saveToolSettings();
+  });
+  duration.addEventListener('change', () => {
+    normalizeDurationInput();
+    updateEndFromDuration();
+    saveToolSettings();
+  });
 
   ditherSelect.addEventListener('change', () => { saveToolSettings(); });
   reverseCheck.addEventListener('change', () => { saveToolSettings(); });
@@ -142,6 +162,7 @@ function setVideo(path) {
   createBtn.disabled = false;
   if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'pending' }]);
   log(`Selected: ${getFileName(path)}`);
+  updateEndFromDuration();
 }
 
 async function startCreation() {
@@ -152,6 +173,7 @@ async function startCreation() {
     return;
   }
   if (!videoFile) return;
+  updateDurationFromEnd();
 
   isProcessing = true;
   if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }]);
@@ -160,6 +182,7 @@ async function startCreation() {
   createBtn.classList.add('btn-cancel');
   processingIndicator.classList.add('active');
   statusText.textContent = 'Creating GIF...';
+  setFooterProgress(0, true);
   previewArea.innerHTML = `
     <div style="text-align: center;">
       <div class="file-progress-bar"><div class="file-progress-fill" id="gifProgress" style="width: 0%"></div></div>
@@ -203,15 +226,19 @@ async function startCreation() {
   createBtn.classList.remove('btn-cancel');
   createBtn.disabled = !videoFile;
   processingIndicator.classList.remove('active');
+  setFooterProgress(0, false);
 }
 
 function handleProgress(data) {
   const progressFill = document.getElementById('gifProgress');
 
-  if (data.type === 'progress') {
-    if (progressFill) progressFill.style.width = `${Math.round(data.progress * 100)}%`;
+  if (data.type === 'progress' || typeof data.percent === 'number' || typeof data.progress === 'number') {
+    const progress = normalizeProgress(data);
+    if (progressFill) progressFill.style.width = `${Math.round(progress * 100)}%`;
+    setFooterProgress(progress, true);
     statusText.textContent = data.status || 'Creating GIF...';
   } else if (data.type === 'complete') {
+    setFooterProgress(1, true);
     if (progressFill) {
       progressFill.style.width = '100%';
       progressFill.classList.add('complete');
@@ -220,10 +247,84 @@ function handleProgress(data) {
     log(`GIF created: ${data.output || 'done'}`, 'success');
     previewArea.innerHTML = '<div class="empty-state" style="color: var(--success);">GIF created successfully!</div>';
   } else if (data.type === 'error') {
+    setFooterProgress(0, false);
     if (progressFill) progressFill.classList.add('error');
     statusText.textContent = `Error: ${data.error}`;
     log(`Error: ${data.error}`, 'error');
   }
+}
+
+function normalizeProgress(data) {
+  const raw = typeof data.progress === 'number' ? data.progress : data.percent;
+  if (typeof raw !== 'number' || Number.isNaN(raw)) return 0;
+  return Math.max(0, Math.min(1, raw > 1 ? raw / 100 : raw));
+}
+
+function setFooterProgress(progress, visible = true) {
+  const pct = Math.max(0, Math.min(1, Number(progress) || 0));
+  const label = `${Math.round(pct * 100)}%`;
+  if (footerProgress) footerProgress.classList.toggle('active', visible);
+  if (footerProgressFill) footerProgressFill.style.width = label;
+  if (progressPercent) {
+    progressPercent.classList.toggle('active', visible);
+    progressPercent.textContent = visible ? label : '';
+  }
+}
+
+function parseTimeToSeconds(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  if (/^\d+(\.\d+)?$/.test(raw)) return Math.max(0, parseFloat(raw));
+
+  const parts = raw.split(':').map(p => p.trim());
+  if (parts.some(p => p === '' || Number.isNaN(Number(p)))) return 0;
+
+  const nums = parts.map(Number);
+  if (nums.length === 3) return Math.max(0, nums[0] * 3600 + nums[1] * 60 + nums[2]);
+  if (nums.length === 2) return Math.max(0, nums[0] * 60 + nums[1]);
+  return 0;
+}
+
+function formatSecondsAsTime(seconds) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const whole = Math.floor(safe);
+  const fraction = safe - whole;
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  const suffix = fraction > 0 ? (fraction.toFixed(1).slice(1)) : '';
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}${suffix}`;
+}
+
+function clampDuration(value) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return 5;
+  return Math.max(MIN_GIF_DURATION, Math.min(MAX_GIF_DURATION, parsed));
+}
+
+function normalizeDurationInput() {
+  const clamped = clampDuration(duration.value);
+  duration.value = Number.isInteger(clamped) ? String(clamped) : clamped.toFixed(1);
+}
+
+function updateEndFromDuration() {
+  if (syncingTimeFields) return;
+  syncingTimeFields = true;
+  normalizeDurationInput();
+  const startSeconds = parseTimeToSeconds(startTime.value);
+  endTime.value = formatSecondsAsTime(startSeconds + clampDuration(duration.value));
+  syncingTimeFields = false;
+}
+
+function updateDurationFromEnd() {
+  if (syncingTimeFields) return;
+  syncingTimeFields = true;
+  const startSeconds = parseTimeToSeconds(startTime.value);
+  const endSeconds = parseTimeToSeconds(endTime.value);
+  const clamped = clampDuration(endSeconds - startSeconds);
+  duration.value = Number.isInteger(clamped) ? String(clamped) : clamped.toFixed(1);
+  endTime.value = formatSecondsAsTime(startSeconds + clamped);
+  syncingTimeFields = false;
 }
 
 function clearAll() {
@@ -234,6 +335,7 @@ function clearAll() {
   previewArea.innerHTML = '<div class="empty-state">Drop a video above to get started.</div>';
   createBtn.disabled = true;
   statusText.textContent = 'Waiting for Video';
+  setFooterProgress(0, false);
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }
 
@@ -250,7 +352,9 @@ async function loadToolSettings() {
     const s = all['gif-maker'] || {};
     if (s.fps) { fpsSlider.value = s.fps; fpsValue.textContent = s.fps; }
     if (s.width) widthInput.value = s.width;
+    if (s.startTime) startTime.value = s.startTime;
     if (s.duration) duration.value = s.duration;
+    if (s.endTime) endTime.value = s.endTime;
     if (s.dither) ditherSelect.value = s.dither;
     if (s.maxColors) { maxColorsSlider.value = s.maxColors; maxColorsValue.textContent = s.maxColors; }
     if (s.reverse) reverseCheck.checked = s.reverse;
@@ -261,6 +365,8 @@ async function loadToolSettings() {
       outputDirBtn.textContent = display;
       outputDirBtn.title = outputDir;
     }
+    if (s.endTime) updateDurationFromEnd();
+    else updateEndFromDuration();
   } catch {}
 }
 
@@ -269,7 +375,7 @@ function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
     window.loadAllSettings().then(all => {
-      all['gif-maker'] = { fps: fpsSlider.value, width: widthInput.value, duration: duration.value, dither: ditherSelect.value, maxColors: maxColorsSlider.value, reverse: reverseCheck.checked, outputDir };
+      all['gif-maker'] = { fps: fpsSlider.value, width: widthInput.value, startTime: startTime.value, endTime: endTime.value, duration: duration.value, dither: ditherSelect.value, maxColors: maxColorsSlider.value, reverse: reverseCheck.checked, outputDir };
       window.saveAllSettings(all);
     });
   }, 300);

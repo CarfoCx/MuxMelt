@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: file:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*">
+  <title>MuxMelt PDF Editor</title>
+  <link rel="stylesheet" href="../../app.css">
+  <link rel="stylesheet" href="pdf-editor.css">
+</head>
+<body>
+  <div class="editor-shell">
+    <header class="editor-topbar">
+      <div class="topbar-left">
+        <div class="doc-title">
+          <span class="doc-mark">PDF</span>
+          <div>
+            <div id="documentName" class="document-name">Loading...</div>
+            <div id="documentStatus" class="document-status">Preparing editor</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-toolbar-container">
+        <div class="toolbar-group">
+          <span class="group-label">General</span>
+          <button class="tool-btn active" data-tool="select" title="Select (S)">SEL</button>
+          <button class="tool-btn" data-tool="hand" title="Hand (H)">HND</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <span class="group-label">Annotate</span>
+          <button class="tool-btn" data-tool="text" title="Add Text (T)">T</button>
+          <button class="tool-btn" data-tool="highlight" title="Highlight (L)">HI</button>
+          <button class="tool-btn" data-tool="freehand" title="Signature/Draw (D)">SIG</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <span class="group-label">Shapes</span>
+          <button class="tool-btn" data-tool="line" title="Line">LIN</button>
+          <button class="tool-btn" data-tool="arrow" title="Arrow">ARR</button>
+          <button class="tool-btn" data-tool="rect" title="Rectangle">RCT</button>
+          <button class="tool-btn" data-tool="circle" title="Circle">CIR</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <span class="group-label">Secure</span>
+          <button class="tool-btn" data-tool="redact" title="Secure Redact">RED</button>
+          <button class="tool-btn" data-tool="whiteout" title="Whiteout">OUT</button>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="action-stack">
+          <button class="btn btn-secondary btn-icon" id="undoBtn" title="Undo (Ctrl+Z)">UNDO</button>
+          <button class="btn btn-primary" id="saveBtn">Save PDF</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="editor-main">
+      <aside class="page-sidebar">
+        <div class="sidebar-tabs">
+          <button class="tab-btn active">Pages</button>
+          <button class="tab-btn">Outline</button>
+        </div>
+        <div class="sidebar-content" id="thumbs" aria-label="Page thumbnails"></div>
+      </aside>
+
+      <section class="page-stage" id="stage">
+        <div class="loading-state" id="loadingState">
+          <div class="spinner"></div>
+          <span>Rendering PDF pages...</span>
+        </div>
+        <div class="pages" id="pages"></div>
+      </section>
+
+      <aside class="properties-panel">
+        <div class="panel-header">
+          <h3>Properties</h3>
+          <span id="activeToolLabel" class="active-tool-badge">Select</span>
+        </div>
+
+        <div class="property-sections">
+          <!-- Text properties -->
+          <div class="property-section" id="propSectionText">
+            <h4>Text Style</h4>
+            <div class="prop-grid">
+              <label>Color</label>
+              <input type="color" id="textColor" value="#111111">
+              <label>Size</label>
+              <select id="textSize">
+                <option value="8">8 pt</option><option value="10">10 pt</option>
+                <option value="12" selected>12 pt</option><option value="14">14 pt</option>
+                <option value="16">16 pt</option><option value="18">18 pt</option>
+                <option value="24">24 pt</option><option value="36">36 pt</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Shape properties -->
+          <div class="property-section" id="propSectionShape">
+            <h4>Shape Style</h4>
+            <div class="prop-grid">
+              <label>Stroke</label>
+              <input type="color" id="strokeColor" value="#ffe640">
+              <label>Fill</label>
+              <input type="color" id="fillColor" value="#ffe640">
+              <label>Weight</label>
+              <input type="range" id="strokeWidth" min="1" max="10" value="2">
+              <label>Opacity</label>
+              <input type="range" id="shapeOpacity" min="10" max="100" value="100">
+            </div>
+          </div>
+
+          <div class="property-section">
+            <h4>View</h4>
+            <div class="zoom-controls">
+              <button class="zoom-btn" id="zoomOutBtn">-</button>
+              <span id="zoomValue">100%</span>
+              <button class="zoom-btn" id="zoomInBtn">+</button>
+            </div>
+          </div>
+
+          <div class="property-section">
+            <h4>Document History</h4>
+            <div class="change-list" id="changeList"></div>
+            <button class="btn btn-secondary btn-full" id="clearBtn" style="margin-top: 10px;">Clear All Edits</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="pdf-editor.js"></script>
+</body>
+</html>

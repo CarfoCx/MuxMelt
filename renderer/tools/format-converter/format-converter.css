@@ -1,5 +1,9 @@
 /* Format Converter - tool-specific styles */
 
+.format-setting[hidden] {
+  display: none !important;
+}
+
 .range-value {
   font-size: 12px;
   color: var(--text-secondary);

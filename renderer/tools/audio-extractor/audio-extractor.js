@@ -16,6 +16,7 @@ let batchTotalFiles = 0;
 
 let dropZone, browseBtn, fileList, extractBtn, clearBtn, openOutputBtn, retryBtn;
 let outputDirBtn, statusText, processingIndicator, etaText;
+let footerProgress, footerProgressFill, progressPercent;
 let audioFormat, bitrate, sampleRate, normalizeCheck, fadeInInput, fadeOutInput;
 let lastOutputDir = '';
 let _pasteHandler = null;
@@ -33,6 +34,9 @@ function init(ctx) {
   statusText = document.getElementById('statusText');
   processingIndicator = document.getElementById('processingIndicator');
   etaText = document.getElementById('etaText');
+  footerProgress = document.getElementById('footerProgress');
+  footerProgressFill = document.getElementById('footerProgressFill');
+  progressPercent = document.getElementById('progressPercent');
   audioFormat = document.getElementById('audioFormat');
   bitrate = document.getElementById('bitrate');
   sampleRate = document.getElementById('sampleRate');
@@ -159,6 +163,7 @@ async function startExtraction() {
   extractBtn.classList.add('btn-cancel');
   processingIndicator.classList.add('active');
   statusText.textContent = `Extracting audio from ${pending.length} file(s)...`;
+  setFooterProgress(0, true);
 
   const srLabel = sampleRate.value ? sampleRate.value + ' Hz' : 'original';
   log(`Starting extraction: ${pending.length} file(s) to ${audioFormat.value.toUpperCase()}, ${bitrate.value}, ${srLabel}${normalizeCheck.checked ? ', normalized' : ''}`);
@@ -203,6 +208,7 @@ async function startExtraction() {
   isProcessing = false;
   if (etaText) etaText.textContent = '';
   if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
+  setFooterProgress(0, false);
   extractBtn.textContent = 'Extract Audio';
   extractBtn.classList.remove('btn-cancel');
   extractBtn.disabled = files.filter(f => f.state === 'pending' || f.state === 'error').length === 0;
@@ -222,25 +228,47 @@ function handleProgress(data) {
   if (idx === -1) return;
 
   if (data.type === 'progress') {
-    files[idx].progress = data.progress;
+    const progress = normalizeProgress(data);
+    files[idx].progress = progress;
     files[idx].status = data.status || 'Extracting...';
     files[idx].state = 'processing';
-    if (window.setTaskbarProgress) window.setTaskbarProgress(data.progress);
+    statusText.textContent = `${files[idx].name}: ${files[idx].status}`;
+    setFooterProgress(progress, true);
+    if (window.setTaskbarProgress) window.setTaskbarProgress(progress);
     if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files);
   } else if (data.type === 'complete') {
     files[idx].progress = 1;
     files[idx].status = 'Complete';
     files[idx].state = 'complete';
+    setFooterProgress(1, true);
     log(`Extracted: ${files[idx].name}`, 'success');
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   } else if (data.type === 'error') {
     files[idx].progress = 0;
     files[idx].status = `Error: ${data.error}`;
     files[idx].state = 'error';
+    setFooterProgress(0, false);
     log(`Error [${files[idx].name}]: ${data.error}`, 'error');
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   }
   renderFileItem(idx);
+}
+
+function normalizeProgress(data) {
+  const raw = typeof data.progress === 'number' ? data.progress : data.percent;
+  if (typeof raw !== 'number' || Number.isNaN(raw)) return 0;
+  return Math.max(0, Math.min(1, raw > 1 ? raw / 100 : raw));
+}
+
+function setFooterProgress(progress, visible = true) {
+  const pct = Math.max(0, Math.min(1, Number(progress) || 0));
+  const label = `${Math.round(pct * 100)}%`;
+  if (footerProgress) footerProgress.classList.toggle('active', visible);
+  if (footerProgressFill) footerProgressFill.style.width = label;
+  if (progressPercent) {
+    progressPercent.classList.toggle('active', visible);
+    progressPercent.textContent = visible ? label : '';
+  }
 }
 
 // ---- File management ----
@@ -274,6 +302,8 @@ function clearFiles() {
   renderFileList();
   updateButton();
   statusText.textContent = 'Waiting for Video';
+  setFooterProgress(0, false);
+  if (etaText) etaText.textContent = '';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([]);
 }
