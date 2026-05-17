@@ -14,7 +14,11 @@
     "build:full:mac": "npm run build:nexus && node build/prepare-python.js full && electron-builder --mac --publish never",
     "build:slim:win": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --win --config build/slim.json --publish never",
     "build:slim:mac": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --mac --config build/slim.json --publish never",
-    "build:linux": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --linux --config build/slim.json --publish never"
+    "build:linux": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --linux --config build/slim.json --publish never",
+    "build:slim:win:x64": "npm run build:nexus && node build/prepare-python.js slim --arch=x64 && electron-builder --win --x64 --config build/slim.json --publish never",
+    "build:slim:mac:x64": "npm run build:nexus && node build/prepare-python.js slim --arch=x64 && electron-builder --mac --x64 --config build/slim.json --publish never",
+    "build:slim:mac:arm64": "npm run build:nexus && node build/prepare-python.js slim --arch=arm64 && electron-builder --mac --arm64 --config build/slim.json --publish never",
+    "build:linux:x64": "npm run build:nexus && node build/prepare-python.js slim --arch=x64 && electron-builder --linux --x64 --config build/slim.json --publish never"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
