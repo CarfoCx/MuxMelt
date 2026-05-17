@@ -1,12 +1,15 @@
 name: Release Builds
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
         description: Release tag to upload assets to
         required: true
-        default: v1.1.0
+        default: v1.2.4
 
 permissions:
   contents: write
@@ -19,6 +22,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Windows x64
+            os: windows-2025
+            command: npm run build:slim:win:x64
+            files: |
+              dist/MuxMelt-Windows-Setup.exe
+              dist/MuxMelt-Windows-Setup.exe.blockmap
+              dist/latest.yml
           - name: macOS Intel
             os: macos-15-intel
             command: npm run build:slim:mac:x64
@@ -65,6 +75,18 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: ${{ matrix.command }}
+
+      - name: Create release if needed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "MuxMelt $RELEASE_TAG" \
+              --notes "Automated cross-platform MuxMelt builds."
 
       - name: Create checksums
         env:
