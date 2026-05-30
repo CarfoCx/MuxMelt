@@ -8,7 +8,6 @@
         <h2>Online Video Downloader</h2>
         <p>Paste video page links, queue multiple downloads, and save them into one folder.</p>
       </div>
-      <button class="btn btn-secondary add-url-btn" id="addUrlBtn" title="Add another video URL">+</button>
     </div>
 
     <div class="settings-bar url-settings">
@@ -17,6 +16,15 @@
         <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
           Downloads/MuxMelt Downloads
         </button>
+      </div>
+      <div class="setting-group">
+        <label>Quality:</label>
+        <select id="qualitySelect" class="settings-select url-quality-select">
+          <option value="best">Best quality</option>
+          <option value="1080p">1080p (MP4)</option>
+          <option value="720p">720p (MP4)</option>
+          <option value="audioonly">Audio only (MP3)</option>
+        </select>
       </div>
     </div>
 
@@ -27,6 +35,14 @@
     </div>
 
     <div class="url-list" id="urlList"></div>
+
+    <button class="add-url-row-btn" id="addUrlBtn" title="Add another video URL">
+      <svg class="add-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+      </svg>
+      <span>Add Video URL</span>
+    </button>
   </div>
 </div>
 

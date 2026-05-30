@@ -19,9 +19,10 @@ function parseTimeToSeconds(value) {
 }
 
 function registerIPC(ipcMain, getMainWindow) {
-  let activeCancel = null;
+  const activeCancels = new Map();
 
   ipcMain.handle('gif-maker-create', async (event, options) => {
+    const winId = event.sender.id;
     const {
       inputPath,
       outputDir,
@@ -118,9 +119,9 @@ function registerIPC(ipcMain, getMainWindow) {
         durationSeconds: clipDuration,
         onProgress: onPass1Progress
       });
-      activeCancel = pass1.cancel;
+      activeCancels.set(winId, pass1.cancel);
       await pass1.promise;
-      activeCancel = null;
+      activeCancels.delete(winId);
 
       if (win) {
         win.webContents.send('tool-progress', {
@@ -167,9 +168,9 @@ function registerIPC(ipcMain, getMainWindow) {
         durationSeconds: clipDuration,
         onProgress: onPass2Progress
       });
-      activeCancel = pass2.cancel;
+      activeCancels.set(winId, pass2.cancel);
       await pass2.promise;
-      activeCancel = null;
+      activeCancels.delete(winId);
 
       if (win) {
         win.webContents.send('tool-progress', {
@@ -203,18 +204,21 @@ function registerIPC(ipcMain, getMainWindow) {
         outputSize
       };
     } catch (err) {
-      activeCancel = null;
+      activeCancels.delete(winId);
       return { success: false, error: formatToolError(err, 'GIF Maker') };
     } finally {
+      activeCancels.delete(winId);
       // Always clean up palette file
       if (palettePath) { try { fs.unlinkSync(palettePath); } catch {} }
     }
   });
 
-  ipcMain.handle('gif-maker-cancel', async () => {
-    if (activeCancel) {
-      activeCancel();
-      activeCancel = null;
+  ipcMain.handle('gif-maker-cancel', async (event) => {
+    const winId = event.sender.id;
+    const cancel = activeCancels.get(winId);
+    if (cancel) {
+      cancel();
+      activeCancels.delete(winId);
       return { success: true };
     }
     return { success: false, error: 'No active GIF creation to cancel' };

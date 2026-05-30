@@ -103,10 +103,10 @@ async function convertImage(inputPath, outputPath, targetFormat, quality, keepMe
 }
 
 function registerIPC(ipcMain, getMainWindow) {
-  // Active cancel handle
-  let activeCancel = null;
+  const activeCancels = new Map();
 
   ipcMain.handle('format-converter-convert', async (event, options) => {
+    const winId = event.sender.id;
     const {
       inputPath,
       outputDir,
@@ -162,7 +162,6 @@ function registerIPC(ipcMain, getMainWindow) {
           }
         };
 
-        activeCancel = null;
         const duration = await ffmpeg.probeDuration(inputPath);
 
         const crf = qualityToCRF(quality);
@@ -189,25 +188,26 @@ function registerIPC(ipcMain, getMainWindow) {
         args.push(outputPath);
 
         const { promise, cancel } = ffmpeg.run({ args, durationSeconds: duration, onProgress });
-        activeCancel = cancel;
-
+        activeCancels.set(winId, cancel);
         await promise;
-        activeCancel = null;
+        activeCancels.delete(winId);
 
         return { success: true, output: outputPath };
       }
 
       return { success: false, error: `Unsupported file type: ${ext}` };
     } catch (err) {
-      activeCancel = null;
+      activeCancels.delete(winId);
       return { success: false, error: formatToolError(err, 'Format Converter') };
     }
   });
 
-  ipcMain.handle('format-converter-cancel', async () => {
-    if (activeCancel) {
-      activeCancel();
-      activeCancel = null;
+  ipcMain.handle('format-converter-cancel', async (event) => {
+    const winId = event.sender.id;
+    const cancel = activeCancels.get(winId);
+    if (cancel) {
+      cancel();
+      activeCancels.delete(winId);
       return { success: true };
     }
     return { success: false, error: 'No active conversion to cancel' };

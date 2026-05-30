@@ -7,10 +7,20 @@ const http = require('http');
 const https = require('https');
 
 let mainWindow;
+let splashWindow;
+let splashState = { percent: 8, status: 'Preparing MuxMelt', detail: 'Loading required components' };
 let pythonProcess;
 let PYTHON_PORT = 8765;
+const crypto = require('crypto');
+const SHUTDOWN_TOKEN = crypto.randomBytes(32).toString('hex');
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 const pdfEditorSessions = new Map();
+// Periodically remove sessions whose editor windows were force-killed before firing "closed"
+setInterval(() => {
+  for (const [id, session] of pdfEditorSessions) {
+    if (session._win && session._win.isDestroyed()) pdfEditorSessions.delete(id);
+  }
+}, 30000).unref();
 let isUpdateReady = false;
 
 // Configure autoUpdater
@@ -27,25 +37,38 @@ const IS_WIN = process.platform === 'win32';
 const FFMPEG_BIN = IS_WIN ? 'ffmpeg.exe' : 'ffmpeg';
 
 // Work around intermittent Windows compositor artifacts in Electron/Chromium
-// that can appear as vertical scanlines or black overlay bands until repaint.
-// This affects the Electron UI compositor only; Python/CUDA processing is separate.
+// by disabling occlusion tracking. Also allow completely disabling GPU hardware acceleration via settings.
 if (IS_WIN) {
-  const disabledChromiumFeatures = [
-    'CalculateNativeWinOcclusion',
-    'CanvasOopRasterization',
-    'DCompPresenter',
-    'DirectComposition',
-    'DirectCompositionVideoOverlays',
-    'HardwareOverlays',
-    'UseSkiaRenderer'
-  ].join(',');
+  let disableHardwareAcceleration = false;
+  try {
+    const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
+    if (settings && settings.global && settings.global.disableHardwareAcceleration) {
+      disableHardwareAcceleration = true;
+    }
+  } catch {}
 
-  app.disableHardwareAcceleration();
-  app.commandLine.appendSwitch('disable-direct-composition');
-  app.commandLine.appendSwitch('disable-features', disabledChromiumFeatures);
-  app.commandLine.appendSwitch('disable-gpu');
-  app.commandLine.appendSwitch('disable-gpu-compositing');
-  app.commandLine.appendSwitch('use-angle', 'swiftshader');
+  if (disableHardwareAcceleration) {
+    const disabledChromiumFeatures = [
+      'CalculateNativeWinOcclusion',
+      'CanvasOopRasterization',
+      'DCompPresenter',
+      'DirectComposition',
+      'DirectCompositionVideoOverlays',
+      'HardwareOverlays',
+      'UseSkiaRenderer'
+    ].join(',');
+
+    app.disableHardwareAcceleration();
+    app.commandLine.appendSwitch('disable-direct-composition');
+    app.commandLine.appendSwitch('disable-features', disabledChromiumFeatures);
+    app.commandLine.appendSwitch('disable-gpu');
+    app.commandLine.appendSwitch('disable-gpu-compositing');
+    app.commandLine.appendSwitch('use-angle', 'swiftshader');
+  } else {
+    // Only disable window occlusion to prevent blank/black screen issues
+    // while preserving full GPU acceleration for smooth performance.
+    app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  }
 }
 // Standalone Python lives at python-env/python/bin/python3 (Unix) or python-env/python/python.exe (Win)
 const BUNDLED_PYTHON = RESOURCES_PATH
@@ -101,7 +124,9 @@ function clearChromiumGpuCaches() {
     try {
       fs.rmSync(path.join(app.getPath('userData'), cacheDir), { recursive: true, force: true });
     } catch (err) {
-      console.warn(`Failed to clear ${cacheDir}:`, err.message);
+      if (err.code !== 'EPERM' && err.code !== 'EBUSY') {
+        console.warn(`Failed to clear ${cacheDir}:`, err.message);
+      }
     }
   }
 }
@@ -187,7 +212,20 @@ async function findAvailablePort(startPort) {
   for (const port of ports) {
     if (await isPortAvailable(port)) return port;
   }
-  return startPort; // fall back to original, let it fail with a clear error
+  // Dynamic fallback: bind to port 0 to get an OS-allocated random high port
+  return new Promise((resolve) => {
+    const net = require('net');
+    const server = net.createServer();
+    server.once('listening', () => {
+      const address = server.address();
+      const allocatedPort = address ? address.port : startPort;
+      server.close(() => resolve(allocatedPort));
+    });
+    server.once('error', () => {
+      resolve(startPort);
+    });
+    server.listen(0, '127.0.0.1');
+  });
 }
 
 function startPythonServer() {
@@ -216,7 +254,7 @@ function startPythonServer() {
   const pythonCwd = path.join(appDir, 'python');
   pythonProcess = spawn(
     pythonInfo.cmd,
-    [...pythonInfo.args, serverScript, '--port', PYTHON_PORT.toString()],
+    [...pythonInfo.args, serverScript, '--port', PYTHON_PORT.toString(), '--token', SHUTDOWN_TOKEN],
     {
       cwd: pythonCwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -285,21 +323,38 @@ function waitForServer(retries = 90) {
 
 function killPython(immediate = false) {
   if (pythonProcess) {
+    const proc = pythonProcess;
+    pythonProcess = null;
+
     // Try graceful shutdown first
     try {
-      const req = http.get(`http://127.0.0.1:${PYTHON_PORT}/shutdown`, () => {});
+      const req = http.get(`http://127.0.0.1:${PYTHON_PORT}/shutdown?token=${SHUTDOWN_TOKEN}`, () => {});
       req.on('error', () => {});
-      req.setTimeout(1000, () => req.destroy());
+      req.setTimeout(800, () => req.destroy());
     } catch {}
-    // Give graceful shutdown a moment, or force-kill immediately during failed startup.
+
     const forceKill = () => {
-      if (pythonProcess) {
-        pythonProcess.kill();
-        pythonProcess = null;
-      }
+      try {
+        if (!proc.killed) {
+          if (process.platform !== 'win32') {
+            proc.kill('SIGTERM');
+            setTimeout(() => {
+              try {
+                if (!proc.killed) proc.kill('SIGKILL');
+              } catch {}
+            }, 1000);
+          } else {
+            proc.kill();
+          }
+        }
+      } catch {}
     };
-    if (immediate) forceKill();
-    else setTimeout(forceKill, 2000);
+
+    if (immediate) {
+      forceKill();
+    } else {
+      setTimeout(forceKill, 1000);
+    }
   }
 }
 
@@ -400,25 +455,58 @@ function checkForUpdates() {
           try {
             const release = JSON.parse(data);
             const latestVersion = (release.tag_name || '').replace(/^v/, '');
+            const isNewer = latestVersion && compareVersions(latestVersion, currentVersion) > 0;
             resolve({
               currentVersion,
               latestVersion,
-              upToDate: !latestVersion || currentVersion === latestVersion,
+              version: latestVersion,
+              upToDate: !isNewer,
+              updateAvailable: !!isNewer,
               releaseUrl: release.html_url || '',
               isLocal: false
             });
           } catch {
-            resolve({ upToDate: true, currentVersion });
+            resolve({ upToDate: true, updateAvailable: false, currentVersion });
           }
         });
       }
     );
-    req.on('error', () => resolve({ upToDate: true, currentVersion }));
+    req.on('error', (err) => resolve({ error: err.message, upToDate: true, updateAvailable: false, currentVersion }));
     req.setTimeout(10000, () => {
       req.destroy();
-      resolve({ upToDate: true, currentVersion });
+      resolve({ error: 'Update check timed out', upToDate: true, updateAvailable: false, currentVersion });
     });
   });
+}
+
+function sendUpdateEvent(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+function emitManualUpdateResult(result) {
+  if (result.error) {
+    sendUpdateEvent('update-error', result.error);
+    return;
+  }
+
+  if (result.updateAvailable) {
+    sendUpdateEvent('update-available', {
+      version: result.latestVersion || result.version,
+      currentVersion: result.currentVersion,
+      installerPath: result.installerPath,
+      releaseUrl: result.releaseUrl,
+      isLocal: !!result.isLocal
+    });
+  } else {
+    sendUpdateEvent('update-not-available', {
+      version: result.latestVersion || result.currentVersion,
+      currentVersion: result.currentVersion,
+      message: result.message,
+      isLocal: !!result.isLocal
+    });
+  }
 }
 
 function compareVersions(v1, v2) {
@@ -434,6 +522,97 @@ function compareVersions(v1, v2) {
 // ---------------------------------------------------------------------------
 // Window creation
 // ---------------------------------------------------------------------------
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function createSplashWindow() {
+  if (splashWindow && !splashWindow.isDestroyed()) return Promise.resolve();
+
+  splashWindow = new BrowserWindow({
+    width: 460,
+    height: 300,
+    resizable: false,
+    frame: false,
+    alwaysOnTop: true,
+    show: false,
+    backgroundColor: '#101820',
+    icon: path.join(__dirname, 'build', 'icon.png'),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  let resolved = false;
+  const resolveWhenVisible = (resolve) => {
+    if (resolved) return;
+    resolved = true;
+    resolve();
+  };
+
+  const visiblePromise = new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.show();
+      }
+      resolveWhenVisible(resolve);
+    }, 1200);
+
+    splashWindow.once('ready-to-show', () => {
+      clearTimeout(timeout);
+      if (!splashWindow || splashWindow.isDestroyed()) {
+        resolveWhenVisible(resolve);
+        return;
+      }
+      splashWindow.show();
+      updateSplash(splashState.percent, splashState.status, splashState.detail);
+      setTimeout(() => resolveWhenVisible(resolve), 120);
+    });
+
+    splashWindow.webContents.once('did-finish-load', () => {
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        updateSplash(splashState.percent, splashState.status, splashState.detail);
+      }
+    });
+  });
+
+  splashWindow.on('closed', () => { splashWindow = null; });
+  splashWindow.loadFile(path.join(__dirname, 'renderer', 'splash.html')).catch(() => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
+
+  return visiblePromise;
+}
+
+function updateSplash(percent, status, detail = '') {
+  splashState = { percent, status, detail };
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+
+  const payload = JSON.stringify({ percent, status, detail });
+  splashWindow.webContents.executeJavaScript(`window.setSplashProgress(${payload})`, true).catch(() => {});
+}
+
+async function playSplashFinish() {
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+
+  try {
+    await splashWindow.webContents.executeJavaScript(
+      'window.playSplashFinish ? window.playSplashFinish() : Promise.resolve()',
+      true
+    );
+  } catch {
+    await delay(900);
+  }
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+  }
+  splashWindow = null;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -454,7 +633,12 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setTitle('MuxMelt');
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', async () => {
+    updateSplash(100, 'Ready');
+    await playSplashFinish();
+    closeSplash();
+    mainWindow.show();
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
@@ -503,12 +687,45 @@ ipcMain.handle('open-external', async (event, url) => {
   }
 });
 
+function isSafePath(filePath, expectDirectory = false) {
+  if (typeof filePath !== 'string') return false;
+  try {
+    const resolvedPath = path.resolve(filePath);
+    if (!fs.existsSync(resolvedPath)) return false;
+    
+    const stat = fs.statSync(resolvedPath);
+    if (expectDirectory && !stat.isDirectory()) return false;
+    
+    if (!expectDirectory) {
+      const dangerousExtensions = new Set([
+        '.exe', '.bat', '.cmd', '.msi', '.lnk', '.vbs', '.js', '.vbe', '.jse',
+        '.wsf', '.wsh', '.msc', '.com', '.scr', '.pif', '.reg', '.sh', '.bash', '.app'
+      ]);
+      const ext = path.extname(resolvedPath).toLowerCase();
+      if (dangerousExtensions.has(ext)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 ipcMain.handle('open-folder', async (event, folderPath) => {
-  shell.openPath(folderPath);
+  if (isSafePath(folderPath, true)) {
+    shell.openPath(folderPath);
+  } else {
+    console.warn(`Blocked potentially unsafe open-folder request for: ${folderPath}`);
+  }
 });
 
 ipcMain.handle('open-path', async (event, filePath) => {
-  shell.openPath(filePath);
+  if (isSafePath(filePath, false)) {
+    shell.openPath(filePath);
+  } else {
+    console.warn(`Blocked potentially unsafe open-path request for: ${filePath}`);
+  }
 });
 
 ipcMain.handle('load-settings', () => loadSettings());
@@ -595,11 +812,19 @@ ipcMain.handle('open-pdf-editor', async (event, options = {}) => {
   }
 
   const sessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  pdfEditorSessions.set(sessionId, {
-    filePath,
-    outputDir: options.outputDir || '',
-    fileName: path.basename(filePath)
-  });
+
+  // Work on a private copy so structural page edits never touch the user's
+  // original until they explicitly save. The original is only read.
+  let workingPath = filePath;
+  try {
+    const workDir = path.join(app.getPath('temp'), 'muxmelt-pdf-sessions');
+    fs.mkdirSync(workDir, { recursive: true });
+    workingPath = path.join(workDir, `${sessionId}-${path.basename(filePath)}`);
+    fs.copyFileSync(filePath, workingPath);
+  } catch (err) {
+    console.error('Could not create PDF working copy, editing original:', err.message);
+    workingPath = filePath;
+  }
 
   const editorWindow = new BrowserWindow({
     width: 1280,
@@ -617,6 +842,14 @@ ipcMain.handle('open-pdf-editor', async (event, options = {}) => {
     show: false
   });
 
+  pdfEditorSessions.set(sessionId, {
+    filePath: workingPath,
+    originalPath: filePath,
+    outputDir: options.outputDir || '',
+    fileName: path.basename(filePath),
+    _win: editorWindow
+  });
+
   editorWindow.setMenuBarVisibility(false);
   editorWindow.setTitle(`${path.basename(filePath)} - MuxMelt PDF`);
 
@@ -632,6 +865,11 @@ ipcMain.handle('open-pdf-editor', async (event, options = {}) => {
   }
   editorWindow.once('ready-to-show', () => editorWindow.show());
   editorWindow.on('closed', () => {
+    const sess = pdfEditorSessions.get(sessionId);
+    // Clean up the private working copy (never the user's original).
+    if (sess && sess.filePath && sess.filePath !== sess.originalPath) {
+      try { fs.unlinkSync(sess.filePath); } catch {}
+    }
     pdfEditorSessions.delete(sessionId);
   });
 
@@ -640,7 +878,9 @@ ipcMain.handle('open-pdf-editor', async (event, options = {}) => {
 
 ipcMain.handle('get-pdf-editor-session', async (event, sessionId) => {
   const session = pdfEditorSessions.get(sessionId);
-  return session ? { success: true, ...session } : { success: false, error: 'PDF editor session expired.' };
+  if (!session) return { success: false, error: 'PDF editor session expired.' };
+  const { _win, ...sessionData } = session;
+  return { success: true, ...sessionData };
 });
 
 ipcMain.handle('show-notification', async (event, options) => {
@@ -667,15 +907,45 @@ ipcMain.handle('read-pdf-file', async (event, filePath) => {
 // Auto-updater IPC handlers
 ipcMain.handle('check-for-updates', async () => {
   try {
-    return await autoUpdater.checkForUpdates();
+    sendUpdateEvent('update-status', 'Checking for updates...');
+
+    const manualResult = await checkForUpdates();
+    if (manualResult.isLocal || !app.isPackaged || manualResult.error || !manualResult.updateAvailable) {
+      emitManualUpdateResult(manualResult);
+      return manualResult;
+    }
+
+    try {
+      const electronUpdaterResult = await autoUpdater.checkForUpdates();
+      return {
+        ...manualResult,
+        provider: 'electron-updater',
+        updateInfo: electronUpdaterResult && electronUpdaterResult.updateInfo
+      };
+    } catch (err) {
+      console.warn('electron-updater check failed, using GitHub release check:', err.message);
+      emitManualUpdateResult(manualResult);
+      return {
+        ...manualResult,
+        warning: err.message
+      };
+    }
   } catch (err) {
     console.error('Update check failed:', err);
-    return { error: err.message };
+    const result = { error: err.message, upToDate: true, updateAvailable: false };
+    emitManualUpdateResult(result);
+    return result;
   }
 });
 
 ipcMain.handle('download-update', async () => {
-  return await autoUpdater.downloadUpdate();
+  try {
+    return await autoUpdater.downloadUpdate();
+  } catch (err) {
+    console.error('Update download failed:', err);
+    sendUpdateEvent('update-error', err.message);
+    return { error: err.message };
+  }
 });
 
 ipcMain.handle('restart-to-update', () => {
@@ -816,23 +1086,45 @@ async function runSlimSetup() {
     if (!setupWindow.isDestroyed()) setupWindow.webContents.send(channel, data);
   };
 
-  try {
-    if (IS_WIN) {
-      await runSlimSetupWindows(send);
-    } else {
-      await runSlimSetupUnix(send);
+  // Retry loop — user can click Retry in the setup window after a failure
+  while (true) {
+    try {
+      if (IS_WIN) {
+        await runSlimSetupWindows(send);
+      } else {
+        await runSlimSetupUnix(send);
+      }
+      send('setup-progress', { percent: 100, status: 'Setup complete!' });
+      send('setup-complete');
+      await new Promise(r => setTimeout(r, 1500));
+      if (!setupWindow.isDestroyed()) setupWindow.close();
+      return;
+    } catch (err) {
+      send('setup-error', `Setup failed: ${err.message}`);
+      // Wait for user to click Retry or close the window
+      try {
+        await new Promise((resolve, reject) => {
+          const retryHandler = () => {
+            ipcMain.removeListener('setup-retry', retryHandler);
+            setupWindow.removeListener('closed', closeHandler);
+            resolve();
+          };
+          const closeHandler = () => {
+            ipcMain.removeListener('setup-retry', retryHandler);
+            reject(new Error('Setup cancelled'));
+          };
+          ipcMain.once('setup-retry', retryHandler);
+          setupWindow.once('closed', closeHandler);
+        });
+        // Reset progress for next attempt
+        send('setup-progress', { percent: 0, status: 'Retrying...' });
+        await new Promise(r => setTimeout(r, 300));
+      } catch {
+        // Window was closed — propagate original error
+        if (!setupWindow.isDestroyed()) setupWindow.close();
+        throw err;
+      }
     }
-
-    send('setup-progress', { percent: 100, status: 'Setup complete!' });
-    send('setup-complete');
-    await new Promise(r => setTimeout(r, 1500));
-    if (!setupWindow.isDestroyed()) setupWindow.close();
-
-  } catch (err) {
-    send('setup-error', `Setup failed: ${err.message}`);
-    await new Promise(r => setTimeout(r, 30000)); // keep window open for user to read
-    if (!setupWindow.isDestroyed()) setupWindow.close();
-    throw err;
   }
 }
 
@@ -977,23 +1269,32 @@ function needsSlimSetup() {
 
 app.whenReady().then(async () => {
   try {
+    await createSplashWindow();
+    updateSplash(8, 'Preparing MuxMelt');
+    await delay(100);
     clearChromiumGpuCaches();
 
     // Slim build: auto-install Python on first run
     if (needsSlimSetup()) {
+      updateSplash(15, 'Preparing first-time setup');
       await runSlimSetup();
     }
 
+    updateSplash(35, 'Finding an available backend port');
     PYTHON_PORT = await findAvailablePort(PYTHON_PORT);
+    updateSplash(55, 'Starting media backend', `Port ${PYTHON_PORT}`);
     await startPythonServer();
+    updateSplash(82, 'Loading workspace');
     createWindow();
     if (app.isPackaged) {
+      updateSplash(92, 'Checking for updates');
       initAutoUpdater();
     } else {
       console.log('Skipping auto-updater in development mode.');
     }
   } catch (err) {
     console.error('Startup failed:', err.message);
+    closeSplash();
     killPython(true);
     dialog.showErrorBox(
       'Startup Error',

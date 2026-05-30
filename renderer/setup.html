@@ -90,13 +90,13 @@
       <div class="detail" id="detail"></div>
     </div>
     <div class="error" id="error"></div>
-    <button class="retry-btn" id="retryBtn" onclick="location.reload()">Retry</button>
+    <button class="retry-btn" id="retryBtn">Retry</button>
   </div>
   <script>
     window.setup.onProgress((data) => {
       document.getElementById('progressFill').style.width = data.percent + '%';
       document.getElementById('status').textContent = data.status || '';
-      if (data.detail) document.getElementById('detail').textContent = data.detail;
+      document.getElementById('detail').textContent = data.detail || '';
     });
 
     window.setup.onError((msg) => {
@@ -108,6 +108,15 @@
     window.setup.onComplete(() => {
       document.getElementById('status').textContent = 'Setup complete! Starting MuxMelt...';
       document.getElementById('progressFill').style.width = '100%';
+    });
+
+    document.getElementById('retryBtn').addEventListener('click', () => {
+      document.getElementById('error').style.display = 'none';
+      document.getElementById('retryBtn').style.display = 'none';
+      document.getElementById('status').textContent = 'Retrying...';
+      document.getElementById('detail').textContent = '';
+      document.getElementById('progressFill').style.width = '0%';
+      window.setup.requestRetry();
     });
   </script>
 </body>

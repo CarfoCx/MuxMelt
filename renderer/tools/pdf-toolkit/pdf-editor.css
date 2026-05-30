@@ -273,3 +273,114 @@
   pointer-events: none;
   z-index: 15;
 }
+
+/* ── Text-map detected block overlays ── */
+.textmap-overlay {
+  position: absolute;
+  box-sizing: border-box;
+  z-index: 12;
+  cursor: text;
+  border-radius: 2px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  border: 1.5px dashed transparent;
+}
+
+.textmap-overlay:hover {
+  background: rgba(74, 144, 226, 0.07);
+  border-color: rgba(74, 144, 226, 0.5);
+}
+
+.textmap-overlay.editing {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── Whiteout cover placed behind the inline textarea ── */
+.inline-editor-cover {
+  position: absolute;
+  z-index: 19;
+  background: #ffffff;
+  pointer-events: none;
+}
+
+/* ── Inline text editor — transparent so text looks seamless ── */
+.inline-editor {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  padding: 0;
+  margin: 0;
+  line-height: 1.2;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  caret-color: #111;
+  min-width: 40px;
+  tab-size: 4;
+  /* font-* are set inline to match the detected text exactly */
+}
+
+/* ── Replace preview — white cover + matching text, no chrome ── */
+.replace-preview {
+  position: absolute;
+  box-sizing: border-box;
+  z-index: 13;
+  cursor: pointer;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.2;
+  background: #ffffff;
+  border: none;
+  padding: 0;
+}
+
+.replace-preview:hover {
+  outline: 1.5px dashed rgba(74, 144, 226, 0.55);
+  outline-offset: 2px;
+}
+
+/* ── Light theme ── */
+@media (prefers-color-scheme: light) {
+  .editor-shell       { background: #f0f0f5; color: #111; }
+  .editor-topbar      { background: #e8e8f0; border-bottom-color: #ccc; }
+  .editor-toolbar-container { background: #dde0e8; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+  .page-sidebar       { background: #e8e8f2; border-right-color: #ccc; }
+  .properties-panel   { background: #e8e8f2; border-left-color: #ccc; }
+  .page-stage         { background: #d8d8e8; }
+  .tool-btn           { color: #444; }
+  .tool-btn:hover     { background: rgba(0,0,0,0.06); color: #111; }
+  .tab-btn            { color: #888; }
+  .document-status    { color: #555; }
+  .prop-grid label    { color: #555; }
+  .prop-grid select   { background: #fff; color: #111; border-color: #bbb; }
+  .change-list        { background: #f5f5fa; }
+  .change-title       { color: #111; }
+  .change-meta        { color: #666; }
+  .zoom-controls      { background: #dde0e8; }
+  .thumb              { background: #ddd; }
+  .thumb span         { background: rgba(0,0,0,0.4); }
+  .panel-header h3    { color: #777; }
+  .property-section h4 { color: #777; border-bottom-color: #ccc; }
+}
+
+/* ── Print stylesheet ── */
+@media print {
+  .editor-topbar,
+  .editor-toolbar-container,
+  .page-sidebar,
+  .properties-panel   { display: none !important; }
+  .editor-main        { display: block; }
+  .page-stage         { overflow: visible; padding: 0; background: white; }
+  .pages              { gap: 0; }
+  .page               { box-shadow: none; page-break-after: always; transform: none !important; }
+  .page-overlay,
+  .textmap-overlay    { display: none !important; }
+  .annotation.redact  { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MuxMelt</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      --coral: #ff6954;
+      --mint: #55d6be;
+      --ink: #101820;
+      --panel: #14232b;
+      --text: #f8fafc;
+      --muted: #9fb4bd;
+    }
+
+    body {
+      margin: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 24% 14%, rgba(255, 105, 84, 0.28), transparent 28%),
+        radial-gradient(circle at 88% 76%, rgba(85, 214, 190, 0.18), transparent 26%),
+        linear-gradient(150deg, #101820 0%, #152933 55%, #0d141b 100%);
+      -webkit-app-region: drag;
+    }
+
+    .shell {
+      position: relative;
+      display: grid;
+      height: 100%;
+      place-items: center;
+      padding: 30px;
+    }
+
+    .stage {
+      position: relative;
+      display: grid;
+      width: min(360px, 100%);
+      justify-items: center;
+      gap: 20px;
+      text-align: center;
+    }
+
+    .logo-scene {
+      position: relative;
+      width: 132px;
+      height: 154px;
+      display: grid;
+      justify-items: center;
+      align-items: start;
+      filter: drop-shadow(0 22px 34px rgba(0, 0, 0, 0.34));
+    }
+
+    .glow {
+      position: absolute;
+      top: 18px;
+      width: 120px;
+      height: 120px;
+      border-radius: 30px;
+      background: linear-gradient(135deg, rgba(255, 105, 84, 0.28), rgba(85, 214, 190, 0.2));
+      filter: blur(18px);
+      animation: pulseGlow 1800ms ease-in-out infinite;
+      z-index: 1;
+    }
+
+    /* Gooey container for liquid elements */
+    .liquid-container {
+      position: absolute;
+      inset: 0;
+      filter: url(#goo);
+      display: grid;
+      justify-items: center;
+      align-items: start;
+      z-index: 2;
+    }
+
+    .logo-wrap {
+      position: relative;
+      width: 96px;
+      height: 96px;
+      margin-top: 16px;
+      transform-origin: 50% 94%;
+      animation: floatLogo 2200ms ease-in-out infinite;
+      z-index: 3;
+    }
+
+    .logo-inner-clip {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-radius: 22px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .logo-inner-clip::after {
+      content: "";
+      position: absolute;
+      inset: -30% -70%;
+      background: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, 0.34) 48%, transparent 64%);
+      transform: translateX(-42%);
+      animation: sheen 2600ms ease-in-out infinite;
+      pointer-events: none;
+    }
+
+    .logo {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .drip {
+      position: absolute;
+      top: 96px;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: linear-gradient(180deg, var(--coral), #d94fda);
+      opacity: 0;
+      transform-origin: center top;
+      z-index: 2;
+    }
+
+    .drip.one {
+      left: 42px;
+      animation: idleDrip 1900ms ease-in-out infinite 420ms;
+    }
+
+    .drip.two {
+      left: 70px;
+      width: 10px;
+      height: 10px;
+      background: linear-gradient(180deg, #7168ff, var(--mint));
+      animation: idleDrip 2400ms ease-in-out infinite 900ms;
+    }
+
+    .puddle {
+      position: absolute;
+      bottom: 9px;
+      width: 34px;
+      height: 8px;
+      border-radius: 50%;
+      background: linear-gradient(90deg, rgba(255, 105, 84, 0.95), rgba(113, 104, 255, 0.98), rgba(85, 214, 190, 0.95));
+      opacity: 0.68;
+      transform: scaleX(1);
+      animation: idlePuddle 2200ms ease-in-out infinite;
+      z-index: 1;
+    }
+
+    .brand {
+      display: grid;
+      gap: 7px;
+    }
+
+    .name {
+      margin: 0;
+      font-size: 35px;
+      line-height: 1;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    .tagline {
+      margin: 0;
+      color: #c4d2d8;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .status {
+      display: grid;
+      min-height: 42px;
+      gap: 5px;
+      align-content: start;
+    }
+
+    #statusText {
+      font-size: 13px;
+      font-weight: 650;
+      color: #edf7fa;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 320px;
+    }
+
+    #detailText {
+      font-size: 12px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 320px;
+    }
+
+    /* Melt / finish animations */
+    .finish .logo-inner-clip {
+      overflow: visible;
+    }
+
+    .finish .logo-wrap {
+      animation: meltLogo 1100ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+    }
+
+    .finish .logo {
+      animation: liquifyImage 1100ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+    }
+
+    .finish .glow {
+      animation: finishGlow 1100ms ease forwards;
+    }
+
+    .finish .drip.one {
+      animation: finishDrip 900ms cubic-bezier(0.34, 0.86, 0.42, 1) forwards;
+    }
+
+    .finish .drip.two {
+      animation: finishDrip 820ms cubic-bezier(0.34, 0.86, 0.42, 1) 90ms forwards;
+    }
+
+    .finish .puddle {
+      animation: finishPuddle 1100ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+
+    .finish .brand,
+    .finish .status {
+      animation: fadeDown 520ms ease forwards 560ms;
+    }
+
+    @keyframes floatLogo {
+      0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+      50% { transform: translateY(-7px) rotate(1.5deg) scale(1.02); }
+    }
+
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 0.58; transform: scale(0.96); }
+      50% { opacity: 0.86; transform: scale(1.05); }
+    }
+
+    @keyframes sheen {
+      0%, 38% { transform: translateX(-54%); opacity: 0; }
+      52% { opacity: 1; }
+      76%, 100% { transform: translateX(54%); opacity: 0; }
+    }
+
+    @keyframes idleDrip {
+      0% {
+        transform: translateY(-8px) scale(1.6, 0.4);
+        opacity: 0;
+      }
+      15% {
+        opacity: 1;
+        transform: translateY(-4px) scale(1.3, 0.8);
+      }
+      38% {
+        transform: translateY(10px) scale(0.7, 2.2);
+      }
+      44% {
+        transform: translateY(20px) scale(0.9, 1.3);
+      }
+      68% {
+        transform: translateY(38px) scale(0.95, 1.0);
+        opacity: 1;
+      }
+      74% {
+        transform: translateY(44px) scale(1.8, 0.3);
+        opacity: 0;
+      }
+      100% {
+        transform: translateY(44px) scale(1.8, 0.3);
+        opacity: 0;
+      }
+    }
+
+    @keyframes idlePuddle {
+      0%, 100% { transform: scaleX(0.92); opacity: 0.54; }
+      50% { transform: scaleX(1.18); opacity: 0.74; }
+    }
+
+    @keyframes meltLogo {
+      0% {
+        transform: translateY(0) scale(1);
+        border-radius: 22px;
+        opacity: 1;
+      }
+      25% {
+        transform: translateY(8px) scale(1.08, 0.88);
+        border-radius: 20px 20px 35px 35px;
+      }
+      55% {
+        transform: translateY(28px) scale(0.85, 0.65);
+        border-radius: 15px 15px 45px 45px;
+      }
+      80% {
+        transform: translateY(54px) scale(0.6, 0.35);
+        border-radius: 10px 10px 50px 50px;
+        opacity: 0.95;
+      }
+      100% {
+        transform: translateY(76px) scale(0.3, 0.05);
+        border-radius: 50%;
+        opacity: 0;
+      }
+    }
+
+    @keyframes liquifyImage {
+      0% { filter: saturate(1) blur(0px); transform: scale(1); }
+      50% { filter: saturate(1.25) blur(1.5px); transform: scale(1.05, 1.3) skewX(-3deg); }
+      100% { filter: saturate(1.35) blur(3px); transform: scale(0.9, 2.8); }
+    }
+
+    @keyframes finishDrip {
+      0% {
+        height: 13px;
+        transform: translateY(0) scale(1, 1);
+        opacity: 0.8;
+      }
+      30% {
+        height: 60px;
+        transform: translateY(0) scale(1.8, 1);
+        opacity: 1;
+      }
+      70% {
+        height: 90px;
+        transform: translateY(10px) scale(1.2, 1);
+        opacity: 0.9;
+      }
+      100% {
+        height: 10px;
+        transform: translateY(76px) scale(0.2, 0.2);
+        opacity: 0;
+      }
+    }
+
+    @keyframes finishPuddle {
+      0% {
+        width: 34px;
+        height: 8px;
+        opacity: 0.68;
+        transform: scale(1);
+      }
+      50% {
+        width: 140px;
+        height: 24px;
+        opacity: 1;
+        transform: scale(1.1);
+      }
+      80% {
+        width: 180px;
+        height: 28px;
+        opacity: 0.8;
+        transform: scale(1.2);
+      }
+      100% {
+        width: 220px;
+        height: 32px;
+        opacity: 0;
+        transform: scale(1.3) translateY(12px);
+      }
+    }
+
+    @keyframes finishGlow {
+      0% { opacity: 0.72; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.42, 0.4) translateY(54px); }
+    }
+
+    @keyframes fadeDown {
+      to { opacity: 0; transform: translateY(12px); }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="stage" aria-label="MuxMelt loading">
+      <div class="logo-scene" aria-hidden="true">
+        <div class="glow"></div>
+        <div class="liquid-container">
+          <div class="logo-wrap">
+            <div class="logo-inner-clip">
+              <!-- Inlined MuxMelt SVG Logo -->
+              <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+                <defs>
+                  <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#7b73ff"/>
+                    <stop offset="100%" style="stop-color:#5b4fd4"/>
+                  </linearGradient>
+                </defs>
+                <rect width="256" height="256" rx="48" fill="url(#bg)"/>
+                <!-- Anvil/forge shape -->
+                <path d="M80 170 L176 170 L190 190 L66 190 Z" fill="rgba(255,255,255,0.9)"/>
+                <rect x="108" y="100" width="40" height="70" rx="4" fill="rgba(255,255,255,0.9)"/>
+                <!-- Hammer -->
+                <rect x="90" y="62" width="76" height="30" rx="6" fill="white"/>
+                <rect x="124" y="50" width="8" height="16" rx="2" fill="rgba(255,255,255,0.7)"/>
+                <!-- Sparks -->
+                <circle cx="72" cy="80" r="4" fill="#fbbf24"/>
+                <circle cx="62" cy="68" r="3" fill="#fbbf24" opacity="0.7"/>
+                <circle cx="184" cy="80" r="4" fill="#fbbf24"/>
+                <circle cx="194" cy="68" r="3" fill="#fbbf24" opacity="0.7"/>
+                <circle cx="76" cy="56" r="2.5" fill="#fbbf24" opacity="0.5"/>
+                <circle cx="180" cy="56" r="2.5" fill="#fbbf24" opacity="0.5"/>
+              </svg>
+            </div>
+          </div>
+          <div class="drip one"></div>
+          <div class="drip two"></div>
+          <div class="puddle"></div>
+        </div>
+      </div>
+
+      <div class="brand">
+        <h1 class="name">MuxMelt</h1>
+        <p class="tagline">Media tools starting up</p>
+      </div>
+
+      <section class="status" aria-live="polite">
+        <div id="statusText">Preparing MuxMelt</div>
+        <div id="detailText">Loading required components</div>
+      </section>
+    </section>
+  </main>
+
+  <!-- SVG Gooey Filter -->
+  <svg xmlns="http://www.w3.org/2000/svg" version="1.1" style="display: none;">
+    <defs>
+      <filter id="goo">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
+        <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -8" result="goo" />
+        <feBlend in="SourceGraphic" in2="goo" />
+      </filter>
+    </defs>
+  </svg>
+
+  <script>
+    let finishPromise = null;
+
+    window.setSplashProgress = ({ status, detail }) => {
+      if (status) document.getElementById('statusText').textContent = status;
+      document.getElementById('detailText').textContent = detail || 'Loading required components';
+    };
+
+    window.playSplashFinish = () => {
+      if (finishPromise) return finishPromise;
+
+      document.getElementById('statusText').textContent = 'Ready';
+      document.getElementById('detailText').textContent = 'Opening workspace';
+      document.body.classList.add('finish');
+
+      finishPromise = new Promise((resolve) => {
+        window.setTimeout(resolve, 1180);
+      });
+
+      return finishPromise;
+    };
+  </script>
+</body>
+</html>

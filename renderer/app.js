@@ -6,7 +6,8 @@
 let pythonPort = null;
 let currentToolId = null;
 let currentToolModule = null;
-let vramInterval = null;
+let _vramTimer = null;
+let _vramFailCount = 0;
 
 // DOM elements
 const toolContent = document.getElementById('toolContent');
@@ -265,8 +266,10 @@ window.calculateETA = function(batchStartTime, totalFiles, files) {
   const elapsed = (Date.now() - batchStartTime) / 1000;
   if (elapsed < 2) return 'ETA: calculating...';
   const completedFiles = files.filter(f => f.state === 'complete' || f.state === 'error' || f.state === 'cancelled').length;
-  const current = files.find(f => f.state === 'processing');
-  const effectiveCompleted = completedFiles + (current ? (current.progress || 0) : 0);
+  const processingProgress = files
+    .filter(f => f.state === 'processing')
+    .reduce((sum, f) => sum + (f.progress || 0), 0);
+  const effectiveCompleted = completedFiles + processingProgress;
   if (effectiveCompleted < 0.05) return 'ETA: calculating...';
   const remaining = totalFiles - effectiveCompleted;
   const eta = Math.max(0, Math.round((elapsed / effectiveCompleted) * remaining));
@@ -497,16 +500,32 @@ window.saveAllSettings = (settings) => window.api.saveSettings(settings);
 // ============================================================================
 
 function startGpuPolling() {
-  if (vramInterval) return;
-  vramInterval = setInterval(pollGpuStats, 3000);
-  pollGpuStats();
+  if (_vramTimer !== null) return;
+  _scheduleVramPoll(0);
+}
+
+function _scheduleVramPoll(delayMs) {
+  _vramTimer = setTimeout(async () => {
+    _vramTimer = null;
+    await pollGpuStats();
+  }, delayMs);
 }
 
 async function pollGpuStats() {
   try {
-    const resp = await fetch(`http://127.0.0.1:${pythonPort}/vram`);
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 4000);
+    const resp = await fetch(`http://127.0.0.1:${pythonPort}/vram`, { signal: controller.signal });
+    clearTimeout(tid);
     const data = await resp.json();
-    if (!data.available) return;
+
+    _vramFailCount = 0;
+
+    if (!data.available) {
+      gpuStats.classList.remove('active');
+      _scheduleVramPoll(3000);
+      return;
+    }
 
     gpuStats.classList.add('active');
 
@@ -518,7 +537,7 @@ async function pollGpuStats() {
     }
 
     if (data.temperature != null) {
-      gpuTempStat.textContent = `${data.temperature}\u00B0C`;
+      gpuTempStat.textContent = `${data.temperature}°C`;
       gpuTempStat.className = 'gpu-stat';
       if (data.temperature > 85) gpuTempStat.classList.add('danger');
       else if (data.temperature > 75) gpuTempStat.classList.add('warn');
@@ -533,27 +552,34 @@ async function pollGpuStats() {
       if (memPct > 90) gpuMemStat.classList.add('danger');
       else if (memPct > 75) gpuMemStat.classList.add('warn');
     }
-  } catch (err) {
-    // GPU polling unavailable — hide stats silently
+
+    _scheduleVramPoll(3000);
+  } catch {
+    _vramFailCount++;
     gpuStats.classList.remove('active');
+    // Exponential backoff: 3 s -> 6 s -> 12 s -> ... capped at 60 s
+    const backoff = Math.min(3000 * (2 ** (_vramFailCount - 1)), 60000);
+    _scheduleVramPoll(backoff);
   }
 }
 
+
+
 function checkHealth() {
-  fetch(`http://127.0.0.1:${pythonPort}/health`)
-    .then(r => r.json())
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 8000);
+  fetch(`http://127.0.0.1:${pythonPort}/health`, { signal: controller.signal })
+    .then(r => { clearTimeout(tid); return r.json(); })
     .then(data => {
       const hasGpu = data.device === 'cuda' || data.device === 'mps';
       gpuBadge.textContent = hasGpu ? data.gpu_name || 'GPU Active' : 'CPU Mode (slower)';
       gpuBadge.style.borderColor = hasGpu ? '#4ade80' : '#fbbf24';
-      // log(`Device: ${data.device.toUpperCase()}`, hasGpu ? 'success' : 'warn'); // Removed
-      // if (data.gpu_name) log(`GPU: ${data.gpu_name}`); // Removed
       if (!hasGpu) {
         log('No GPU detected — processing will be slower. An NVIDIA GPU with CUDA or Apple Silicon is recommended.', 'warn');
       }
-      // if (data.python_version) log(`Python ${data.python_version}`); // Removed
     })
     .catch(() => {
+      clearTimeout(tid);
       gpuBadge.textContent = 'Backend Error';
       gpuBadge.style.borderColor = '#f87171';
       log('Failed to reach backend', 'error');
@@ -565,6 +591,7 @@ function checkHealth() {
 // ============================================================================
 
 const toolRegistry = {};
+const toolCache = {};
 
 function registerTool(id, module) {
   toolRegistry[id] = module;
@@ -582,10 +609,7 @@ async function loadTool(toolId) {
   // Guard against concurrent loads from rapid clicks
   _loadingToolId = toolId;
 
-  // Cleanup current tool
-  if (currentToolModule && currentToolModule.cleanup) {
-    currentToolModule.cleanup();
-  }
+  const previousToolId = currentToolId;
   currentToolModule = null;
 
   // Update sidebar
@@ -594,7 +618,6 @@ async function loadTool(toolId) {
   });
 
   currentToolId = toolId;
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
   renderLogEntries(toolId);
 
   // Update window title
@@ -604,50 +627,72 @@ async function loadTool(toolId) {
   // Load tool CSS
   toolStylesheet.href = `tools/${toolId}/${toolId}.css`;
 
+  if (toolCache[toolId]?.container) {
+    toolContent.replaceChildren(toolCache[toolId].container);
+    currentToolModule = toolCache[toolId].module || toolRegistry[toolId] || null;
+    saveGlobalSettings();
+    return;
+  }
+
   // Load tool HTML
+  const container = document.createElement('div');
+  container.className = 'tool-instance';
+  container.dataset.tool = toolId;
+
   try {
     const resp = await fetch(`tools/${toolId}/${toolId}.html`);
     if (!resp.ok) throw new Error('not found');
     const html = await resp.text();
-    toolContent.innerHTML = html;
+    container.innerHTML = html;
+    toolCache[toolId] = {
+      ...(toolCache[toolId] || {}),
+      container,
+      module: null,
+    };
+    if (_loadingToolId !== toolId) return;
+    toolContent.replaceChildren(container);
   } catch {
     toolContent.innerHTML = `
       <div class="tool-placeholder">
         <div class="tool-placeholder-icon">&#128679;</div>
         <div class="tool-placeholder-text">This tool is coming soon</div>
       </div>`;
+    currentToolId = previousToolId;
     saveGlobalSettings();
     return;
   }
 
   // Load and execute tool JS
   try {
-    // Remove old tool script if any
-    const oldScript = document.getElementById('toolScript');
-    if (oldScript) oldScript.remove();
+    const existingScript = document.getElementById(`toolScript-${toolId}`);
 
-    const script = document.createElement('script');
-    script.id = 'toolScript';
-    script.src = `tools/${toolId}/${toolId}.js`;
-    document.body.appendChild(script);
+    if (!existingScript) {
+      const script = document.createElement('script');
+      script.id = `toolScript-${toolId}`;
+      script.src = `tools/${toolId}/${toolId}.js`;
+      document.body.appendChild(script);
 
-    // Wait for script to register and init
-    await new Promise((resolve) => {
-      script.onload = () => {
+      // Wait for script to register.
+      await new Promise((resolve) => {
+        script.onload = resolve;
+        script.onerror = resolve;
+      });
+    }
+
+    // Initialize the tool once. Its state and DOM stay cached across navigation
+    // until the user clears the tool from inside that module.
+    if (toolRegistry[toolId]) {
+      currentToolModule = toolRegistry[toolId];
+      toolCache[toolId].module = currentToolModule;
+      if (!toolCache[toolId].initialized && currentToolModule.init) {
         // Abort if another tool was requested while loading
-        if (_loadingToolId !== toolId) { resolve(); return; }
-        if (toolRegistry[toolId]) {
-          currentToolModule = toolRegistry[toolId];
-          if (currentToolModule.init) {
-            const toolLog = (message, level = 'info') => log(message, level, toolId);
-            const toolClearLog = () => clearLog(toolId);
-            currentToolModule.init({ pythonPort, log: toolLog, escapeHtml, clearLog: toolClearLog });
-          }
-        }
-        resolve();
-      };
-      script.onerror = resolve;
-    });
+        if (_loadingToolId !== toolId) return;
+        const toolLog = (message, level = 'info') => log(message, level, toolId);
+        const toolClearLog = () => clearLog(toolId);
+        currentToolModule.init({ pythonPort, log: toolLog, escapeHtml, clearLog: toolClearLog });
+        toolCache[toolId].initialized = true;
+      }
+    }
   } catch (e) {
     log(`Failed to load tool: ${toolId}`, 'error');
   }
@@ -697,6 +742,12 @@ async function init() {
     log(`Python backend crashed (exit code ${code})`, 'error');
   });
 
+  // Sidebar shortcuts button
+  const shortcutsBtn = document.getElementById('shortcutsBtn');
+  if (shortcutsBtn) {
+    shortcutsBtn.addEventListener('click', toggleShortcutsOverlay);
+  }
+
   // Sidebar donate button
   const sidebarDonateBtn = document.getElementById('sidebarDonateBtn');
   if (sidebarDonateBtn) {
@@ -728,13 +779,19 @@ const updateBannerText = document.getElementById('updateBannerText');
 const updateDownloadBtn = document.getElementById('updateDownloadBtn');
 const updateRestartBtn = document.getElementById('updateRestartBtn');
 const updateDismiss = document.getElementById('updateDismiss');
+let pendingUpdateInfo = null;
 
 if (window.api.onUpdateAvailable) {
   window.api.onUpdateAvailable((info) => {
+    pendingUpdateInfo = info;
     if (updateBanner && updateBannerText && updateDownloadBtn) {
-      updateBannerText.textContent = `A new version (v${info.version}) is available!`;
+      updateBannerText.textContent = info.isLocal
+        ? `A new local version (v${info.version}) is available!`
+        : `A new version (v${info.version}) is available!`;
       updateBanner.style.display = 'flex';
       updateDownloadBtn.style.display = 'inline-block';
+      updateDownloadBtn.disabled = false;
+      updateDownloadBtn.textContent = info.isLocal ? 'Install' : 'Download';
       updateRestartBtn.style.display = 'none';
     }
     log(`Update available: ${info.version}`, 'info');
@@ -743,6 +800,7 @@ if (window.api.onUpdateAvailable) {
 
 if (window.api.onUpdateDownloaded) {
   window.api.onUpdateDownloaded((info) => {
+    pendingUpdateInfo = info;
     if (updateBanner && updateBannerText && updateDownloadBtn && updateRestartBtn) {
       updateBannerText.textContent = `Version ${info.version} is ready to install.`;
       updateDownloadBtn.style.display = 'none';
@@ -769,10 +827,20 @@ if (window.api.onUpdateError) {
 }
 
 if (updateDownloadBtn) {
-  updateDownloadBtn.addEventListener('click', () => {
-    window.api.downloadUpdate();
+  updateDownloadBtn.addEventListener('click', async () => {
     updateDownloadBtn.disabled = true;
-    updateDownloadBtn.textContent = 'Downloading...';
+    updateDownloadBtn.textContent = pendingUpdateInfo && pendingUpdateInfo.isLocal ? 'Installing...' : 'Downloading...';
+
+    if (pendingUpdateInfo && pendingUpdateInfo.isLocal && pendingUpdateInfo.installerPath) {
+      await window.api.downloadAndUpdate(pendingUpdateInfo.installerPath);
+      return;
+    }
+
+    const result = await window.api.downloadUpdate();
+    if (result && result.error) {
+      updateDownloadBtn.disabled = false;
+      updateDownloadBtn.textContent = 'Retry';
+    }
   });
 }
 

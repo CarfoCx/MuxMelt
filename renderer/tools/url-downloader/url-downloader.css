@@ -27,13 +27,49 @@
   font-size: 13px;
 }
 
-.add-url-btn {
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  font-size: 24px;
-  line-height: 1;
-  flex: 0 0 auto;
+.add-url-row-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 42px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s ease-in-out;
+  margin-top: 4px;
+  outline: none;
+}
+
+.add-url-row-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  box-shadow: 0 2px 8px var(--accent-glow);
+  transform: translateY(-1px);
+}
+
+.add-url-row-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.add-url-row-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.add-icon {
+  flex-shrink: 0;
+  transition: transform 0.2s ease-in-out;
+}
+
+.add-url-row-btn:hover:not(:disabled) .add-icon {
+  transform: rotate(90deg);
 }
 
 .url-list-header {
@@ -153,17 +189,26 @@
 
 .url-progress {
   grid-column: 1 / -1;
-  height: 6px;
-  border-radius: 999px;
+  height: 16px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
 }
 
 .url-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
   height: 100%;
   width: 0%;
   background: var(--accent);
   transition: width 0.15s ease;
+  z-index: 1;
 }
 
 .url-progress-fill.complete {
@@ -174,12 +219,35 @@
   background: var(--error);
 }
 
+.url-progress-text {
+  position: relative;
+  z-index: 2;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
 .url-settings {
   margin-top: 0;
   padding: 10px 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.url-quality-select {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  height: 30px;
 }
 
 .output-dir-btn {

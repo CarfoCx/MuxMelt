@@ -155,6 +155,9 @@ function handleComplete(data) {
     if (!outputDir) outputDir = dir;
     openOutputBtn.style.display = '';
     log(`Audio saved: ${data.output}`, 'success');
+    if (window.showCompletionToast) window.showCompletionToast(`Audio saved: ${data.output.split(/[\\/]/).pop()}`, false, [data.output]);
+    if (window.addRecentFile) window.addRecentFile(data.output);
+    if (window.autoOpenOutputIfEnabled && outputDir) window.autoOpenOutputIfEnabled(outputDir);
   }
   
   showAudioResult(data.output, isActuallyPreview);

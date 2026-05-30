@@ -3,6 +3,17 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+
+function atomicWriteSync(filePath, data) {
+  const tmp = filePath + '.mmtmp';
+  try {
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
 const { spawn } = require('child_process');
 const { PDFDocument } = require('pdf-lib');
 const { validateOutputDir, validateOutputName, formatToolError } = require('./path-utils');
@@ -167,7 +178,7 @@ async function runPythonPdfEdit(pythonInfo, options) {
       });
     });
   } finally {
-    fs.unlink(jobPath, () => {});
+    try { fs.unlinkSync(jobPath); } catch {}
   }
 
   const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -263,11 +274,15 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     try {
       const pdfBytes = fs.readFileSync(inputPath);
       const doc = await PDFDocument.load(pdfBytes);
+      const pageCount = doc.getPageCount();
+      if (pageIndex < 0 || pageIndex >= pageCount) {
+        return { success: false, error: `Invalid page index ${pageIndex}. PDF has ${pageCount} page(s).` };
+      }
       const page = doc.getPage(pageIndex);
       const currentRotation = page.getRotation().angle;
       page.setRotation({ angle: (currentRotation + degrees) % 360 });
       const newBytes = await doc.save();
-      fs.writeFileSync(inputPath, newBytes);
+      atomicWriteSync(inputPath, newBytes);
       return { success: true };
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
@@ -280,12 +295,16 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     try {
       const pdfBytes = fs.readFileSync(inputPath);
       const doc = await PDFDocument.load(pdfBytes);
-      if (doc.getPageCount() <= 1) {
+      const pageCount = doc.getPageCount();
+      if (pageCount <= 1) {
         return { success: false, error: 'Cannot delete the only page in a PDF.' };
+      }
+      if (pageIndex < 0 || pageIndex >= pageCount) {
+        return { success: false, error: `Invalid page index ${pageIndex}. PDF has ${pageCount} page(s).` };
       }
       doc.removePage(pageIndex);
       const newBytes = await doc.save();
-      fs.writeFileSync(inputPath, newBytes);
+      atomicWriteSync(inputPath, newBytes);
       return { success: true };
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
@@ -312,7 +331,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       const copiedPages = await newDoc.copyPages(srcDoc, order);
       for (const page of copiedPages) newDoc.addPage(page);
       const newBytes = await newDoc.save();
-      fs.writeFileSync(inputPath, newBytes);
+      atomicWriteSync(inputPath, newBytes);
       return { success: true };
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
@@ -321,7 +340,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
   // ---- EDIT / SECURE REDACT ----
   ipcMain.handle('pdf-toolkit-edit', async (event, options = {}) => {
-    const { inputPath, outputDir, rects, covers, edits: textEdits } = options;
+    const { inputPath, originalPath, outputDir, rects, covers, edits: textEdits, highlights, paths, markups, notes, images, forms, links } = options;
     try {
       if (!inputPath || !fs.existsSync(inputPath)) {
         return { success: false, error: 'Select one PDF to edit or redact.' };
@@ -330,9 +349,12 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       if (win) {
         win.webContents.send('tool-progress', { tool: 'pdf-toolkit', percent: 0, status: 'Applying PDF edits...' });
       }
-      const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
+      // Name and locate the output from the user's ORIGINAL file, not the
+      // temp working copy the editor may be operating on.
+      const nameSource = (originalPath && fs.existsSync(originalPath)) ? originalPath : inputPath;
+      const outDir = validateOutputDir(outputDir) || path.dirname(nameSource);
       fs.mkdirSync(outDir, { recursive: true });
-      const baseName = path.basename(inputPath, '.pdf');
+      const baseName = path.basename(nameSource, '.pdf');
       const outputPath = path.join(outDir, `${baseName}_edited.pdf`);
 
       const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
@@ -344,6 +366,13 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         rects: rects || [],
         covers: covers || [],
         edits: textEdits || [],
+        highlights: highlights || [],
+        paths: paths || [],
+        markups: markups || [],
+        notes: notes || [],
+        images: images || [],
+        forms: forms || [],
+        links: links || [],
       });
 
       if (win) {
@@ -354,8 +383,82 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         success: true,
         output: result.output,
         redactions: result.redactions || 0,
+        widgetReplacements: result.widgetReplacements || 0,
+        textReplacements: result.textReplacements || 0,
         textEdits: result.textEdits || 0,
+        textOverflow: result.textOverflow || 0,
+        shapes: result.shapes || 0,
+        markups: result.markups || 0,
+        notes: result.notes || 0,
+        images: result.images || 0,
+        forms: result.forms || 0,
+        links: result.links || 0,
       };
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  // ---- PAGE OPERATIONS (rotate / delete / reorder / duplicate / insert / import / extract) ----
+  ipcMain.handle('pdf-toolkit-page-op', async (event, options = {}) => {
+    const { inputPath, originalPath, op } = options;
+    try {
+      if (!inputPath || !fs.existsSync(inputPath)) {
+        return { success: false, error: 'PDF file not found.' };
+      }
+      const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
+      const job = {
+        action: 'page_op',
+        inputPath,
+        op,
+        pages: options.pages,
+        order: options.order,
+        degrees: options.degrees,
+        afterPage: options.afterPage,
+        width: options.width,
+        height: options.height,
+        sourcePath: options.sourcePath,
+      };
+      if (op === 'extract') {
+        const nameSource = (originalPath && fs.existsSync(originalPath)) ? originalPath : inputPath;
+        const outDir = validateOutputDir(options.outputDir) || path.dirname(nameSource);
+        fs.mkdirSync(outDir, { recursive: true });
+        const safeName = validateOutputName(options.outputName) || `${path.basename(nameSource, '.pdf')}_pages.pdf`;
+        job.outputPath = path.join(outDir, safeName);
+      }
+      return await runPythonPdfEdit(pythonInfo, job);
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'PDF Toolkit') };
+    }
+  });
+
+  // ---- DOCUMENT OPERATIONS (metadata / security / watermark / stamp / flatten / compress / export) ----
+  ipcMain.handle('pdf-toolkit-document', async (event, options = {}) => {
+    const { inputPath, originalPath, outputDir, docOp } = options;
+    try {
+      if (!inputPath || !fs.existsSync(inputPath)) {
+        return { success: false, error: 'PDF file not found.' };
+      }
+      const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
+      const nameSource = (originalPath && fs.existsSync(originalPath)) ? originalPath : inputPath;
+      const outDir = validateOutputDir(outputDir) || path.dirname(nameSource);
+      const baseName = path.basename(nameSource, '.pdf');
+
+      const job = { action: 'document', inputPath, ...options };
+      delete job.originalPath;
+      delete job.outputDir;
+
+      const suffix = { compress: '_compressed', encrypt: '_protected', decrypt: '_unlocked' };
+      if (suffix[docOp]) {
+        fs.mkdirSync(outDir, { recursive: true });
+        job.outputPath = path.join(outDir, `${baseName}${suffix[docOp]}.pdf`);
+      } else if (docOp === 'export_images') {
+        const imgDir = path.join(outDir, `${baseName}_images`);
+        fs.mkdirSync(imgDir, { recursive: true });
+        job.outputDir = imgDir;
+        job.baseName = baseName;
+      }
+      return await runPythonPdfEdit(pythonInfo, job);
     } catch (err) {
       return { success: false, error: formatToolError(err, 'PDF Toolkit') };
     }

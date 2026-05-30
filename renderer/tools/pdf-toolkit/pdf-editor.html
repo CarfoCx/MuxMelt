@@ -24,13 +24,13 @@
       <div class="editor-toolbar-container">
         <div class="toolbar-group">
           <span class="group-label">General</span>
-          <button class="tool-btn active" data-tool="select" title="Select (S)">SEL</button>
+          <button class="tool-btn active" data-tool="select" title="Select (S) — click detected text to edit it">SEL</button>
           <button class="tool-btn" data-tool="hand" title="Hand (H)">HND</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
           <span class="group-label">Annotate</span>
-          <button class="tool-btn" data-tool="text" title="Add Text (T)">T</button>
+          <button class="tool-btn" data-tool="text" title="Add Text (T) — click on blank area">T+</button>
           <button class="tool-btn" data-tool="highlight" title="Highlight (L)">HI</button>
           <button class="tool-btn" data-tool="freehand" title="Signature/Draw (D)">SIG</button>
         </div>
@@ -53,6 +53,7 @@
       <div class="topbar-right">
         <div class="action-stack">
           <button class="btn btn-secondary btn-icon" id="undoBtn" title="Undo (Ctrl+Z)">UNDO</button>
+          <button class="btn btn-secondary btn-icon" id="redoBtn" title="Redo (Ctrl+Y)">REDO</button>
           <button class="btn btn-primary" id="saveBtn">Save PDF</button>
         </div>
       </div>

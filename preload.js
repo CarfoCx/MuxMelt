@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('api', {
   restartPython: () => ipcRenderer.invoke('restart-python'),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  downloadAndUpdate: (installerPath) => ipcRenderer.invoke('download-and-update', installerPath),
   restartToUpdate: () => ipcRenderer.invoke('restart-to-update'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   setProgress: (value) => ipcRenderer.invoke('set-progress', value),
@@ -62,12 +63,19 @@ contextBridge.exposeInMainWorld('api', {
     if (op === 'merge') return ipcRenderer.invoke('pdf-toolkit-merge', { inputPaths: options.files, outputDir: options.outputDir, outputName: options.outputName });
     if (op === 'split') return ipcRenderer.invoke('pdf-toolkit-split', { inputPath: options.files[0], outputDir: options.outputDir });
     if (op === 'extract') return ipcRenderer.invoke('pdf-toolkit-extract', { inputPath: options.files[0], outputDir: options.outputDir, pages: options.pageRange });
-    if (op === 'edit') return ipcRenderer.invoke('pdf-toolkit-edit', { inputPath: options.files[0], outputDir: options.outputDir, rects: options.rects, covers: options.covers, edits: options.edits });
+    if (op === 'edit') return ipcRenderer.invoke('pdf-toolkit-edit', { inputPath: options.files[0], originalPath: options.originalPath, outputDir: options.outputDir, rects: options.rects, covers: options.covers, edits: options.edits, highlights: options.highlights, paths: options.paths, markups: options.markups, notes: options.notes, images: options.images, forms: options.forms, links: options.links });
     if (op === 'render') return ipcRenderer.invoke('pdf-toolkit-render', { inputPath: options.files[0], dpi: options.dpi });
     if (op === 'text-map') return ipcRenderer.invoke('pdf-toolkit-text-map', { inputPath: options.files[0], ocr: options.ocr });
     if (op === 'rotate') return ipcRenderer.invoke('pdf-toolkit-rotate', { inputPath: options.inputPath, pageIndex: options.pageIndex, degrees: options.degrees });
     if (op === 'delete') return ipcRenderer.invoke('pdf-toolkit-delete', { inputPath: options.inputPath, pageIndex: options.pageIndex });
     if (op === 'reorder') return ipcRenderer.invoke('pdf-toolkit-reorder', { inputPath: options.inputPath, order: options.order });
+    if (op === 'page-op') return ipcRenderer.invoke('pdf-toolkit-page-op', {
+      inputPath: options.inputPath, originalPath: options.originalPath, op: options.pageOp,
+      pages: options.pages, order: options.order, degrees: options.degrees, afterPage: options.afterPage,
+      width: options.width, height: options.height, sourcePath: options.sourcePath,
+      outputDir: options.outputDir, outputName: options.outputName,
+    });
+    if (op === 'document') return ipcRenderer.invoke('pdf-toolkit-document', { inputPath: options.inputPath, originalPath: options.originalPath, outputDir: options.outputDir, ...options.params });
     return Promise.resolve({ success: false, error: 'Unknown operation' });
   },
   pdfInfo: (filePath) => ipcRenderer.invoke('pdf-toolkit-info', filePath),
@@ -88,12 +96,44 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   // Event listeners from main process
-  onPythonCrashed: (callback) => ipcRenderer.on('python-crashed', (_, code) => callback(code)),
-  onPythonLog: (callback) => ipcRenderer.on('python-log', (_, msg) => callback(msg)),
-  onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_, status) => callback(status)),
-  onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (_, info) => callback(info)),
-  onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', (_, info) => callback(info)),
-  onUpdateError: (callback) => ipcRenderer.on('update-error', (_, err) => callback(err)),
-  onUpdateDownloadProgress: (callback) => ipcRenderer.on('update-download-progress', (_, progress) => callback(progress)),
-  onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (_, info) => callback(info)),
+  onPythonCrashed: (callback) => {
+    const handler = (_, code) => callback(code);
+    ipcRenderer.on('python-crashed', handler);
+    return () => ipcRenderer.removeListener('python-crashed', handler);
+  },
+  onPythonLog: (callback) => {
+    const handler = (_, msg) => callback(msg);
+    ipcRenderer.on('python-log', handler);
+    return () => ipcRenderer.removeListener('python-log', handler);
+  },
+  onUpdateStatus: (callback) => {
+    const handler = (_, status) => callback(status);
+    ipcRenderer.on('update-status', handler);
+    return () => ipcRenderer.removeListener('update-status', handler);
+  },
+  onUpdateAvailable: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('update-available', handler);
+    return () => ipcRenderer.removeListener('update-available', handler);
+  },
+  onUpdateNotAvailable: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('update-not-available', handler);
+    return () => ipcRenderer.removeListener('update-not-available', handler);
+  },
+  onUpdateError: (callback) => {
+    const handler = (_, err) => callback(err);
+    ipcRenderer.on('update-error', handler);
+    return () => ipcRenderer.removeListener('update-error', handler);
+  },
+  onUpdateDownloadProgress: (callback) => {
+    const handler = (_, progress) => callback(progress);
+    ipcRenderer.on('update-download-progress', handler);
+    return () => ipcRenderer.removeListener('update-download-progress', handler);
+  },
+  onUpdateDownloaded: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('update-downloaded', handler);
+    return () => ipcRenderer.removeListener('update-downloaded', handler);
+  }
 });

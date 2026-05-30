@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 
 import torch
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from upscaler import Upscaler, CancellationError
@@ -116,8 +116,12 @@ def vram():
 
 
 @app.get('/shutdown')
-async def shutdown():
+async def shutdown(token: str = None):
     """Allow Electron to stop the local backend before quitting."""
+    expected_token = getattr(app.state, 'token', None)
+    if expected_token is not None and token != expected_token:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid token")
+
     async def stop_server():
         await asyncio.sleep(0.1)
         os._exit(0)
@@ -461,7 +465,10 @@ async def process_video(ws, file_path, output_path, scale, output_ext, profile):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MuxMelt Backend')
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--token', type=str, default=None)
     args = parser.parse_args()
+
+    app.state.token = args.token
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 

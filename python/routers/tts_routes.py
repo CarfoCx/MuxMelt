@@ -17,8 +17,13 @@ async def tts_ws(ws: WebSocket):
         while True:
             try:
                 data = await ws.receive_json()
+            except WebSocketDisconnect:
+                raise
             except Exception:
-                await ws.send_json({'type': 'error', 'error': 'Invalid message'})
+                try:
+                    await ws.send_json({'type': 'error', 'error': 'Invalid message'})
+                except (WebSocketDisconnect, RuntimeError):
+                    return
                 continue
             action = data.get('action')
 

@@ -58,11 +58,31 @@
 
     <div class="settings-row">
       <div class="settings-row-left">
+        <label>Disable GPU hardware acceleration (Windows)</label>
+        <div class="settings-hint">Turn off GPU acceleration if you experience UI rendering glitches (requires restart)</div>
+      </div>
+      <div class="settings-control">
+        <input type="checkbox" id="disableGpuCheck" class="settings-toggle">
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
         <label>Output filename pattern</label>
         <div class="settings-hint">Use {name}, {operation}, {date}, {time}. Leave blank for default.</div>
       </div>
       <div class="settings-control">
         <input type="text" id="filenamePattern" class="settings-input" placeholder="{name}_{operation}" style="width: 200px;">
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <div class="settings-row-left">
+        <label>Reset all settings</label>
+        <div class="settings-hint">Clears all preferences and restores defaults (output dirs, theme, etc.)</div>
+      </div>
+      <div class="settings-control">
+        <button class="btn btn-danger" id="resetAllSettingsBtn">Reset All</button>
       </div>
     </div>
 

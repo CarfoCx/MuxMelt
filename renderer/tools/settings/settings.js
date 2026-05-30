@@ -41,6 +41,9 @@ async function loadCurrentSettings() {
   // Overwrite confirmation
   document.getElementById('overwriteConfirmCheck').checked = !g.skipOverwriteConfirm;
 
+  // Disable GPU Check
+  document.getElementById('disableGpuCheck').checked = !!g.disableHardwareAcceleration;
+
   // Filename pattern
   document.getElementById('filenamePattern').value = g.filenamePattern || '';
 
@@ -121,6 +124,15 @@ function bindEvents() {
     all.global = all.global || {};
     all.global.skipOverwriteConfirm = !e.target.checked;
     await window.saveAllSettings(all);
+  });
+
+  // Disable GPU Check
+  document.getElementById('disableGpuCheck').addEventListener('change', async (e) => {
+    const all = await window.loadAllSettings();
+    all.global = all.global || {};
+    all.global.disableHardwareAcceleration = e.target.checked;
+    await window.saveAllSettings(all);
+    log(`GPU Hardware Acceleration preference updated (restart app to apply)`);
   });
 
   // Filename pattern
@@ -217,6 +229,29 @@ function bindEvents() {
     await window.saveAllSettings(all);
     log(`Default model profile set to ${e.target.value}`);
   });
+
+  // Reset all settings (double-click to confirm)
+  document.getElementById('resetAllSettingsBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('resetAllSettingsBtn');
+    if (!btn.dataset.confirming) {
+      btn.dataset.confirming = '1';
+      btn.textContent = 'Click again to confirm';
+      setTimeout(() => {
+        if (btn.dataset.confirming) {
+          delete btn.dataset.confirming;
+          btn.textContent = 'Reset All';
+        }
+      }, 3000);
+      return;
+    }
+    delete btn.dataset.confirming;
+    btn.textContent = 'Reset All';
+
+    await window.saveAllSettings({});
+    document.documentElement.setAttribute('data-theme', 'dark');
+    await loadCurrentSettings();
+    log('All settings reset to defaults', 'success');
+  });
 }
 
 async function loadSystemInfo() {
@@ -231,7 +266,10 @@ async function loadSystemInfo() {
   // Backend info
   try {
     const port = window.pythonPort || await window.api.getPythonPort();
-    const resp = await fetch(`http://127.0.0.1:${port}/health`);
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 5000);
+    const resp = await fetch(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
+    clearTimeout(tid);
     const data = await resp.json();
 
     document.getElementById('pythonVersion').textContent = data.python_version || '-';

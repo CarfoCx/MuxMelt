@@ -10,18 +10,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from modules.bg_remover import BGRemover
 from routers.validation import validate_output_dir
 
-remover = None
+remover = BGRemover()
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
 
 
-@asynccontextmanager
-async def bg_lifespan(app):
-    global remover
-    remover = BGRemover()
-    yield
-
-router = APIRouter(lifespan=bg_lifespan)
+router = APIRouter()
 
 
 @router.websocket('/ws')
@@ -31,14 +25,19 @@ async def bg_remover_ws(ws: WebSocket):
         while True:
             try:
                 data = await ws.receive_json()
+            except WebSocketDisconnect:
+                raise
             except Exception:
-                await ws.send_json({'type': 'error', 'error': 'Invalid message'})
+                try:
+                    await ws.send_json({'type': 'error', 'error': 'Invalid message'})
+                except (WebSocketDisconnect, RuntimeError):
+                    return
                 continue
             action = data.get('action')
 
             if action == 'remove':
                 remover.reset_cancel()
-                files = data['files']
+                files = data.get('files', [])
                 output_format = data.get('output_format', 'png')
                 output_dir = data.get('output_dir', '')
                 alpha_matting = bool(data.get('alpha_matting', False))
@@ -66,7 +65,7 @@ async def bg_remover_ws(ws: WebSocket):
                         def on_progress(pct, status, _fp=file_path):
                             progress_q.put_nowait((pct, status))
 
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
 
                         def _run_removal(_fp=file_path, _op=output_path, _cb=on_progress,
                                          _am=alpha_matting,

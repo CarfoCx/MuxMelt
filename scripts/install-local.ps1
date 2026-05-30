@@ -1,7 +1,49 @@
+param(
+  [string]$InstallDir
+)
+
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$target = Join-Path $env:LOCALAPPDATA 'Programs\MuxMelt'
+$defaultTarget = Join-Path $env:LOCALAPPDATA 'Programs\MuxMelt'
+
+function Select-InstallDirectory {
+  param([string]$DefaultPath)
+
+  try {
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = 'Choose where to install MuxMelt'
+    $dialog.ShowNewFolderButton = $true
+    if (Test-Path -LiteralPath $DefaultPath) {
+      $dialog.SelectedPath = $DefaultPath
+    } else {
+      $dialog.SelectedPath = Split-Path -Parent $DefaultPath
+    }
+
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {
+      $selected = $dialog.SelectedPath
+      if ((Split-Path -Leaf $selected) -ne 'MuxMelt') {
+        return (Join-Path $selected 'MuxMelt')
+      }
+      return $selected
+    }
+  } catch {
+    Write-Host "Could not open folder picker: $($_.Exception.Message)"
+  }
+
+  $typedPath = Read-Host "Install directory [$DefaultPath]"
+  if ([string]::IsNullOrWhiteSpace($typedPath)) {
+    return $DefaultPath
+  }
+  return $typedPath.Trim('"')
+}
+
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+  $InstallDir = Select-InstallDirectory -DefaultPath $defaultTarget
+}
+
+$target = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallDir)
 $electron = Join-Path $target 'node_modules\electron\dist\electron.exe'
 
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'node_modules\electron\dist\electron.exe'))) {

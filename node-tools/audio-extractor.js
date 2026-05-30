@@ -14,9 +14,10 @@ const AUDIO_CODECS = {
 };
 
 function registerIPC(ipcMain, getMainWindow) {
-  let activeCancel = null;
+  const activeCancels = new Map();
 
   ipcMain.handle('audio-extractor-extract', async (event, options) => {
+    const winId = event.sender.id;
     const {
       inputPath,
       outputDir,
@@ -114,10 +115,10 @@ function registerIPC(ipcMain, getMainWindow) {
       };
 
       const { promise, cancel } = ffmpeg.run({ args, durationSeconds: duration, onProgress });
-      activeCancel = cancel;
+      activeCancels.set(winId, cancel);
 
       await promise;
-      activeCancel = null;
+      activeCancels.delete(winId);
 
       // Get output file size
       let outputSize = 0;
@@ -139,15 +140,17 @@ function registerIPC(ipcMain, getMainWindow) {
         outputSize
       };
     } catch (err) {
-      activeCancel = null;
+      activeCancels.delete(winId);
       return { success: false, error: formatToolError(err, 'Audio Extractor') };
     }
   });
 
-  ipcMain.handle('audio-extractor-cancel', async () => {
-    if (activeCancel) {
-      activeCancel();
-      activeCancel = null;
+  ipcMain.handle('audio-extractor-cancel', async (event) => {
+    const winId = event.sender.id;
+    const cancel = activeCancels.get(winId);
+    if (cancel) {
+      cancel();
+      activeCancels.delete(winId);
       return { success: true };
     }
     return { success: false, error: 'No active extraction to cancel' };

@@ -24,11 +24,11 @@ jobs:
         include:
           - name: Windows x64
             os: windows-2025
-            command: npm run build:slim:win:x64
+            command: npm run build:web:win:x64
             files: |
-              dist/MuxMelt-Windows-Setup.exe
-              dist/MuxMelt-Windows-Setup.exe.blockmap
-              dist/latest.yml
+              dist/nsis-web/MuxMelt-Web-Installer.exe
+              dist/nsis-web/*.nsis.7z
+              dist/nsis-web/latest.yml
           - name: macOS Intel
             os: macos-15-intel
             command: npm run build:slim:mac:x64
@@ -97,14 +97,22 @@ jobs:
           : > "$checksum_file"
           if command -v shasum >/dev/null 2>&1; then
             while IFS= read -r file; do
-              if [ -n "$file" ] && [ -f "$file" ]; then
-                shasum -a 256 "$file" >> "$checksum_file"
+              if [ -n "$file" ]; then
+                for match in $file; do
+                  if [ -f "$match" ]; then
+                    shasum -a 256 "$match" >> "$checksum_file"
+                  fi
+                done
               fi
             done <<< "$FILES"
           else
             while IFS= read -r file; do
-              if [ -n "$file" ] && [ -f "$file" ]; then
-                sha256sum "$file" >> "$checksum_file"
+              if [ -n "$file" ]; then
+                for match in $file; do
+                  if [ -f "$match" ]; then
+                    sha256sum "$match" >> "$checksum_file"
+                  fi
+                done
               fi
             done <<< "$FILES"
           fi
@@ -118,8 +126,12 @@ jobs:
         shell: bash
         run: |
           while IFS= read -r file; do
-            if [ -n "$file" ] && [ -f "$file" ]; then
-              gh release upload "$RELEASE_TAG" "$file" --clobber
+            if [ -n "$file" ]; then
+              for match in $file; do
+                if [ -f "$match" ]; then
+                  gh release upload "$RELEASE_TAG" "$match" --clobber
+                fi
+              done
             fi
           done <<< "$FILES"
           gh release upload "$RELEASE_TAG" "$CHECKSUM_FILE" --clobber

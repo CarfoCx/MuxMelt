@@ -163,7 +163,7 @@ function registerIPC(ipcMain, getMainWindow) {
   });
 
   // ---- BATCH SCAN multiple images ----
-  let batchCancelled = false;
+  const cancelledWindows = new Set();
 
   ipcMain.handle('qr-studio-batch-scan', async (event, options) => {
     const { inputPaths } = options;
@@ -172,12 +172,16 @@ function registerIPC(ipcMain, getMainWindow) {
       return { success: false, error: 'No files provided' };
     }
 
-    batchCancelled = false;
+    const winId = event.sender.id;
+    cancelledWindows.delete(winId);
+
     const results = [];
     const total = inputPaths.length;
+    let isCancelled = false;
 
     for (let i = 0; i < total; i++) {
-      if (batchCancelled) {
+      if (cancelledWindows.has(winId)) {
+        isCancelled = true;
         results.push({ file: inputPaths[i], success: false, error: 'Cancelled' });
         continue;
       }
@@ -217,26 +221,28 @@ function registerIPC(ipcMain, getMainWindow) {
       }
     }
 
+    cancelledWindows.delete(winId);
+
     const win = getMainWindow();
     if (win) {
       win.webContents.send('tool-progress', {
         tool: 'qr-studio',
         percent: 100,
-        status: batchCancelled ? 'Cancelled' : 'Done'
+        status: isCancelled ? 'Cancelled' : 'Done'
       });
     }
 
     return {
       success: true,
-      cancelled: batchCancelled,
+      cancelled: isCancelled,
       results,
       found: results.filter(r => r.success).length,
       total
     };
   });
 
-  ipcMain.handle('qr-studio-cancel-batch', async () => {
-    batchCancelled = true;
+  ipcMain.handle('qr-studio-cancel-batch', async (event) => {
+    cancelledWindows.add(event.sender.id);
     return { success: true };
   });
 }

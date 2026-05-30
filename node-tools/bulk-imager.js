@@ -77,10 +77,28 @@ async function processImage(inputPath, outputPath, operation, operationOptions) 
       const meta = await sharp(inputPath).metadata();
       const imgWidth = meta.width;
       const imgHeight = meta.height;
-      const size = fontSize || Math.max(20, Math.round(imgWidth / 20));
-      const textColor = color || 'white';
-      const textOpacity = opacity != null ? opacity : 0.5;
-      const pad = margin || 20;
+
+      // Validate inputs to prevent SVG injection
+      const size = Number(fontSize || Math.max(20, Math.round(imgWidth / 20)));
+      if (!Number.isFinite(size) || size <= 0) {
+        throw new Error('Invalid font size');
+      }
+
+      const textColor = String(color || 'white');
+      const colorPattern = /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)$/;
+      if (!colorPattern.test(textColor)) {
+        throw new Error('Invalid color format');
+      }
+
+      const textOpacity = Number(opacity != null ? opacity : 0.5);
+      if (!Number.isFinite(textOpacity) || textOpacity < 0 || textOpacity > 1) {
+        throw new Error('Invalid opacity');
+      }
+
+      const pad = Number(margin != null ? margin : 20);
+      if (!Number.isFinite(pad) || pad < 0) {
+        throw new Error('Invalid margin');
+      }
 
       // Position calculation
       let x, y, anchor;
@@ -142,7 +160,7 @@ function escapeXml(str) {
 }
 
 function registerIPC(ipcMain, getMainWindow) {
-  let cancelled = false;
+  const cancelledWindows = new Set();
 
   ipcMain.handle('bulk-imager-process', async (event, options) => {
     const {
@@ -153,7 +171,8 @@ function registerIPC(ipcMain, getMainWindow) {
       outputFormat      // optional: 'png', 'jpg', 'webp', etc.
     } = options;
 
-    cancelled = false;
+    const winId = event.sender.id;
+    cancelledWindows.delete(winId);
 
     if (!files || files.length === 0) {
       return { success: false, error: 'No files provided' };
@@ -166,7 +185,8 @@ function registerIPC(ipcMain, getMainWindow) {
     const total = files.length;
 
     for (let i = 0; i < total; i++) {
-      if (cancelled) {
+      if (cancelledWindows.has(winId)) {
+        cancelledWindows.delete(winId);
         return { success: false, error: 'Operation cancelled', results };
       }
 
@@ -211,6 +231,8 @@ function registerIPC(ipcMain, getMainWindow) {
       });
     }
 
+    cancelledWindows.delete(winId);
+
     const succeeded = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
 
@@ -229,7 +251,8 @@ function registerIPC(ipcMain, getMainWindow) {
       outputFormat      // optional: 'png', 'jpg', 'webp', etc.
     } = options;
 
-    cancelled = false;
+    const winId = event.sender.id;
+    cancelledWindows.delete(winId);
 
     if (!files || files.length === 0) {
       return { success: false, error: 'No files provided' };
@@ -245,7 +268,8 @@ function registerIPC(ipcMain, getMainWindow) {
     const total = files.length;
 
     for (let i = 0; i < total; i++) {
-      if (cancelled) {
+      if (cancelledWindows.has(winId)) {
+        cancelledWindows.delete(winId);
         return { success: false, error: 'Operation cancelled', results };
       }
 
@@ -282,7 +306,7 @@ function registerIPC(ipcMain, getMainWindow) {
           const isLast = step === chain.length - 1;
           const stepOutput = isLast
             ? outputPath
-            : path.join(outDir, `_tmp_chain_${i}_${step}${outExt}`);
+            : path.join(outDir, `_tmp_chain_${process.pid}_${winId}_${i}_${step}${outExt}`);
 
           if (!isLast) tempFiles.push(stepOutput);
 
@@ -312,6 +336,8 @@ function registerIPC(ipcMain, getMainWindow) {
       });
     }
 
+    cancelledWindows.delete(winId);
+
     const succeeded = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
 
@@ -322,8 +348,8 @@ function registerIPC(ipcMain, getMainWindow) {
     };
   });
 
-  ipcMain.handle('bulk-imager-cancel', async () => {
-    cancelled = true;
+  ipcMain.handle('bulk-imager-cancel', async (event) => {
+    cancelledWindows.add(event.sender.id);
     return { success: true };
   });
 

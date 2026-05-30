@@ -75,6 +75,19 @@ class StemSeparator:
                 encoding='utf-8',
                 errors='replace',
             )
+
+            import queue
+            q = queue.Queue()
+
+            def read_stdout(stream, q):
+                for line in iter(stream.readline, ''):
+                    q.put(line)
+                stream.close()
+
+            t = threading.Thread(target=read_stdout, args=(process.stdout, q))
+            t.daemon = True
+            t.start()
+
             output_lines = []
             while True:
                 if self.cancel_event.is_set():
@@ -86,12 +99,27 @@ class StemSeparator:
                     raise RuntimeError('Cancelled')
 
                 try:
-                    stdout, _ = process.communicate(timeout=0.5)
-                    if stdout:
-                        output_lines.extend(line.rstrip() for line in stdout.splitlines())
-                    break
-                except subprocess.TimeoutExpired:
-                    pass
+                    line = q.get(timeout=0.1)
+                    line_str = line.strip()
+                    if line_str:
+                        output_lines.append(line_str)
+                        import re
+                        match = re.search(r'(\d+)%', line_str)
+                        if match and progress_callback:
+                            pct = int(match.group(1))
+                            overall_pct = 0.1 + (0.75 * pct / 100.0)
+                            progress_callback(overall_pct, f'Separating audio stems... {pct}%')
+                except queue.Empty:
+                    if process.poll() is not None:
+                        while not q.empty():
+                            try:
+                                line = q.get_nowait()
+                                line_str = line.strip()
+                                if line_str:
+                                    output_lines.append(line_str)
+                            except queue.Empty:
+                                break
+                        break
 
             if process.returncode != 0:
                 details = '\n'.join(output_lines[-12:]).strip()

@@ -3,7 +3,11 @@
   "version": "1.2.4",
   "description": "All-in-one media toolkit with MuxMelt PDF editor",
   "main": "main.js",
-  "author": "Chad",
+  "author": "Carfo Industries",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CarfoCx/MuxMelt.git"
+  },
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -13,9 +17,11 @@
     "build:full:win": "npm run build:nexus && node build/prepare-python.js full && electron-builder --win --publish never",
     "build:full:mac": "npm run build:nexus && node build/prepare-python.js full && electron-builder --mac --publish never",
     "build:slim:win": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --win --config build/slim.json --publish never",
+    "build:web:win": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --win --config build/web.json --publish never",
     "build:slim:mac": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --mac --config build/slim.json --publish never",
     "build:linux": "npm run build:nexus && node build/prepare-python.js slim && electron-builder --linux --config build/slim.json --publish never",
     "build:slim:win:x64": "npm run build:nexus && node build/prepare-python.js slim --arch=x64 && electron-builder --win --x64 --config build/slim.json --publish never",
+    "build:web:win:x64": "npm run build:nexus && node build/prepare-python.js slim --arch=x64 && electron-builder --win --x64 --config build/web.json --publish never",
     "build:slim:mac:x64": "npm run build:nexus && node build/prepare-python.js slim --arch=x64 && electron-builder --mac --x64 --config build/slim.json --publish never",
     "build:slim:mac:arm64": "npm run build:nexus && node build/prepare-python.js slim --arch=arm64 && electron-builder --mac --arm64 --config build/slim.json --publish never",
     "build:linux:x64": "npm run build:nexus && node build/prepare-python.js slim --arch=x64 && electron-builder --linux --x64 --config build/slim.json --publish never"
@@ -73,11 +79,19 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "CarfoCx",
+        "repo": "MuxMelt"
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",
       "setup-preload.js",
       "package.json",
+      "build/icon.png",
       "renderer/**/*",
       "node-tools/**/*",
       "python/**/*",
@@ -86,6 +100,7 @@
       "!**/*.pyc"
     ],
     "asarUnpack": [
+      "node_modules/sharp/**",
       "node_modules/@img/**",
       "python/**"
     ],
@@ -108,11 +123,19 @@
     "win": {
       "signAndEditExecutable": false,
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "build/icon.png"
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
       "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MuxMelt",
+      "menuCategory": "MuxMelt",
+      "runAfterFinish": true,
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp",
       "artifactName": "MuxMelt-Windows-Setup.${ext}"
     }
   }

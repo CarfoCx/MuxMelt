@@ -323,11 +323,12 @@ class Upscaler:
 
     def _get_optimal_tile_size(self, scale):
         """Choose tile size based on available VRAM and scale factor."""
-        if self.device == 'cuda':
-            return 192 if scale == 4 else 256
         if self.device == 'mps':
             # MPS has unified memory; use moderate tile sizes
             return 384 if scale == 4 else 512
+        if self.device != 'cuda' or self._vram_total == 0:
+            return 192 if scale == 4 else 256
+
         vram_gb = self._vram_total / (1024 ** 3)
         if scale == 4:
             if vram_gb >= 10:
@@ -349,8 +350,6 @@ class Upscaler:
             if vram_gb >= 4:
                 return 384
             return 256  # 2-3GB VRAM
-        # CPU fallback
-        return 192 if scale == 4 else 256
 
     def get_vram_info(self):
         """Return current GPU stats via NVML, or None if on CPU."""
@@ -389,7 +388,13 @@ class Upscaler:
                 result['temperature'] = None
         else:
             result['total'] = self._vram_total
-            result['used'] = torch.cuda.memory_allocated(0)
+            if self.device == 'mps':
+                try:
+                    result['used'] = torch.mps.current_allocated_memory()
+                except Exception:
+                    result['used'] = 0
+            else:
+                result['used'] = torch.cuda.memory_allocated(0)
             result['free'] = self._vram_total - result['used']
             result['gpu_util'] = None
             result['mem_util'] = None
@@ -611,7 +616,7 @@ class Upscaler:
                 '-qscale:v', '2',
                 '-vsync', '0',
                 os.path.join(frames_dir, 'frame_%08d.jpg')
-            ], capture_output=True)
+            ], capture_output=True, timeout=3600)
 
             if result.returncode != 0:
                 stderr = result.stderr.decode('utf-8', errors='replace')
@@ -669,7 +674,7 @@ class Upscaler:
                 cmd.extend(['-c:v', 'libx264', '-crf', '18', '-preset', 'medium'])
 
             cmd.append(output_path)
-            result = subprocess.run(cmd, capture_output=True)
+            result = subprocess.run(cmd, capture_output=True, timeout=3600)
 
             if result.returncode != 0:
                 stderr = result.stderr.decode('utf-8', errors='replace')

@@ -1,7 +1,6 @@
 import asyncio
 import os
 import queue as thread_queue
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -9,18 +8,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from modules.stem_separator import StemSeparator
 from routers.validation import validate_output_dir
 
+separator = StemSeparator()
 
-separator = None
-
-
-@asynccontextmanager
-async def stem_lifespan(app):
-    global separator
-    separator = StemSeparator()
-    yield
-
-router = APIRouter(lifespan=stem_lifespan)
-
+router = APIRouter()
 
 AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.ogg', '.aac', '.m4a', '.wma'}
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.webm'}
@@ -33,8 +23,13 @@ async def stem_separator_ws(ws: WebSocket):
         while True:
             try:
                 data = await ws.receive_json()
+            except WebSocketDisconnect:
+                raise
             except Exception:
-                await ws.send_json({'type': 'error', 'error': 'Invalid message'})
+                try:
+                    await ws.send_json({'type': 'error', 'error': 'Invalid message'})
+                except (WebSocketDisconnect, RuntimeError):
+                    return
                 continue
 
             action = data.get('action')
@@ -74,7 +69,7 @@ async def stem_separator_ws(ws: WebSocket):
                         def on_progress(pct, status, _fp=file_path):
                             progress_q.put_nowait((pct, status))
 
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         task = loop.run_in_executor(
                             None, separator.separate,
                             file_path, out_dir, model, stems, on_progress

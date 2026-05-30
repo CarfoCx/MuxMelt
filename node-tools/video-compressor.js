@@ -12,9 +12,10 @@ const VALID_PRESETS = [
 ];
 
 function registerIPC(ipcMain, getMainWindow) {
-  let activeCancel = null;
+  const activeCancels = new Map();
 
   ipcMain.handle('video-compressor-compress', async (event, options) => {
+    const winId = event.sender.id;
     const {
       inputPath,
       outputDir,
@@ -135,9 +136,9 @@ function registerIPC(ipcMain, getMainWindow) {
         };
 
         const { promise, cancel } = ffmpeg.run({ args, durationSeconds: duration, onProgress });
-        activeCancel = cancel;
+        activeCancels.set(winId, cancel);
         await promise;
-        activeCancel = null;
+        activeCancels.delete(winId);
       };
 
       if (twoPass) {
@@ -176,9 +177,9 @@ function registerIPC(ipcMain, getMainWindow) {
         };
 
         const pass1 = ffmpeg.run({ args: pass1Args, durationSeconds: duration, onProgress: onPass1Progress });
-        activeCancel = pass1.cancel;
+        activeCancels.set(winId, pass1.cancel);
         await pass1.promise;
-        activeCancel = null;
+        activeCancels.delete(winId);
 
         // --- Pass 2: encode ---
         if (win) {
@@ -222,9 +223,9 @@ function registerIPC(ipcMain, getMainWindow) {
         };
 
         const pass2 = ffmpeg.run({ args: pass2Args, durationSeconds: duration, onProgress: onPass2Progress });
-        activeCancel = pass2.cancel;
+        activeCancels.set(winId, pass2.cancel);
         await pass2.promise;
-        activeCancel = null;
+        activeCancels.delete(winId);
 
         if (win) {
           win.webContents.send('tool-progress', {
@@ -328,18 +329,22 @@ function registerIPC(ipcMain, getMainWindow) {
         savedPercent: parseFloat(savedPercent)
       };
     } catch (err) {
-      activeCancel = null;
+      activeCancels.delete(winId);
       if (tempOutputPath) {
         try { fs.unlinkSync(tempOutputPath); } catch {}
       }
       return { success: false, error: formatToolError(err, 'Video Compressor') };
+    } finally {
+      activeCancels.delete(winId);
     }
   });
 
-  ipcMain.handle('video-compressor-cancel', async () => {
-    if (activeCancel) {
-      activeCancel();
-      activeCancel = null;
+  ipcMain.handle('video-compressor-cancel', async (event) => {
+    const winId = event.sender.id;
+    const cancel = activeCancels.get(winId);
+    if (cancel) {
+      cancel();
+      activeCancels.delete(winId);
       return { success: true };
     }
     return { success: false, error: 'No active compression to cancel' };

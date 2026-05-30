@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const { validateOutputDir, formatToolError } = require('./path-utils');
 
 function defaultOutputDir() {
@@ -113,8 +113,37 @@ function shouldRetryWithImpersonation(error) {
     message.includes('forbidden') ||
     message.includes('http error 404') ||
     message.includes('http error 410') ||
+    message.includes('http error 503') ||
     message.includes('cloudflare') ||
+    message.includes('just a moment') ||      // Cloudflare challenge page title
+    message.includes('challenge') ||
+    message.includes('unable to download webpage') ||
     message.includes('impersonat');
+}
+
+function hasPythonModule(pythonInfo, moduleName) {
+  try {
+    execFileSync(pythonInfo.cmd, [
+      ...(pythonInfo.args || []),
+      '-c',
+      `import ${moduleName}`
+    ], { stdio: 'ignore', timeout: 10000, windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installYtDlpImpersonationDeps(pythonInfo) {
+  execFileSync(pythonInfo.cmd, [
+    ...(pythonInfo.args || []),
+    '-m',
+    'pip',
+    'install',
+    '--upgrade',
+    'yt-dlp[default,curl-cffi]',
+    '--no-warn-script-location'
+  ], { stdio: 'pipe', timeout: 300000, windowsHide: true });
 }
 
 function formatDownloadError(err, url) {
@@ -136,18 +165,34 @@ function formatDownloadError(err, url) {
 function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
   const args = [
     ...(pythonInfo.args || []),
+    '-u',
     '-m', 'yt_dlp',
     '--newline',
     '--no-color',
     '--no-playlist',
-    '--merge-output-format', 'mp4',
     '--paths', outDir,
     '-o', '%(title).200B [%(id)s].%(ext)s',
-    '--print', 'after_move:filepath',
+    '--exec', 'echo {}',
   ];
+
+  const format = options.format || 'best';
+  if (format === 'audioonly') {
+    args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
+  } else if (format === '1080p') {
+    args.push('-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]', '--merge-output-format', 'mp4');
+  } else if (format === '720p') {
+    args.push('-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]', '--merge-output-format', 'mp4');
+  } else {
+    args.push('--merge-output-format', 'mp4');
+  }
 
   if (options.impersonate) {
     args.push('--impersonate', 'chrome');
+    // Sites behind Cloudflare that fall through to the generic extractor return
+    // a 403 anti-bot challenge on the *page* fetch. Impersonating the download
+    // client alone doesn't clear it — the generic extractor must impersonate
+    // when fetching the webpage. This is yt-dlp's own recommended fix.
+    args.push('--extractor-args', 'generic:impersonate');
   }
 
   args.push(...buildRequestHeaders(url, options));
@@ -155,10 +200,27 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
   return args;
 }
 
+function describeYtDlpStage(line, modeLabel) {
+  if (/^\[download\]\s+Destination:/i.test(line)) {
+    return `${modeLabel}Download started. Saving file...`;
+  }
+  if (/^\[download\]\s+100%/i.test(line)) {
+    return `${modeLabel}Download received. Finalizing file...`;
+  }
+  if (/^\[info\]/i.test(line) || /^\[[^\]]+\]\s+.+?:\s+Downloading webpage/i.test(line)) {
+    return `${modeLabel}Fetching video info...`;
+  }
+  if (/^\[[^\]]+\]\s+.+?:\s+Downloading/i.test(line)) {
+    return `${modeLabel}Site accepted request. Preparing download...`;
+  }
+  return '';
+}
+
 function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
-  let activeProcess = null;
+  const activeProcessesByWindow = new Map();
 
   ipcMain.handle('url-downloader-download', async (event, options = {}) => {
+    const winId = event.sender.id;
     const url = String(options.url || '').trim();
 
     try {
@@ -188,13 +250,23 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       let stderr = '';
       let outputPath = '';
 
-      const runDownload = (args, statusPrefix = '') => new Promise((resolve, reject) => {
+      const runDownload = (args, options = {}) => new Promise((resolve, reject) => {
+        const statusPrefix = options.statusPrefix || '';
+        const modeLabel = options.modeLabel ? `${options.modeLabel} | ` : '';
+        let lastStageStatus = '';
         const proc = spawn(pythonInfo.cmd, args, {
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            PYTHONUNBUFFERED: '1'
+          },
           windowsHide: true
         });
 
-        activeProcess = proc;
+        if (!activeProcessesByWindow.has(winId)) {
+          activeProcessesByWindow.set(winId, new Set());
+        }
+        activeProcessesByWindow.get(winId).add(proc);
 
         const handleLine = (line) => {
           const trimmed = line.trim();
@@ -204,9 +276,21 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           const destination = extractDestination(trimmed);
           if (destination) outputPath = destination;
 
-          // --print after_move:filepath prints a plain final path.
+          const stageStatus = describeYtDlpStage(trimmed, modeLabel);
+          if (stageStatus && stageStatus !== lastStageStatus && win) {
+            lastStageStatus = stageStatus;
+            win.webContents.send('tool-progress', {
+              tool: 'url-downloader',
+              url,
+              type: 'start',
+              progress: Math.max(0.02, options.minProgress || 0),
+              status: stageStatus
+            });
+          }
+
+          // Extract final output path.
           if (!trimmed.startsWith('[') && /[\\/]/.test(trimmed)) {
-            outputPath = trimmed;
+            outputPath = trimmed.replace(/^"+|"+$/g, '');
           }
 
           if (progress && win) {
@@ -237,9 +321,20 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           text.split(/\r?\n|\r/).forEach(handleLine);
         });
 
-        proc.on('error', (err) => reject(err));
+        proc.on('error', (err) => {
+          const procs = activeProcessesByWindow.get(winId);
+          if (procs) {
+            procs.delete(proc);
+            if (procs.size === 0) activeProcessesByWindow.delete(winId);
+          }
+          reject(err);
+        });
         proc.on('close', (code) => {
-          activeProcess = null;
+          const procs = activeProcessesByWindow.get(winId);
+          if (procs) {
+            procs.delete(proc);
+            if (procs.size === 0) activeProcessesByWindow.delete(winId);
+          }
           if (code === 0) resolve();
           else {
             const combined = `${stderr}\n${stdout}`.trim();
@@ -253,22 +348,39 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         });
       });
 
+      const format = String(options.format || 'best');
       try {
-        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir));
+        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, { format }));
       } catch (err) {
         if (!shouldRetryWithImpersonation(err)) throw err;
+        if (!hasPythonModule(pythonInfo, 'curl_cffi')) {
+          if (win) {
+            win.webContents.send('tool-progress', {
+              tool: 'url-downloader',
+              url,
+              type: 'start',
+              status: 'Installing browser impersonation support...'
+            });
+          }
+          installYtDlpImpersonationDeps(pythonInfo);
+        }
         if (win) {
           win.webContents.send('tool-progress', {
             tool: 'url-downloader',
             url,
             type: 'start',
-            status: 'Site blocked the standard request. Retrying with browser impersonation...'
+            progress: 0.02,
+            status: 'Standard request blocked. Browser impersonation is active...'
           });
         }
         stdout = '';
         stderr = '';
         outputPath = '';
-        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, { impersonate: true }), 'Browser mode | ');
+        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, { impersonate: true, format }), {
+          statusPrefix: 'Browser mode | ',
+          modeLabel: 'Browser mode',
+          minProgress: 0.02
+        });
       }
 
       if (!outputPath) {
@@ -294,7 +406,6 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       return { success: true, output: outputPath, outputDir: outDir };
     } catch (err) {
-      activeProcess = null;
       if ((err.message || '').toLowerCase().includes('no module named')) {
         return { success: false, error: 'yt-dlp is not installed in Python. Run setup again or install Python dependencies from python/requirements.txt.' };
       }
@@ -305,10 +416,14 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     }
   });
 
-  ipcMain.handle('url-downloader-cancel', async () => {
-    if (activeProcess) {
-      try { activeProcess.kill('SIGTERM'); } catch {}
-      activeProcess = null;
+  ipcMain.handle('url-downloader-cancel', async (event) => {
+    const winId = event.sender.id;
+    const procs = activeProcessesByWindow.get(winId);
+    if (procs && procs.size > 0) {
+      for (const proc of procs) {
+        try { proc.kill('SIGTERM'); } catch {}
+      }
+      activeProcessesByWindow.delete(winId);
       return { success: true };
     }
     return { success: false, error: 'No active URL download to cancel' };
