@@ -8,6 +8,7 @@ let outputDir = '';
 let isProcessing = false;
 let ws = null;
 let pythonPort = null;
+let pythonToken = null;
 let log = null;
 
 let reconnectDelay = 1000;
@@ -50,6 +51,7 @@ const ENGLISH_VOICE_PRESETS = [
 
 function init(ctx) {
   pythonPort = ctx.pythonPort;
+  pythonToken = ctx.pythonToken;
   log = ctx.log;
 
   ttsText = document.getElementById('ttsText');
@@ -82,7 +84,7 @@ function cleanup() {
 
 // ---- WebSocket ----
 function connectWebSocket(port) {
-  ws = new WebSocket(`ws://127.0.0.1:${port}/tts/ws`);
+  ws = new WebSocket(`ws://127.0.0.1:${port}/tts/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
     // if (statusText) statusText.textContent = 'Connected to backend';

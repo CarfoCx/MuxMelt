@@ -1,16 +1,22 @@
 const { ipcMain, dialog, shell, Notification, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
 const { execSync } = require('child_process');
 
+const IMAGE_PREVIEW_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif'
+]);
+
 function registerIpcHandlers(options) {
-  const { 
-    getMainWindow, 
-    scanFolder, 
-    getPythonPort, 
-    loadSettings, 
-    saveSettings, 
-    restartPythonCallback 
+  const {
+    getMainWindow,
+    scanFolder,
+    getPythonPort,
+    getPythonToken,
+    loadSettings,
+    saveSettings,
+    restartPythonCallback
   } = options;
 
   ipcMain.handle('select-output-dir', async () => {
@@ -39,7 +45,7 @@ function registerIpcHandlers(options) {
       title: 'Select Folder to Scan'
     });
     if (result.canceled) return [];
-    const files = scanFolder(result.filePaths[0]);
+    const files = await scanFolder(result.filePaths[0]);
     const mainWindow = getMainWindow();
     if (files.length >= 1000 && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('python-log', 'Warning: folder scan hit 1000 file limit. Some files may not be shown.');
@@ -48,6 +54,8 @@ function registerIpcHandlers(options) {
   });
 
   ipcMain.handle('get-python-port', () => getPythonPort());
+
+  ipcMain.handle('get-python-token', () => (getPythonToken ? getPythonToken() : null));
 
   ipcMain.handle('open-external', async (event, url) => {
     if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
@@ -108,7 +116,7 @@ function registerIpcHandlers(options) {
       try {
         const stat = fs.statSync(p);
         if (stat.isDirectory()) {
-          results.push(...scanFolder(p));
+          results.push(...await scanFolder(p));
         } else if (stat.isFile()) {
           results.push(p);
         }
@@ -121,13 +129,20 @@ function registerIpcHandlers(options) {
 
   ipcMain.handle('read-image-preview', async (event, filePath) => {
     try {
-      if (!filePath || !fs.existsSync(filePath)) return null;
-      const ext = path.extname(filePath).slice(1).toLowerCase() || 'png';
-      const mime = ext === 'jpg' ? 'jpeg' : ext;
-      const data = fs.readFileSync(filePath).toString('base64');
-      return `data:image/${mime};base64,${data}`;
+      if (typeof filePath !== 'string' || !filePath) return null;
+      const resolved = path.resolve(filePath);
+      const ext = path.extname(resolved).toLowerCase();
+      // Only ever expose image files — never read arbitrary paths back to the
+      // renderer, and never read non-image content.
+      if (!IMAGE_PREVIEW_EXTS.has(ext)) return null;
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) return null;
+      // Serve via file:// (allowed by the CSP img-src) rather than encoding the
+      // whole file as base64 over IPC — avoids ~33% bloat and a synchronous
+      // main-process read, and no file bytes ever transit the IPC channel.
+      return pathToFileURL(resolved).href;
     } catch (err) {
-      console.warn(`Failed to read image preview ${filePath}: ${err.message}`);
+      console.warn(`Failed to resolve image preview ${filePath}: ${err.message}`);
       return null;
     }
   });
@@ -199,9 +214,21 @@ function registerIpcHandlers(options) {
     }
   });
 
+  let cachedAppVersion = null;
   ipcMain.handle('get-app-version', () => {
+    if (cachedAppVersion !== null) return cachedAppVersion;
+
     const pkg = require('../../package.json');
     const baseVersion = pkg.version;
+
+    // In a packaged build there is no git repo (and git may not be installed),
+    // so don't spawn git at all. Only enrich with build metadata in dev, and
+    // compute it once per process rather than shelling out on every call.
+    if (app.isPackaged) {
+      cachedAppVersion = baseVersion;
+      return cachedAppVersion;
+    }
+
     const appDir = path.join(__dirname, '..', '..');
     try {
       const hash = execSync('git rev-parse --short HEAD', {
@@ -213,9 +240,11 @@ function registerIpcHandlers(options) {
       const dirty = execSync('git status --porcelain', {
         cwd: appDir, encoding: 'utf-8', timeout: 3000
       }).trim();
-      return `${baseVersion} (build ${count}, ${hash})${dirty ? ' *' : ''}`;
-    } catch {}
-    return baseVersion;
+      cachedAppVersion = `${baseVersion} (build ${count}, ${hash})${dirty ? ' *' : ''}`;
+    } catch {
+      cachedAppVersion = baseVersion;
+    }
+    return cachedAppVersion;
   });
 }
 

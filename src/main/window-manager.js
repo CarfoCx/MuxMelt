@@ -1,4 +1,4 @@
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, shell } = require('electron');
 const path = require('path');
 
 let mainWindow = null;
@@ -111,6 +111,23 @@ function createWindow(appDir) {
     icon: path.join(appDir, 'build', 'icon.png'),
     show: false
   });
+
+  // The app is a single local page that swaps tool HTML in-place via fetch; it
+  // never legitimately navigates the top frame or opens new windows. Deny both
+  // so injected markup or a stray link can't repoint the app or spawn a
+  // node-less child window. External http(s) links open in the real browser.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  const blockOffAppNavigation = (event, url) => {
+    if (!url.startsWith('file://')) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    }
+  };
+  mainWindow.webContents.on('will-navigate', blockOffAppNavigation);
+  mainWindow.webContents.on('will-redirect', blockOffAppNavigation);
 
   mainWindow.loadFile(path.join(appDir, 'renderer', 'index.html'));
   mainWindow.setMenuBarVisibility(false);

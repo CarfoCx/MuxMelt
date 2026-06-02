@@ -161,13 +161,14 @@ function startPythonServer(options, SHUTDOWN_TOKEN, getMainWindow) {
     }
   });
 
-  return waitForServer();
+  return waitForServer(SHUTDOWN_TOKEN);
 }
 
-function waitForServer(retries = 90) {
+function waitForServer(SHUTDOWN_TOKEN, retries = 90) {
+  const tokenQuery = SHUTDOWN_TOKEN ? `?token=${encodeURIComponent(SHUTDOWN_TOKEN)}` : '';
   return new Promise((resolve, reject) => {
     const check = (attempt) => {
-      const req = http.get(`http://127.0.0.1:${PYTHON_PORT}/health`, (res) => {
+      const req = http.get(`http://127.0.0.1:${PYTHON_PORT}/health${tokenQuery}`, (res) => {
         resolve();
       });
       req.on('error', () => {
@@ -203,17 +204,28 @@ function killPython(SHUTDOWN_TOKEN, immediate = false) {
 
     const forceKill = () => {
       try {
-        if (!proc.killed) {
-          if (process.platform !== 'win32') {
-            proc.kill('SIGTERM');
-            setTimeout(() => {
-              try {
-                if (!proc.killed) proc.kill('SIGKILL');
-              } catch {}
-            }, 1000);
-          } else {
-            proc.kill();
+        if (proc.killed || proc.exitCode !== null) return;
+        if (process.platform === 'win32') {
+          // proc.kill() only signals the direct child. uvicorn/torch worker
+          // processes (and any ffmpeg the backend spawns) would be orphaned,
+          // holding the port and VRAM. taskkill /T tears down the whole tree.
+          if (proc.pid) {
+            try {
+              spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
+                stdio: 'ignore',
+                windowsHide: true
+              });
+            } catch {
+              proc.kill();
+            }
           }
+        } else {
+          proc.kill('SIGTERM');
+          setTimeout(() => {
+            try {
+              if (!proc.killed) proc.kill('SIGKILL');
+            } catch {}
+          }, 1000);
         }
       } catch {}
     };

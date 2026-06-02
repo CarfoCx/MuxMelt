@@ -30,6 +30,7 @@ let modelProfile = persistedState.modelProfile || 'general';
 let ws = null;
 let isProcessing = !!persistedState.isProcessing;
 let pythonPort = null;
+let pythonToken = null;
 let log = null;
 
 // ETA tracking
@@ -59,6 +60,7 @@ let _resizeHandler = null;
 
 function init(ctx) {
   pythonPort = ctx.pythonPort;
+  pythonToken = ctx.pythonToken;
   log = ctx.log;
 
   // Bind DOM elements
@@ -211,7 +213,7 @@ function saveSettings() {
 
 // ---- ffmpeg check ----
 function checkFfmpeg() {
-  fetch(`http://127.0.0.1:${pythonPort}/health`)
+  fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`)
     .then(r => r.json())
     .then(data => {
       if (!data.ffmpeg) {
@@ -430,7 +432,7 @@ function bindEvents() {
 
 // ---- WebSocket ----
 function connectWebSocket(port) {
-  ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
     // Removed technical logs

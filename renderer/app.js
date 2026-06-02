@@ -4,6 +4,7 @@
 // ============================================================================
 
 let pythonPort = null;
+let pythonToken = null;
 let currentToolId = null;
 let currentToolModule = null;
 let _vramTimer = null;
@@ -515,7 +516,7 @@ async function pollGpuStats() {
   try {
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 4000);
-    const resp = await fetch(`http://127.0.0.1:${pythonPort}/vram`, { signal: controller.signal });
+    const resp = await fetch(`http://127.0.0.1:${pythonPort}/vram?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal });
     clearTimeout(tid);
     const data = await resp.json();
 
@@ -568,7 +569,7 @@ async function pollGpuStats() {
 function checkHealth() {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), 8000);
-  fetch(`http://127.0.0.1:${pythonPort}/health`, { signal: controller.signal })
+  fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal })
     .then(r => { clearTimeout(tid); return r.json(); })
     .then(data => {
       const hasGpu = data.device === 'cuda' || data.device === 'mps';
@@ -600,6 +601,7 @@ function registerTool(id, module) {
 // Make this available globally so tool scripts can self-register
 window.registerTool = registerTool;
 window.pythonPort = null; // will be set during init
+window.pythonToken = null; // will be set during init
 
 let _loadingToolId = null;
 
@@ -689,7 +691,7 @@ async function loadTool(toolId) {
         if (_loadingToolId !== toolId) return;
         const toolLog = (message, level = 'info') => log(message, level, toolId);
         const toolClearLog = () => clearLog(toolId);
-        currentToolModule.init({ pythonPort, log: toolLog, escapeHtml, clearLog: toolClearLog });
+        currentToolModule.init({ pythonPort, pythonToken, log: toolLog, escapeHtml, clearLog: toolClearLog });
         toolCache[toolId].initialized = true;
       }
     }
@@ -734,6 +736,8 @@ async function init() {
 
   pythonPort = await window.api.python.getPythonPort();
   window.pythonPort = pythonPort;
+  pythonToken = await window.api.python.getPythonToken();
+  window.pythonToken = pythonToken;
 
   checkHealth();
   startGpuPolling();

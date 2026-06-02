@@ -128,6 +128,42 @@ function shouldRetryWithImpersonation(error) {
     message.includes('private video');
 }
 
+const IMPERSONATION_BROWSERS = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'];
+// Cap how many browser-cookie attempts we make. Each spawns yt-dlp and can
+// stall on a locked cookie DB (e.g. the browser is running), so trying all
+// seven is slow; the selected browser plus a couple of common fallbacks covers
+// the realistic cases.
+const MAX_BROWSER_COOKIE_ATTEMPTS = 3;
+
+/**
+ * Build the ordered, bounded list of impersonation retry attempts.
+ * Returns descriptors like { impersonate, cookieBrowser? , cookiesFile? }.
+ * - A cookies file (if provided) is the single most reliable option, so it is
+ *   used alone.
+ * - Otherwise: impersonation without cookies first, then the user-selected
+ *   browser, then a bounded set of other browsers.
+ */
+function orderedImpersonationAttempts(options, cap = MAX_BROWSER_COOKIE_ATTEMPTS) {
+  const cookiesFile = options.cookiesFile && typeof options.cookiesFile === 'string'
+    ? options.cookiesFile.trim()
+    : '';
+  if (cookiesFile) {
+    return [{ impersonate: true, cookiesFile }];
+  }
+
+  const attempts = [{ impersonate: true }];
+  const selected = options.cookieBrowser;
+  const ordered = [];
+  if (selected && IMPERSONATION_BROWSERS.includes(selected)) ordered.push(selected);
+  for (const b of IMPERSONATION_BROWSERS) {
+    if (b !== selected) ordered.push(b);
+  }
+  for (const b of ordered.slice(0, Math.max(0, cap))) {
+    attempts.push({ impersonate: true, cookieBrowser: b });
+  }
+  return attempts;
+}
+
 function hasPythonModule(pythonInfo, moduleName) {
   try {
     execFileSync(pythonInfo.cmd, [
@@ -494,7 +530,20 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
               status: 'Installing browser impersonation support...'
             });
           }
-          installYtDlpImpersonationDeps(pythonInfo);
+          try {
+            installYtDlpImpersonationDeps(pythonInfo);
+          } catch (installErr) {
+            // No network or a read-only install — don't abort. Impersonation may
+            // already be available, or the retries will surface a clear error.
+            if (win) {
+              win.webContents.send('tool-progress', {
+                tool: 'url-downloader',
+                url,
+                type: 'start',
+                status: 'Could not install impersonation support; trying anyway...'
+              });
+            }
+          }
         }
 
         const baseConfig = {
@@ -503,57 +552,17 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           cookiesFile: cookiesFile || undefined
         };
 
-        let retryConfigs = [];
-        if (cookiesFile) {
-          retryConfigs.push({
-            ...baseConfig,
-            impersonate: true,
-            cookiesFile,
-            statusMsg: 'Standard request blocked. Browser impersonation with cookies file is active...',
-            label: 'Cookies mode'
-          });
-        } else {
-          const selectedBrowser = options.cookieBrowser;
-          
-          retryConfigs.push({
-            ...baseConfig,
-            impersonate: true,
-            statusMsg: 'Standard request blocked. Browser impersonation is active...',
-            label: 'Browser mode'
-          });
-
-          const browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'];
-          if (selectedBrowser && browsers.includes(selectedBrowser)) {
-            retryConfigs.push({
-              ...baseConfig,
-              impersonate: true,
-              cookieBrowser: selectedBrowser,
-              statusMsg: `Retrying with ${selectedBrowser} browser cookies...`,
-              label: `Browser mode (${selectedBrowser})`
-            });
-            for (const b of browsers) {
-              if (b !== selectedBrowser) {
-                retryConfigs.push({
-                  ...baseConfig,
-                  impersonate: true,
-                  cookieBrowser: b,
-                  statusMsg: `Retrying with ${b} browser cookies...`,
-                  label: `Browser mode (${b})`
-                });
-              }
-            }
-          } else {
-            for (const b of browsers) {
-              retryConfigs.push({
-                ...baseConfig,
-                impersonate: true,
-                cookieBrowser: b,
-                statusMsg: `Retrying with ${b} browser cookies...`,
-                label: `Browser mode (${b})`
-              });
-            }
-          }
-        }
+        const retryConfigs = orderedImpersonationAttempts(options).map((attempt) => {
+          const label = attempt.cookiesFile
+            ? 'Cookies mode'
+            : (attempt.cookieBrowser ? `Browser mode (${attempt.cookieBrowser})` : 'Browser mode');
+          const statusMsg = attempt.cookiesFile
+            ? 'Standard request blocked. Browser impersonation with cookies file is active...'
+            : (attempt.cookieBrowser
+              ? `Retrying with ${attempt.cookieBrowser} browser cookies...`
+              : 'Standard request blocked. Browser impersonation is active...');
+          return { ...baseConfig, ...attempt, statusMsg, label };
+        });
 
         let lastRetryErr = null;
         for (const config of retryConfigs) {
@@ -719,25 +728,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         }
       }
 
-      const cookiesFile = options.cookiesFile;
-      let retryConfigs = [];
-      if (cookiesFile) {
-        retryConfigs.push({ impersonate: true, cookiesFile });
-      } else {
-        const selectedBrowser = options.cookieBrowser;
-        retryConfigs.push({ impersonate: true });
-        const browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'];
-        if (selectedBrowser && browsers.includes(selectedBrowser)) {
-          retryConfigs.push({ impersonate: true, cookieBrowser: selectedBrowser });
-          for (const b of browsers) {
-            if (b !== selectedBrowser) retryConfigs.push({ impersonate: true, cookieBrowser: b });
-          }
-        } else {
-          for (const b of browsers) {
-            retryConfigs.push({ impersonate: true, cookieBrowser: b });
-          }
-        }
-      }
+      const retryConfigs = orderedImpersonationAttempts(options);
 
       let lastErr = err;
       for (const config of retryConfigs) {
@@ -779,4 +770,4 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   });
 }
 
-module.exports = { registerIPC, buildYtDlpArgs };
+module.exports = { registerIPC, buildYtDlpArgs, orderedImpersonationAttempts };

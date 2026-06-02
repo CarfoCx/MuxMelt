@@ -13,6 +13,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from server_auth import TokenAuthMiddleware
 from upscaler import Upscaler, CancellationError
 
 upscaler = None
@@ -25,7 +26,12 @@ async def lifespan(app):
     upscaler = Upscaler()
     yield
 
+AUTH_TOKEN = None  # set from --token in __main__; gates every request when present
+
 app = FastAPI(title='MuxMelt Backend', lifespan=lifespan)
+# Added before CORS so CORS ends up the OUTER layer (reverse of add order):
+# preflight/headers are handled by CORS, then the token gate runs.
+app.add_middleware(TokenAuthMiddleware, get_token=lambda: AUTH_TOKEN)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r'^https?://(localhost|127\.0\.0\.1)(:\d+)?$',
@@ -475,6 +481,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     app.state.token = args.token
+    AUTH_TOKEN = args.token
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 

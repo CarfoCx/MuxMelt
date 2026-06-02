@@ -266,9 +266,10 @@ async function loadSystemInfo() {
   // Backend info
   try {
     const port = window.pythonPort || await window.api.python.getPythonPort();
+    const token = window.pythonToken || await window.api.python.getPythonToken();
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
+    const resp = await fetch(`http://127.0.0.1:${port}/health?token=${encodeURIComponent(token || '')}`, { signal: controller.signal });
     clearTimeout(tid);
     const data = await resp.json();
 

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('api', {
 
   python: {
     getPythonPort: () => ipcRenderer.invoke('get-python-port'),
+    getPythonToken: () => ipcRenderer.invoke('get-python-token'),
     restartPython: () => ipcRenderer.invoke('restart-python'),
     onPythonCrashed: (callback) => {
       const handler = (_, code) => callback(code);

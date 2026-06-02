@@ -22,6 +22,7 @@ const {
   getPythonInfo
 } = require('./src/main/python-manager');
 const { runSlimSetup, needsSlimSetup } = require('./src/main/setup-manager');
+const { scanFolder } = require('./src/main/folder-scan');
 
 const SHUTDOWN_TOKEN = crypto.randomBytes(32).toString('hex');
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
@@ -108,37 +109,6 @@ function clearChromiumGpuCaches() {
   }
 }
 
-const SUPPORTED_EXTS = new Set([
-  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif',
-  '.mp4', '.avi', '.mkv', '.mov', '.webm'
-]);
-
-function scanFolder(dir, maxFiles = 1000) {
-  const results = [];
-  function walk(d) {
-    if (results.length >= maxFiles) return;
-    try {
-      const entries = fs.readdirSync(d, { withFileTypes: true });
-      for (const entry of entries) {
-        if (results.length >= maxFiles) return;
-        const fullPath = path.join(d, entry.name);
-        if (entry.isDirectory()) {
-          walk(fullPath);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          if (SUPPORTED_EXTS.has(ext)) {
-            results.push(fullPath);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`Failed to scan directory ${d}: ${err.message}`);
-    }
-  }
-  walk(dir);
-  return results;
-}
-
 function sendUpdateEvent(channel, payload) {
   const mw = getMainWindow();
   if (mw && !mw.isDestroyed()) mw.webContents.send(channel, payload);
@@ -163,10 +133,25 @@ async function restartPythonCallback() {
   }
 }
 
+// Only allow a single running instance. A second launch would spawn a second
+// backend and could race the first on the per-user slim-Python setup directory.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
+app.on('second-instance', () => {
+  const mw = getMainWindow();
+  if (mw && !mw.isDestroyed()) {
+    if (mw.isMinimized()) mw.restore();
+    mw.focus();
+  }
+});
+
 registerIpcHandlers({
   getMainWindow,
   scanFolder,
   getPythonPort,
+  getPythonToken: () => SHUTDOWN_TOKEN,
   loadSettings,
   saveSettings,
   restartPythonCallback
@@ -186,7 +171,14 @@ app.whenReady().then(async () => {
     await createSplashWindow(__dirname);
     updateSplash(8, 'Preparing MuxMelt');
     await delay(100);
-    clearChromiumGpuCaches();
+    // Only clear the Chromium GPU/shader caches when the user has opted in (or
+    // disabled hardware acceleration because of GPU trouble). Doing it on every
+    // launch threw away the shader cache and slowed cold starts.
+    const startupSettings = loadSettings();
+    const startupGlobal = startupSettings.global || {};
+    if (startupGlobal.disableHardwareAcceleration || startupGlobal.clearGpuCacheOnStart) {
+      clearChromiumGpuCaches();
+    }
 
     if (needsSlimSetup(IS_SLIM, SLIM_PYTHON_EXE)) {
       updateSplash(15, 'Preparing first-time setup');

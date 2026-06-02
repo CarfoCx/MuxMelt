@@ -2,8 +2,11 @@ const { autoUpdater } = require('electron-updater');
 const { app, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const https = require('https');
 const { spawn } = require('child_process');
+
+const ALLOWED_INSTALLER_EXTS = new Set(['.exe', '.dmg', '.pkg', '.appimage', '.zip']);
 
 let isUpdateReady = false;
 
@@ -28,6 +31,58 @@ function compareVersions(v1, v2) {
     if ((p1[i] || 0) < (p2[i] || 0)) return -1;
   }
   return 0;
+}
+
+// Re-derive the installer to run from the trusted version.json inside the
+// user-configured update folder. Never trust a path handed in by the renderer:
+// validate containment (no traversal out of the folder), a newer version, and
+// an allowed installer extension. Returns { installerPath, sha256, version }.
+function resolveTrustedLocalInstaller(updateFolder, currentVersion) {
+  if (!updateFolder || !fs.existsSync(updateFolder)) {
+    throw new Error('No local update folder is configured.');
+  }
+  const versionPath = path.join(updateFolder, 'version.json');
+  if (!fs.existsSync(versionPath)) {
+    throw new Error('No version.json found in the update folder.');
+  }
+  const info = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+  if (!info || !info.version || !info.installer) {
+    throw new Error('version.json is missing version/installer fields.');
+  }
+  if (compareVersions(String(info.version), String(currentVersion)) <= 0) {
+    throw new Error(`Update folder version ${info.version} is not newer than ${currentVersion}.`);
+  }
+
+  const folderResolved = path.resolve(updateFolder);
+  const installerResolved = path.resolve(updateFolder, info.installer);
+  const rel = path.relative(folderResolved, installerResolved);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error('Installer path escapes the update folder.');
+  }
+
+  const ext = path.extname(installerResolved).toLowerCase();
+  if (!ALLOWED_INSTALLER_EXTS.has(ext)) {
+    throw new Error(`Installer has a disallowed extension: ${ext || '(none)'}`);
+  }
+  if (!fs.existsSync(installerResolved) || !fs.statSync(installerResolved).isFile()) {
+    throw new Error('Installer file not found in update folder.');
+  }
+
+  return {
+    installerPath: installerResolved,
+    sha256: info.sha256 ? String(info.sha256).toLowerCase() : null,
+    version: String(info.version)
+  };
+}
+
+function hashFile(filePath) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => h.update(chunk));
+    stream.on('end', () => resolve(h.digest('hex')));
+  });
 }
 
 function checkForUpdates(sendUpdateEvent) {
@@ -192,14 +247,29 @@ function registerUpdaterIpcHandlers(sendUpdateEvent) {
     autoUpdater.quitAndInstall();
   });
 
-  ipcMain.handle('download-and-update', async (event, installerPath) => {
-    if (!installerPath || !fs.existsSync(installerPath)) {
-      throw new Error('Installer not found at ' + installerPath);
+  ipcMain.handle('download-and-update', async (event, requestedPath) => {
+    const pkg = require('../../package.json');
+    const settings = loadSettings();
+    const updateFolder = settings.global && settings.global.updateFolderPath;
+
+    // Authoritatively resolve the installer from the trusted version.json.
+    // The renderer cannot make us launch an arbitrary executable.
+    const { installerPath, sha256 } = resolveTrustedLocalInstaller(updateFolder, pkg.version);
+
+    if (requestedPath && path.resolve(requestedPath) !== installerPath) {
+      throw new Error('Requested installer does not match the trusted update folder.');
+    }
+
+    // Integrity check when version.json publishes a hash.
+    if (sha256) {
+      const actual = (await hashFile(installerPath)).toLowerCase();
+      if (actual !== sha256) {
+        throw new Error('Installer failed integrity check (SHA-256 mismatch).');
+      }
     }
 
     const tempDir = app.getPath('temp');
     const targetPath = path.join(tempDir, path.basename(installerPath));
-
     fs.copyFileSync(installerPath, targetPath);
 
     const isWin = process.platform === 'win32';
@@ -227,5 +297,7 @@ module.exports = {
   emitManualUpdateResult,
   initAutoUpdater,
   getIsUpdateReady,
-  registerUpdaterIpcHandlers
+  registerUpdaterIpcHandlers,
+  resolveTrustedLocalInstaller,
+  hashFile
 };

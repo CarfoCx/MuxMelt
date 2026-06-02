@@ -11,6 +11,7 @@ let outputDir = '';
 let isProcessing = false;
 let ws = null;
 let pythonPort = null;
+let pythonToken = null;
 let log = null;
 let batchStartTime = 0;
 let batchTotalFiles = 0;
@@ -30,6 +31,7 @@ let _pasteHandler = null;
 
 function init(ctx) {
   pythonPort = ctx.pythonPort;
+  pythonToken = ctx.pythonToken;
   log = ctx.log;
 
   dropZone = document.getElementById('dropZone');
@@ -75,7 +77,7 @@ function cleanup() {
 
 // ---- WebSocket ----
 function connectWebSocket(port) {
-  ws = new WebSocket(`ws://127.0.0.1:${port}/bg-remover/ws`);
+  ws = new WebSocket(`ws://127.0.0.1:${port}/bg-remover/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
     // Removed technical logs
