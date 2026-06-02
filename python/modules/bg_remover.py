@@ -1,13 +1,15 @@
 import os
 import threading
+from importlib.util import find_spec
 from pathlib import Path
 
-try:
-    from rembg import remove
-    from PIL import Image, ImageFilter
-    _available = True
-except ImportError:
-    _available = False
+from PIL import Image, ImageFilter
+
+# rembg pulls in onnxruntime, a heavy import that previously ran at server
+# startup just by importing this module. Defer it until a background actually
+# needs removing (first use), and probe availability cheaply via find_spec so
+# startup stays fast. This mirrors how the stem separator defers demucs.
+_available = find_spec('rembg') is not None
 
 
 def is_available():
@@ -43,6 +45,9 @@ class BGRemover:
                           bg_blur=25):
         if not _available:
             raise RuntimeError('rembg is not installed. Run: pip install rembg[gpu]')
+
+        # Heavy import, deferred to first use (cached by Python afterwards).
+        from rembg import remove
 
         if self.cancel_event.is_set():
             raise RuntimeError('Cancelled')

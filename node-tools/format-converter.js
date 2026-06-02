@@ -8,6 +8,7 @@ const { validateOutputDir, formatToolError, validateMagicBytes } = require('./pa
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif', '.gif', '.svg', '.heic', '.heif']);
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov']);
+const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac', '.wma', '.mka', '.opus']);
 const IMAGE_OUTPUT_FORMATS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif', 'tiff', 'gif', 'ico']);
 
 /**
@@ -34,7 +35,6 @@ function sharpOutputOptions(format, quality) {
     case 'tiff': return { format: 'tiff', options: { quality: q } };
     case 'avif': return { format: 'avif', options: { quality: q } };
     case 'gif':  return { format: 'gif',  options: { colours: 256, effort: 7 } };
-    case 'bmp':  return { format: 'raw',  options: {} }; // sharp doesn't natively export BMP, use png as fallback
     default:     return { format: 'png',  options: {} };
   }
 }
@@ -133,6 +133,7 @@ function registerIPC(ipcMain, getMainWindow) {
 
       const isImage = IMAGE_EXTS.has(ext);
       const isVideo = VIDEO_EXTS.has(ext);
+      const isAudio = AUDIO_EXTS.has(ext);
 
       if (isImage) {
         const win = getMainWindow();
@@ -144,7 +145,7 @@ function registerIPC(ipcMain, getMainWindow) {
         return { success: true, output: outputPath };
       }
 
-      if (isVideo) {
+      if (isVideo || isAudio) {
         if (!ffmpeg.findFfmpeg()) {
           return { success: false, error: 'ffmpeg not found. Please install ffmpeg and add it to your PATH.' };
         }
@@ -167,23 +168,18 @@ function registerIPC(ipcMain, getMainWindow) {
         const crf = qualityToCRF(quality);
         const args = ['-i', inputPath];
         switch (targetFormat) {
-          case 'mp4':
-            args.push('-c:v', 'libx264', '-crf', String(crf), '-c:a', 'aac', '-b:a', '192k');
-            break;
-          case 'mkv':
-            args.push('-c:v', 'libx264', '-crf', String(crf), '-c:a', 'copy');
-            break;
-          case 'webm':
-            args.push('-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-c:a', 'libopus', '-b:a', '128k');
-            break;
-          case 'avi':
-            args.push('-c:v', 'mpeg4', '-q:v', String(Math.max(1, Math.round(crf / 3))), '-c:a', 'mp3', '-b:a', '192k');
-            break;
-          case 'mov':
-            args.push('-c:v', 'libx264', '-crf', String(crf), '-c:a', 'aac', '-b:a', '192k');
-            break;
-          default:
-            args.push('-c', 'copy');
+          case 'mp4': args.push('-c:v', 'libx264', '-crf', String(crf), '-c:a', 'aac', '-b:a', '192k'); break;
+          case 'mkv': args.push('-c:v', 'libx264', '-crf', String(crf), '-c:a', 'copy'); break;
+          case 'webm': args.push('-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-c:a', 'libopus', '-b:a', '128k'); break;
+          case 'avi': args.push('-c:v', 'mpeg4', '-q:v', String(Math.max(1, Math.round(crf / 3))), '-c:a', 'mp3', '-b:a', '192k'); break;
+          case 'mov': args.push('-c:v', 'libx264', '-crf', String(crf), '-c:a', 'aac', '-b:a', '192k'); break;
+          case 'mp3': args.push('-c:a', 'libmp3lame', '-q:a', String(Math.max(0, Math.min(9, Math.round((crf - 15) / 5))))); break;
+          case 'wav': args.push('-c:a', 'pcm_s16le'); break;
+          case 'flac': args.push('-c:a', 'flac', '-compression_level', '8'); break;
+          case 'm4a': args.push('-c:a', 'aac', '-b:a', '256k'); break;
+          case 'ogg': args.push('-c:a', 'libvorbis', '-q:a', String(Math.max(0, Math.round(10 - crf / 4.5)))); break;
+          case 'aac': args.push('-c:a', 'aac', '-b:a', '256k'); break;
+          default: args.push('-c', 'copy');
         }
         args.push(outputPath);
 
@@ -217,6 +213,7 @@ function registerIPC(ipcMain, getMainWindow) {
     return {
       image: ['png', 'jpg', 'webp', 'gif', 'ico', 'tiff', 'avif'],
       video: ['mp4', 'mkv', 'webm', 'avi', 'mov'],
+      audio: ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac'],
       ffmpegAvailable: !!ffmpeg.findFfmpeg()
     };
   });

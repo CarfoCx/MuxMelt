@@ -1,42 +1,246 @@
 <div class="tool-body">
   <div class="module-banner">
-    <strong>Online Video Downloader.</strong> Queue video page URLs and download them into a selected folder.
+    <strong>Online Video Downloader.</strong> Download videos and audio from virtually any website. Supports automated cookie extraction, playlists, and post-processing.
   </div>
+  
   <div class="url-download-panel">
     <div class="url-download-header">
       <div>
-        <h2>Online Video Downloader</h2>
-        <p>Paste video page links, queue multiple downloads, and save them into one folder.</p>
+        <h2>Universal Downloader</h2>
+        <p>Paste video pages, channel URLs, or playlists to download media. Files will be saved in your selected folder.</p>
       </div>
+      <button class="update-ytdlp-btn" id="updateYtDlpBtn" title="Force update yt-dlp dependency to the latest version">
+        <svg class="update-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+        </svg>
+        <span>Update Downloader (yt-dlp)</span>
+      </button>
     </div>
 
+    <!-- Main Settings Panel -->
     <div class="settings-bar url-settings">
       <div class="setting-group">
-        <label>Output:</label>
-        <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+        <label>Output Folder:</label>
+        <button class="output-dir-btn" id="outputDirBtn" title="Select where to save the files">
           Downloads/MuxMelt Downloads
         </button>
       </div>
+      
       <div class="setting-group">
-        <label>Quality:</label>
+        <label>Quality / Format:</label>
         <select id="qualitySelect" class="settings-select url-quality-select">
-          <option value="best">Best quality</option>
-          <option value="1080p">1080p (MP4)</option>
-          <option value="720p">720p (MP4)</option>
-          <option value="audioonly">Audio only (MP3)</option>
+          <option value="best">Best Quality (Auto)</option>
+          <option value="2160p">4K / 2160p (MP4)</option>
+          <option value="1080p">Full HD / 1080p (MP4)</option>
+          <option value="720p">HD / 720p (MP4)</option>
+          <option value="480p">SD / 480p (MP4)</option>
+          <option value="360p">Low / 360p (MP4)</option>
+          <option value="audioonly">Audio Only</option>
+          <option value="custom">Custom Format...</option>
         </select>
+      </div>
+
+      <div class="setting-group">
+        <label>Browser Cookies:</label>
+        <select id="cookieBrowserSelect" class="settings-select url-quality-select" title="Auto-extract cookies from browser sessions for logins / premium sites">
+          <option value="">None (Default)</option>
+          <option value="chrome">Chrome</option>
+          <option value="edge">Edge</option>
+          <option value="firefox">Firefox</option>
+          <option value="brave">Brave</option>
+          <option value="opera">Opera</option>
+          <option value="vivaldi">Vivaldi</option>
+          <option value="safari">Safari</option>
+        </select>
+      </div>
+
+      <div class="setting-group">
+        <label>Cookies File:</label>
+        <button class="output-dir-btn" id="cookiesFileBtn" title="Upload a custom netscape cookies.txt file (Right-click to clear)">
+          None (optional)
+        </button>
       </div>
     </div>
 
+    <!-- Collapsible Advanced Settings -->
+    <div class="advanced-settings-toggle" id="advancedToggleBtn">
+      <span>Advanced Settings</span>
+      <svg class="chevron-icon" id="advancedChevron" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    </div>
+
+    <div class="advanced-settings-panel collapsed" id="advancedSettingsPanel">
+      <div class="advanced-settings-grid">
+        <!-- Section 1: Playlists & Limits -->
+        <div class="advanced-col">
+          <h3>Playlists & Speed limits</h3>
+          
+          <div class="adv-setting-item">
+            <label class="checkbox-container">
+              <input type="checkbox" id="playlistCheckbox">
+              <span class="checkmark"></span>
+              Enable Playlist Mode
+            </label>
+            <p class="setting-desc">Downloads all videos if link points to a playlist.</p>
+          </div>
+
+          <div class="adv-setting-item dependency-playlist" style="display: none;">
+            <label>Max Playlist Videos:</label>
+            <input type="number" id="maxDownloadsInput" class="adv-text-input" min="0" placeholder="Unlimited" title="0 or blank for no limit">
+          </div>
+
+          <div class="adv-setting-item">
+            <label>Speed Limit:</label>
+            <input type="text" id="limitRateInput" class="adv-text-input" placeholder="Unlimited (e.g. 50K, 10M)" title="Throttle download speed. E.g. 50K or 5M">
+          </div>
+
+          <div class="adv-setting-item">
+            <label>Time Range:</label>
+            <input type="text" id="timeRangeInput" class="adv-text-input" placeholder="e.g. 1:30-5:00" title="Download only a specific time section">
+          </div>
+
+          <div class="adv-setting-item">
+            <label>Concurrent Fragments:</label>
+            <input type="number" id="concurrentFragmentsInput" class="adv-text-input" min="1" placeholder="Auto" title="Number of fragments to download concurrently">
+          </div>
+        </div>
+
+        <!-- Section 2: Subtitles & Formats -->
+        <div class="advanced-col">
+          <h3>Subtitles & Formats</h3>
+          
+          <div class="adv-setting-item">
+            <label>Download Subtitles:</label>
+            <select id="subtitlesSelect" class="settings-select adv-select">
+              <option value="none">Don't Download</option>
+              <option value="embed">Embed in Video File</option>
+              <option value="separate">Save as Separate Files</option>
+            </select>
+          </div>
+
+          <div class="adv-setting-item dependency-subtitles" style="display: none;">
+            <label>Languages (comma-separated):</label>
+            <input type="text" id="subLangsInput" class="adv-text-input" placeholder="all" value="all" title="Language codes, e.g. en,es,fr or all">
+            
+            <label class="checkbox-container" style="margin-top: 5px;">
+              <input type="checkbox" id="writeAutoSubsCheckbox">
+              <span class="checkmark"></span>
+              Include Auto-generated
+            </label>
+          </div>
+
+          <div class="adv-setting-item dependency-audio-format" style="display: none;">
+            <label>Audio Format:</label>
+            <select id="audioFormatSelect" class="settings-select adv-select">
+              <option value="mp3">MP3</option>
+              <option value="m4a">M4A</option>
+              <option value="flac">FLAC</option>
+              <option value="wav">WAV</option>
+              <option value="best">Best Available</option>
+            </select>
+          </div>
+
+          <div class="adv-setting-item dependency-custom-format" style="display: none;">
+            <label>Custom yt-dlp Format String:</label>
+            <input type="text" id="customFormatInput" class="adv-text-input" placeholder="e.g. bestvideo+bestaudio" title="Passes directly to yt-dlp -f flag">
+          </div>
+
+          <div class="adv-setting-item">
+            <label>Filename Structure:</label>
+            <select id="filenameTemplateSelect" class="settings-select adv-select">
+              <option value="title-id">Title [ID] (Default)</option>
+              <option value="title">Title Only</option>
+              <option value="uploader-title">Uploader - Title</option>
+              <option value="date-title">Upload Date - Title</option>
+              <option value="uploader-title-id">Uploader - Title [ID]</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Section 3: Auth & Network -->
+        <div class="advanced-col">
+          <h3>Network & Auth</h3>
+          
+          <div class="adv-setting-item">
+            <label>Proxy URL:</label>
+            <input type="text" id="proxyInput" class="adv-text-input" placeholder="http://user:pass@ip:port">
+          </div>
+
+          <div class="adv-setting-item">
+            <label>Account Credentials:</label>
+            <input type="text" id="usernameInput" class="adv-text-input" placeholder="Username" style="margin-bottom: 4px;">
+            <input type="password" id="passwordInput" class="adv-text-input" placeholder="Password">
+          </div>
+
+          <div class="adv-setting-item">
+            <label>Video Password:</label>
+            <input type="password" id="videoPasswordInput" class="adv-text-input" placeholder="For protected videos">
+          </div>
+
+          <div class="adv-setting-item">
+            <label class="checkbox-container">
+              <input type="checkbox" id="geoBypassCheckbox">
+              <span class="checkmark"></span>
+              Geo-Bypass (Fake IP)
+            </label>
+          </div>
+        </div>
+
+        <!-- Section 4: Metadata & Extra Options -->
+        <div class="advanced-col span-two">
+          <h3>Post-processing & Meta</h3>
+          <div class="checkbox-grid">
+            <label class="checkbox-container">
+              <input type="checkbox" id="skipSponsorsCheckbox">
+              <span class="checkmark"></span>
+              Skip Sponsors (SponsorBlock)
+            </label>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="embedMetadataCheckbox">
+              <span class="checkmark"></span>
+              Embed Video Metadata
+            </label>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="embedThumbnailCheckbox">
+              <span class="checkmark"></span>
+              Embed Video Thumbnail
+            </label>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="splitChaptersCheckbox">
+              <span class="checkmark"></span>
+              Split Video into Chapters
+            </label>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="writeDescriptionCheckbox">
+              <span class="checkmark"></span>
+              Save Description to Text File
+            </label>
+
+            <label class="checkbox-container">
+              <input type="checkbox" id="writeThumbnailCheckbox">
+              <span class="checkmark"></span>
+              Save Separate Thumbnail Image
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- URL Downloader Queue -->
     <div class="url-list-header">
-      <span>Video URL</span>
-      <span>Status</span>
+      <span>Video URL / Metadata</span>
+      <span>Status / Details</span>
       <span></span>
     </div>
 
     <div class="url-list" id="urlList"></div>
 
-    <button class="add-url-row-btn" id="addUrlBtn" title="Add another video URL">
+    <button class="add-url-row-btn" id="addUrlBtn" title="Add another video URL to download queue">
       <svg class="add-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
         <line x1="12" y1="5" x2="12" y2="19"></line>
         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -52,13 +256,13 @@
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
-      <span>Downloading...</span>
+      <span>Processing...</span>
     </div>
   </div>
   <div class="tool-footer-right">
     <button class="btn btn-clear" id="clearBtn">Clear All</button>
     <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
-    <button class="btn btn-primary" id="downloadBtn">Download</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Folder</button>
+    <button class="btn btn-primary" id="downloadBtn">Download All</button>
   </div>
 </div>

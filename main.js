@@ -14,13 +14,6 @@ let PYTHON_PORT = 8765;
 const crypto = require('crypto');
 const SHUTDOWN_TOKEN = crypto.randomBytes(32).toString('hex');
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
-const pdfEditorSessions = new Map();
-// Periodically remove sessions whose editor windows were force-killed before firing "closed"
-setInterval(() => {
-  for (const [id, session] of pdfEditorSessions) {
-    if (session._win && session._win.isDestroyed()) pdfEditorSessions.delete(id);
-  }
-}, 30000).unref();
 let isUpdateReady = false;
 
 // Configure autoUpdater
@@ -159,12 +152,22 @@ function findPython() {
 
   const isWin = process.platform === 'win32';
 
-  // On Windows, try the py launcher with specific versions
+  // On Windows, try the py launcher with specific versions. Ask the launcher
+  // which versions are installed in ONE quiet call first — probing each version
+  // with `py -3.13 --version` makes the launcher print a noisy "[ERROR] No
+  // runtime installed that matches 3.13" to stderr for every absent version.
   if (isWin) {
-    const versions = ['3.13', '3.12', '3.11', '3.10'];
-    for (const ver of versions) {
+    let installed = null;
+    try {
+      const list = execSync('py --list', { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+      installed = [...list.matchAll(/-V:(\d+\.\d+)/g)].map((m) => m[1]);
+    } catch { installed = null; }
+    for (const ver of ['3.13', '3.12', '3.11', '3.10']) {
+      // When we have a version list, skip absent ones to avoid the noise. If the
+      // list call failed (older launcher), fall back to probing them all.
+      if (installed && !installed.includes(ver)) continue;
       try {
-        const result = execSync(`py -${ver} --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
+        const result = execSync(`py -${ver} --version`, { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         if (result.includes('Python 3.')) {
           return { cmd: 'py', args: [`-${ver}`], version: result };
         }
@@ -176,7 +179,7 @@ function findPython() {
   const cmds = isWin ? ['python'] : ['python3', 'python'];
   for (const cmd of cmds) {
     try {
-      const result = execSync(`${cmd} --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
+      const result = execSync(`${cmd} --version`, { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       const match = result.match(/Python (\d+)\.(\d+)/);
       if (match) {
         const major = parseInt(match[1]);
@@ -805,84 +808,6 @@ ipcMain.handle('check-overwrite', async (event, filePath) => {
   return { proceed: result.response === 0 };
 });
 
-ipcMain.handle('open-pdf-editor', async (event, options = {}) => {
-  const filePath = options.filePath;
-  if (!filePath || !fs.existsSync(filePath)) {
-    return { success: false, error: 'Select a PDF before opening the editor.' };
-  }
-
-  const sessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-  // Work on a private copy so structural page edits never touch the user's
-  // original until they explicitly save. The original is only read.
-  let workingPath = filePath;
-  try {
-    const workDir = path.join(app.getPath('temp'), 'muxmelt-pdf-sessions');
-    fs.mkdirSync(workDir, { recursive: true });
-    workingPath = path.join(workDir, `${sessionId}-${path.basename(filePath)}`);
-    fs.copyFileSync(filePath, workingPath);
-  } catch (err) {
-    console.error('Could not create PDF working copy, editing original:', err.message);
-    workingPath = filePath;
-  }
-
-  const editorWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 960,
-    minHeight: 640,
-    parent: mainWindow || undefined,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    },
-    backgroundColor: '#11111a',
-    icon: path.join(__dirname, 'build', 'icon.png'),
-    show: false
-  });
-
-  pdfEditorSessions.set(sessionId, {
-    filePath: workingPath,
-    originalPath: filePath,
-    outputDir: options.outputDir || '',
-    fileName: path.basename(filePath),
-    _win: editorWindow
-  });
-
-  editorWindow.setMenuBarVisibility(false);
-  editorWindow.setTitle(`${path.basename(filePath)} - MuxMelt PDF`);
-
-  // Load the new React-based MuxMelt PDF UI. Default to the built editor so
-  // normal local Electron runs do not require a separate Vite dev server.
-  const useDevServer = process.env.NODE_ENV === 'development' && options.useDevServer;
-  if (useDevServer) {
-    editorWindow.loadURL(`http://localhost:5173/index.html?sessionId=${sessionId}`);
-  } else {
-    editorWindow.loadFile(path.join(__dirname, 'renderer', 'tools', 'pdf-toolkit', 'dist', 'index.html'), {
-      query: { sessionId }
-    });
-  }
-  editorWindow.once('ready-to-show', () => editorWindow.show());
-  editorWindow.on('closed', () => {
-    const sess = pdfEditorSessions.get(sessionId);
-    // Clean up the private working copy (never the user's original).
-    if (sess && sess.filePath && sess.filePath !== sess.originalPath) {
-      try { fs.unlinkSync(sess.filePath); } catch {}
-    }
-    pdfEditorSessions.delete(sessionId);
-  });
-
-  return { success: true, sessionId };
-});
-
-ipcMain.handle('get-pdf-editor-session', async (event, sessionId) => {
-  const session = pdfEditorSessions.get(sessionId);
-  if (!session) return { success: false, error: 'PDF editor session expired.' };
-  const { _win, ...sessionData } = session;
-  return { success: true, ...sessionData };
-});
-
 ipcMain.handle('show-notification', async (event, options) => {
   if (Notification.isSupported()) {
     const notification = new Notification({
@@ -891,16 +816,6 @@ ipcMain.handle('show-notification', async (event, options) => {
       silent: false
     });
     notification.show();
-  }
-});
-
-ipcMain.handle('read-pdf-file', async (event, filePath) => {
-  try {
-    const data = await fs.promises.readFile(filePath);
-    return new Uint8Array(data);
-  } catch (err) {
-    console.error('Failed to read PDF:', err);
-    return null;
   }
 });
 
@@ -1059,7 +974,6 @@ try { require('./node-tools/gif-maker').registerIPC(ipcMain, getMainWindow); } c
 try { require('./node-tools/video-compressor').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load video-compressor:', e.message); }
 try { require('./node-tools/url-downloader').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load url-downloader:', e.message); }
 try { require('./node-tools/bulk-imager').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load bulk-imager:', e.message); }
-try { require('./node-tools/pdf-toolkit').registerIPC(ipcMain, getMainWindow, () => pythonInfo || findPython()); } catch (e) { console.error('Failed to load pdf-toolkit:', e.message); }
 try { require('./node-tools/qr-studio').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load qr-studio:', e.message); }
 
 // ---------------------------------------------------------------------------

@@ -118,7 +118,14 @@ function shouldRetryWithImpersonation(error) {
     message.includes('just a moment') ||      // Cloudflare challenge page title
     message.includes('challenge') ||
     message.includes('unable to download webpage') ||
-    message.includes('impersonat');
+    message.includes('impersonat') ||
+    message.includes('sign in') ||
+    message.includes('confirm your age') ||
+    message.includes('age-restricted') ||
+    message.includes('login required') ||
+    message.includes('requires login') ||
+    message.includes('members only') ||
+    message.includes('private video');
 }
 
 function hasPythonModule(pythonInfo, moduleName) {
@@ -158,6 +165,15 @@ function formatDownloadError(err, url) {
   if (expires && (lower.includes('403') || lower.includes('forbidden') || lower.includes('404') || lower.includes('410'))) {
     return `The site rejected this signed video link. It may have expired or require a fresh link from the video page. Link expiry: ${expires.toLocaleString()}.`;
   }
+  if (lower.includes('http error 410') || lower.includes('410: gone')) {
+    return 'This video has been removed or permanently deleted by the site. The URL no longer exists.';
+  }
+  if (lower.includes('http error 404') || lower.includes('404: not found')) {
+    return 'This video was not found. It may have been deleted or the URL is incorrect.';
+  }
+  if (lower.includes('video is unavailable') || lower.includes('this video is unavailable')) {
+    return 'This video is unavailable. It may have been removed, made private, or restricted in your region.';
+  }
 
   return formatToolError(err, 'Online Video Downloader');
 }
@@ -169,30 +185,144 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
     '-m', 'yt_dlp',
     '--newline',
     '--no-color',
-    '--no-playlist',
     '--paths', outDir,
-    '-o', '%(title).200B [%(id)s].%(ext)s',
     '--exec', 'echo {}',
   ];
 
+  // Playlist options
+  if (options.playlist) {
+    args.push('--yes-playlist');
+    if (options.maxDownloads && Number(options.maxDownloads) > 0) {
+      args.push('--max-downloads', String(options.maxDownloads));
+    }
+  } else {
+    args.push('--no-playlist');
+  }
+
+  // Output filename template
+  const template = options.filenameTemplate || 'title-id';
+  let outTemplate = '%(title).200B [%(id)s].%(ext)s'; // default
+  if (template === 'title') {
+    outTemplate = '%(title).200B.%(ext)s';
+  } else if (template === 'uploader-title') {
+    outTemplate = '%(uploader).100B - %(title).100B.%(ext)s';
+  } else if (template === 'date-title') {
+    outTemplate = '%(upload_date)s - %(title).200B.%(ext)s';
+  } else if (template === 'uploader-title-id') {
+    outTemplate = '%(uploader).100B - %(title).100B [%(id)s].%(ext)s';
+  }
+  args.push('-o', outTemplate);
+
+  // Quality options
   const format = options.format || 'best';
   if (format === 'audioonly') {
-    args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
+    const aFormat = options.audioFormat || 'mp3';
+    args.push('-x', '--audio-format', aFormat, '--audio-quality', '0');
+  } else if (format === '2160p') {
+    args.push('-f', 'bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best[height<=2160]', '--merge-output-format', 'mp4');
   } else if (format === '1080p') {
     args.push('-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]', '--merge-output-format', 'mp4');
   } else if (format === '720p') {
     args.push('-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]', '--merge-output-format', 'mp4');
+  } else if (format === '480p') {
+    args.push('-f', 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]', '--merge-output-format', 'mp4');
+  } else if (format === '360p') {
+    args.push('-f', 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]', '--merge-output-format', 'mp4');
+  } else if (format === 'custom') {
+    if (options.customFormat) {
+      args.push('-f', options.customFormat);
+    } else {
+      args.push('--merge-output-format', 'mp4');
+    }
   } else {
     args.push('--merge-output-format', 'mp4');
   }
 
+  // Subtitles
+  if (options.subtitles === 'embed') {
+    args.push('--write-subs', '--embed-subs');
+  } else if (options.subtitles === 'separate') {
+    args.push('--write-subs');
+  }
+  if (options.subtitles && options.subtitles !== 'none') {
+    if (options.subLangs) {
+      args.push('--sub-langs', options.subLangs);
+    } else {
+      args.push('--sub-langs', 'all');
+    }
+  }
+
+  // SponsorBlock
+  if (options.skipSponsors) {
+    args.push('--sponsorblock-remove', 'all');
+  }
+
+  // Metadata & Thumbnail
+  if (options.embedMetadata) {
+    args.push('--embed-metadata');
+  }
+  if (options.embedThumbnail) {
+    args.push('--embed-thumbnail');
+  }
+
+  // Speed Limit
+  if (options.limitRate && options.limitRate.trim()) {
+    args.push('--limit-rate', options.limitRate.trim());
+  }
+
+  // Split Chapters
+  if (options.splitChapters) {
+    args.push('--split-chapters');
+  }
+
+  // Write Description/Thumbnail files
+  if (options.writeDescription) {
+    args.push('--write-description');
+  }
+  if (options.writeThumbnail) {
+    args.push('--write-thumbnail');
+  }
+
+  // Auth & Network
+  if (options.proxy && options.proxy.trim()) {
+    args.push('--proxy', options.proxy.trim());
+  }
+  if (options.username && options.username.trim()) {
+    args.push('--username', options.username.trim());
+  }
+  if (options.password && options.password.trim()) {
+    args.push('--password', options.password.trim());
+  }
+  if (options.videoPassword && options.videoPassword.trim()) {
+    args.push('--video-password', options.videoPassword.trim());
+  }
+  if (options.geoBypass) {
+    args.push('--geo-bypass');
+  }
+
+  // Performance & Processing
+  if (options.concurrentFragments && Number(options.concurrentFragments) > 0) {
+    args.push('--concurrent-fragments', String(options.concurrentFragments));
+  }
+  if (options.timeRange && options.timeRange.trim()) {
+    args.push('--download-sections', `*${options.timeRange.trim()}`);
+  }
+  if (options.writeAutoSubs) {
+    args.push('--write-auto-subs');
+  }
+
+  // Impersonation
   if (options.impersonate) {
     args.push('--impersonate', 'chrome');
-    // Sites behind Cloudflare that fall through to the generic extractor return
-    // a 403 anti-bot challenge on the *page* fetch. Impersonating the download
-    // client alone doesn't clear it — the generic extractor must impersonate
-    // when fetching the webpage. This is yt-dlp's own recommended fix.
     args.push('--extractor-args', 'generic:impersonate');
+  }
+
+  if (options.cookieBrowser) {
+    args.push('--cookies-from-browser', options.cookieBrowser);
+  }
+
+  if (options.cookiesFile) {
+    args.push('--cookies', options.cookiesFile);
   }
 
   args.push(...buildRequestHeaders(url, options));
@@ -250,9 +380,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       let stderr = '';
       let outputPath = '';
 
-      const runDownload = (args, options = {}) => new Promise((resolve, reject) => {
-        const statusPrefix = options.statusPrefix || '';
-        const modeLabel = options.modeLabel ? `${options.modeLabel} | ` : '';
+      const runDownload = (args, runOptions = {}) => new Promise((resolve, reject) => {
+        const statusPrefix = runOptions.statusPrefix || '';
+        const modeLabel = runOptions.modeLabel ? `${runOptions.modeLabel} | ` : '';
         let lastStageStatus = '';
         const proc = spawn(pythonInfo.cmd, args, {
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -283,7 +413,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
               tool: 'url-downloader',
               url,
               type: 'start',
-              progress: Math.max(0.02, options.minProgress || 0),
+              progress: Math.max(0.02, runOptions.minProgress || 0),
               status: stageStatus
             });
           }
@@ -349,8 +479,10 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       });
 
       const format = String(options.format || 'best');
+      const cookiesFile = options.cookiesFile && typeof options.cookiesFile === 'string' ? options.cookiesFile.trim() : '';
+      
       try {
-        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, { format }));
+        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, options));
       } catch (err) {
         if (!shouldRetryWithImpersonation(err)) throw err;
         if (!hasPythonModule(pythonInfo, 'curl_cffi')) {
@@ -364,23 +496,92 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           }
           installYtDlpImpersonationDeps(pythonInfo);
         }
-        if (win) {
-          win.webContents.send('tool-progress', {
-            tool: 'url-downloader',
-            url,
-            type: 'start',
-            progress: 0.02,
-            status: 'Standard request blocked. Browser impersonation is active...'
+
+        const baseConfig = {
+          ...options,
+          format,
+          cookiesFile: cookiesFile || undefined
+        };
+
+        let retryConfigs = [];
+        if (cookiesFile) {
+          retryConfigs.push({
+            ...baseConfig,
+            impersonate: true,
+            cookiesFile,
+            statusMsg: 'Standard request blocked. Browser impersonation with cookies file is active...',
+            label: 'Cookies mode'
           });
+        } else {
+          const selectedBrowser = options.cookieBrowser;
+          
+          retryConfigs.push({
+            ...baseConfig,
+            impersonate: true,
+            statusMsg: 'Standard request blocked. Browser impersonation is active...',
+            label: 'Browser mode'
+          });
+
+          const browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'];
+          if (selectedBrowser && browsers.includes(selectedBrowser)) {
+            retryConfigs.push({
+              ...baseConfig,
+              impersonate: true,
+              cookieBrowser: selectedBrowser,
+              statusMsg: `Retrying with ${selectedBrowser} browser cookies...`,
+              label: `Browser mode (${selectedBrowser})`
+            });
+            for (const b of browsers) {
+              if (b !== selectedBrowser) {
+                retryConfigs.push({
+                  ...baseConfig,
+                  impersonate: true,
+                  cookieBrowser: b,
+                  statusMsg: `Retrying with ${b} browser cookies...`,
+                  label: `Browser mode (${b})`
+                });
+              }
+            }
+          } else {
+            for (const b of browsers) {
+              retryConfigs.push({
+                ...baseConfig,
+                impersonate: true,
+                cookieBrowser: b,
+                statusMsg: `Retrying with ${b} browser cookies...`,
+                label: `Browser mode (${b})`
+              });
+            }
+          }
         }
-        stdout = '';
-        stderr = '';
-        outputPath = '';
-        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, { impersonate: true, format }), {
-          statusPrefix: 'Browser mode | ',
-          modeLabel: 'Browser mode',
-          minProgress: 0.02
-        });
+
+        let lastRetryErr = null;
+        for (const config of retryConfigs) {
+          if (win) {
+            win.webContents.send('tool-progress', {
+              tool: 'url-downloader',
+              url,
+              type: 'start',
+              progress: 0.02,
+              status: config.statusMsg
+            });
+          }
+          stdout = '';
+          stderr = '';
+          outputPath = '';
+          try {
+            await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, config), {
+              statusPrefix: `${config.label} | `,
+              modeLabel: config.label,
+              minProgress: 0.02
+            });
+            lastRetryErr = null;
+            break;
+          } catch (e) {
+            lastRetryErr = e;
+          }
+        }
+        if (lastRetryErr) throw lastRetryErr;
       }
 
       if (!outputPath) {
@@ -427,6 +628,154 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       return { success: true };
     }
     return { success: false, error: 'No active URL download to cancel' };
+  });
+
+  ipcMain.handle('url-downloader-info', async (event, options = {}) => {
+    const url = String(options.url || '').trim();
+    if (!isHttpUrl(url)) {
+      return { success: false, error: 'Enter a valid http or https URL.' };
+    }
+
+    const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
+    if (!pythonInfo || !pythonInfo.cmd) {
+      return { success: false, error: 'Python environment not found.' };
+    }
+
+    const runInfo = (args) => new Promise((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      const proc = spawn(pythonInfo.cmd, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: '1'
+        },
+        windowsHide: true
+      });
+
+      proc.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      proc.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on('error', (err) => reject(err));
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve(stdout);
+        } else {
+          const err = new Error(stderr.trim() || `Process exited with code ${code}`);
+          err.fullOutput = `${stderr}\n${stdout}`;
+          reject(err);
+        }
+      });
+    });
+
+    const buildInfoArgs = (config) => {
+      const args = [
+        ...(pythonInfo.args || []),
+        '-u',
+        '-m', 'yt_dlp',
+        '--dump-json',
+        '--no-playlist',
+      ];
+      if (config.impersonate) {
+        args.push('--impersonate', 'chrome', '--extractor-args', 'generic:impersonate');
+      }
+      if (config.cookieBrowser) {
+        args.push('--cookies-from-browser', config.cookieBrowser);
+      }
+      if (config.cookiesFile) {
+        args.push('--cookies', config.cookiesFile);
+      }
+      args.push(...buildRequestHeaders(url, config));
+      args.push(url);
+      return args;
+    };
+
+    const parseJsonFromStdout = (str) => {
+      const lines = str.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const jsonLine = lines.find(line => line.startsWith('{'));
+      if (!jsonLine) throw new Error('No JSON output found in stdout');
+      return JSON.parse(jsonLine);
+    };
+
+    try {
+      const stdout = await runInfo(buildInfoArgs({ cookiesFile: options.cookiesFile, cookieBrowser: options.cookieBrowser }));
+      const info = parseJsonFromStdout(stdout);
+      return { success: true, info };
+    } catch (err) {
+      if (!shouldRetryWithImpersonation(err)) {
+        return { success: false, error: err.message || 'Failed to fetch video info.' };
+      }
+
+      if (!hasPythonModule(pythonInfo, 'curl_cffi')) {
+        try {
+          installYtDlpImpersonationDeps(pythonInfo);
+        } catch (e) {
+          console.error('Failed to install impersonation dependencies during info fetch:', e);
+        }
+      }
+
+      const cookiesFile = options.cookiesFile;
+      let retryConfigs = [];
+      if (cookiesFile) {
+        retryConfigs.push({ impersonate: true, cookiesFile });
+      } else {
+        const selectedBrowser = options.cookieBrowser;
+        retryConfigs.push({ impersonate: true });
+        const browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'];
+        if (selectedBrowser && browsers.includes(selectedBrowser)) {
+          retryConfigs.push({ impersonate: true, cookieBrowser: selectedBrowser });
+          for (const b of browsers) {
+            if (b !== selectedBrowser) retryConfigs.push({ impersonate: true, cookieBrowser: b });
+          }
+        } else {
+          for (const b of browsers) {
+            retryConfigs.push({ impersonate: true, cookieBrowser: b });
+          }
+        }
+      }
+
+      let lastErr = err;
+      for (const config of retryConfigs) {
+        try {
+          const stdout = await runInfo(buildInfoArgs(config));
+          const info = parseJsonFromStdout(stdout);
+          return { success: true, info };
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+
+      return { success: false, error: lastErr.message || 'Failed to fetch video info.' };
+    }
+  });
+
+  ipcMain.handle('url-downloader-update-ytdlp', async (event) => {
+    const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
+    if (!pythonInfo || !pythonInfo.cmd) {
+      return { success: false, error: 'Python environment not found.' };
+    }
+
+    try {
+      const args = [
+        ...(pythonInfo.args || []),
+        '-m',
+        'pip',
+        'install',
+        '--upgrade',
+        'yt-dlp[default,curl-cffi]',
+        '--no-warn-script-location'
+      ];
+      
+      const stdout = execFileSync(pythonInfo.cmd, args, { stdio: 'pipe', timeout: 300000, windowsHide: true });
+      return { success: true, message: stdout.toString().trim() };
+    } catch (err) {
+      return { success: false, error: err.message || String(err) };
+    }
   });
 }
 

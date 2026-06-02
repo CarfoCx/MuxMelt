@@ -24,8 +24,6 @@ contextBridge.exposeInMainWorld('api', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   setProgress: (value) => ipcRenderer.invoke('set-progress', value),
   checkOverwrite: (filePath) => ipcRenderer.invoke('check-overwrite', filePath),
-  openPdfEditor: (options) => ipcRenderer.invoke('open-pdf-editor', options),
-  getPdfEditorSession: (sessionId) => ipcRenderer.invoke('get-pdf-editor-session', sessionId),
 
   // Format converter
   convertFormat: (options) => ipcRenderer.invoke('format-converter-convert', options),
@@ -50,36 +48,14 @@ contextBridge.exposeInMainWorld('api', {
   // URL downloader
   downloadVideoUrl: (options) => ipcRenderer.invoke('url-downloader-download', options),
   cancelUrlDownload: () => ipcRenderer.invoke('url-downloader-cancel'),
+  getVideoInfo: (options) => ipcRenderer.invoke('url-downloader-info', options),
+  updateYtDlp: () => ipcRenderer.invoke('url-downloader-update-ytdlp'),
 
   // Bulk imager
   bulkProcess: (options) => ipcRenderer.invoke('bulk-imager-process', options),
   bulkProcessChain: (options) => ipcRenderer.invoke('bulk-imager-process-chain', options),
   cancelBulkImager: () => ipcRenderer.invoke('bulk-imager-cancel'),
   getImageInfo: (filePath) => ipcRenderer.invoke('bulk-imager-info', filePath),
-
-  // PDF toolkit
-  pdfOperation: (options) => {
-    const op = options.operation;
-    if (op === 'merge') return ipcRenderer.invoke('pdf-toolkit-merge', { inputPaths: options.files, outputDir: options.outputDir, outputName: options.outputName });
-    if (op === 'split') return ipcRenderer.invoke('pdf-toolkit-split', { inputPath: options.files[0], outputDir: options.outputDir });
-    if (op === 'extract') return ipcRenderer.invoke('pdf-toolkit-extract', { inputPath: options.files[0], outputDir: options.outputDir, pages: options.pageRange });
-    if (op === 'edit') return ipcRenderer.invoke('pdf-toolkit-edit', { inputPath: options.files[0], originalPath: options.originalPath, outputDir: options.outputDir, rects: options.rects, covers: options.covers, edits: options.edits, highlights: options.highlights, paths: options.paths, markups: options.markups, notes: options.notes, images: options.images, forms: options.forms, links: options.links });
-    if (op === 'render') return ipcRenderer.invoke('pdf-toolkit-render', { inputPath: options.files[0], dpi: options.dpi });
-    if (op === 'text-map') return ipcRenderer.invoke('pdf-toolkit-text-map', { inputPath: options.files[0], ocr: options.ocr });
-    if (op === 'rotate') return ipcRenderer.invoke('pdf-toolkit-rotate', { inputPath: options.inputPath, pageIndex: options.pageIndex, degrees: options.degrees });
-    if (op === 'delete') return ipcRenderer.invoke('pdf-toolkit-delete', { inputPath: options.inputPath, pageIndex: options.pageIndex });
-    if (op === 'reorder') return ipcRenderer.invoke('pdf-toolkit-reorder', { inputPath: options.inputPath, order: options.order });
-    if (op === 'page-op') return ipcRenderer.invoke('pdf-toolkit-page-op', {
-      inputPath: options.inputPath, originalPath: options.originalPath, op: options.pageOp,
-      pages: options.pages, order: options.order, degrees: options.degrees, afterPage: options.afterPage,
-      width: options.width, height: options.height, sourcePath: options.sourcePath,
-      outputDir: options.outputDir, outputName: options.outputName,
-    });
-    if (op === 'document') return ipcRenderer.invoke('pdf-toolkit-document', { inputPath: options.inputPath, originalPath: options.originalPath, outputDir: options.outputDir, ...options.params });
-    return Promise.resolve({ success: false, error: 'Unknown operation' });
-  },
-  pdfInfo: (filePath) => ipcRenderer.invoke('pdf-toolkit-info', filePath),
-  readPdfFile: (filePath) => ipcRenderer.invoke('read-pdf-file', filePath),
 
   // QR studio
   generateQR: (options) => ipcRenderer.invoke('qr-studio-generate', options),

@@ -6,6 +6,7 @@
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif']);
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
+const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac', '.wma', '.mka', '.opus']);
 const FORMAT_OPTIONS = {
   image: [
     { value: 'png', label: 'PNG' },
@@ -22,6 +23,14 @@ const FORMAT_OPTIONS = {
     { value: 'webm', label: 'WebM' },
     { value: 'avi', label: 'AVI' },
     { value: 'mov', label: 'MOV' }
+  ],
+  audio: [
+    { value: 'mp3', label: 'MP3' },
+    { value: 'wav', label: 'WAV' },
+    { value: 'flac', label: 'FLAC' },
+    { value: 'm4a', label: 'M4A' },
+    { value: 'ogg', label: 'OGG' },
+    { value: 'aac', label: 'AAC' }
   ]
 };
 
@@ -192,8 +201,10 @@ async function startConversion() {
   const targetFmt = outputFormat.value;
   const imageFormats = new Set(['png', 'jpg', 'webp', 'gif', 'ico', 'avif', 'tiff']);
   const videoFormats = new Set(['mp4', 'mkv', 'webm', 'avi', 'mov']);
+  const audioFormats = new Set(['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac']);
   const targetIsImage = imageFormats.has(targetFmt);
   const targetIsVideo = videoFormats.has(targetFmt);
+  const targetIsAudio = audioFormats.has(targetFmt);
 
   log(`Starting conversion: ${pending.length} file(s) to ${targetFmt.toUpperCase()}, quality ${qualitySlider.value}`);
 
@@ -304,9 +315,13 @@ function getQueueMediaType() {
   if (files.length === 0) return null;
   const hasImage = files.some(f => IMAGE_EXTS.has(getFileExtension(f.path)));
   const hasVideo = files.some(f => VIDEO_EXTS.has(getFileExtension(f.path)));
-  if (hasImage && hasVideo) return 'mixed';
+  const hasAudio = files.some(f => AUDIO_EXTS.has(getFileExtension(f.path)));
+  
+  const types = [hasImage, hasVideo, hasAudio].filter(Boolean).length;
+  if (types > 1) return 'mixed';
   if (hasImage) return 'image';
   if (hasVideo) return 'video';
+  if (hasAudio) return 'audio';
   return null;
 }
 
@@ -344,7 +359,7 @@ async function addFiles(paths) {
   let added = 0;
   for (const p of paths) {
     const ext = getFileExtension(p);
-    if (!IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext)) continue;
+    if (!IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext) && !AUDIO_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
     const size = await window.api.getFileSize(p);
     files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for File', state: 'pending' });

@@ -105,6 +105,7 @@ const MAGIC_BYTES = {
   '.heif': null, // ISO BMFF ftyp checked specially
   '.pdf':  [0x25, 0x50, 0x44, 0x46],
   '.mp4':  null, // ftyp box checked specially
+  '.mov':  null, // ftyp box checked specially (same as mp4)
   '.mkv':  [0x1A, 0x45, 0xDF, 0xA3],
   '.webm': [0x1A, 0x45, 0xDF, 0xA3],
   '.avi':  [0x52, 0x49, 0x46, 0x46],
