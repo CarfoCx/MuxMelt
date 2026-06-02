@@ -65,6 +65,6 @@
     "installerSidebar": "build/installerSidebar.bmp",
     "uninstallerSidebar": "build/installerSidebar.bmp",
     "appPackageUrl": "https://github.com/CarfoCx/MuxMelt/releases/latest/download",
-    "artifactName": "MuxMelt-Web-Installer.${ext}"
+    "artifactName": "MuxMelt-${version}-windows-${arch}-web-setup.${ext}"
   }
 }

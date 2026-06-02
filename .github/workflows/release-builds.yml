@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to upload assets to
         required: true
-        default: v1.2.5
+        default: v1.2.6
 
 permissions:
   contents: write
@@ -23,30 +23,34 @@ jobs:
       matrix:
         include:
           - name: Windows x64
+            slug: windows-x64
             os: windows-2025
             command: npm run build:web:win:x64
             files: |
-              dist/nsis-web/MuxMelt-Web-Installer.exe
+              dist/nsis-web/*-web-setup.exe
               dist/nsis-web/*.nsis.7z
               dist/nsis-web/latest.yml
           - name: macOS Intel
+            slug: macos-x64
             os: macos-15-intel
             command: npm run build:slim:mac:x64
             files: |
-              dist/MuxMelt-macOS-x64.dmg
-              dist/MuxMelt-macOS-x64.dmg.blockmap
+              dist/*-macos-x64.dmg
+              dist/*-macos-x64.dmg.blockmap
           - name: macOS Apple Silicon
+            slug: macos-arm64
             os: macos-15
             command: npm run build:slim:mac:arm64
             files: |
-              dist/MuxMelt-macOS-arm64.dmg
-              dist/MuxMelt-macOS-arm64.dmg.blockmap
+              dist/*-macos-arm64.dmg
+              dist/*-macos-arm64.dmg.blockmap
           - name: Linux x64
+            slug: linux-x64
             os: ubuntu-24.04
             command: npm run build:linux:x64
             files: |
-              dist/MuxMelt-Slim-Linux.AppImage
-              dist/MuxMelt-Slim-Linux.AppImage.blockmap
+              dist/*-linux-x64.AppImage
+              dist/*-linux-x64.AppImage.blockmap
               dist/latest-linux.yml
 
     steps:
@@ -93,45 +97,70 @@ jobs:
           FILES: ${{ matrix.files }}
         shell: bash
         run: |
-          checksum_file="dist/SHA256SUMS-${{ matrix.name }}.txt"
+          version=$(node -p "require('./package.json').version")
+          checksum_file="dist/MuxMelt-${version}-${{ matrix.slug }}.sha256.txt"
+          echo "CHECKSUM_FILE=$checksum_file" >> "$GITHUB_ENV"
           : > "$checksum_file"
-          if command -v shasum >/dev/null 2>&1; then
-            while IFS= read -r file; do
-              if [ -n "$file" ]; then
-                for match in $file; do
-                  if [ -f "$match" ]; then
-                    shasum -a 256 "$match" >> "$checksum_file"
-                  fi
-                done
-              fi
-            done <<< "$FILES"
-          else
-            while IFS= read -r file; do
-              if [ -n "$file" ]; then
-                for match in $file; do
-                  if [ -f "$match" ]; then
-                    sha256sum "$match" >> "$checksum_file"
-                  fi
-                done
-              fi
-            done <<< "$FILES"
-          fi
+          hash_cmd="sha256sum"
+          command -v shasum >/dev/null 2>&1 && hash_cmd="shasum -a 256"
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            for match in $pattern; do
+              [ -f "$match" ] && $hash_cmd "$match" >> "$checksum_file"
+            done
+          done <<< "$FILES"
 
       - name: Upload assets to release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
           FILES: ${{ matrix.files }}
-          CHECKSUM_FILE: dist/SHA256SUMS-${{ matrix.name }}.txt
         shell: bash
         run: |
-          while IFS= read -r file; do
-            if [ -n "$file" ]; then
-              for match in $file; do
-                if [ -f "$match" ]; then
-                  gh release upload "$RELEASE_TAG" "$match" --clobber
-                fi
-              done
-            fi
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            for match in $pattern; do
+              [ -f "$match" ] && gh release upload "$RELEASE_TAG" "$match" --clobber
+            done
           done <<< "$FILES"
           gh release upload "$RELEASE_TAG" "$CHECKSUM_FILE" --clobber
+
+      # macOS builds run on per-arch runners (each bundles the runner-arch
+      # ffmpeg), so each produces a single-arch latest-mac.yml. Stash them as
+      # artifacts; the macos-update-feed job merges them into one feed.
+      - name: Stash macOS update feed
+        if: startsWith(matrix.slug, 'macos-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-feed-${{ matrix.slug }}
+          path: dist/latest-mac.yml
+          if-no-files-found: error
+
+  macos-update-feed:
+    name: macOS update feed
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download per-arch mac feeds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-feed-*
+          path: mac-feeds
+
+      - name: Merge into a single latest-mac.yml and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          npm install js-yaml --no-save
+          node .github/scripts/merge-mac-feed.js mac-feeds dist/latest-mac.yml
+          gh release upload "$RELEASE_TAG" dist/latest-mac.yml --clobber

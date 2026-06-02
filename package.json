@@ -100,7 +100,7 @@
       "runAfterFinish": true,
       "installerSidebar": "build/installerSidebar.bmp",
       "uninstallerSidebar": "build/installerSidebar.bmp",
-      "artifactName": "MuxMelt-Windows-Setup.${ext}"
+      "artifactName": "MuxMelt-${version}-windows-${arch}-setup.${ext}"
     }
   }
 }

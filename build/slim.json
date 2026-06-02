@@ -4,6 +4,13 @@
   "directories": {
     "output": "dist"
   },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "CarfoCx",
+      "repo": "MuxMelt"
+    }
+  ],
   "files": [
     "main.js",
     "preload.js",
@@ -47,7 +54,7 @@
     "oneClick": true,
     "perMachine": false,
     "deleteAppDataOnUninstall": false,
-    "artifactName": "MuxMelt-Windows-Setup.${ext}"
+    "artifactName": "MuxMelt-${version}-windows-${arch}-setup.${ext}"
   },
   "mac": {
     "target": [
@@ -61,10 +68,10 @@
     "identity": "-"
   },
   "dmg": {
-    "artifactName": "MuxMelt-macOS-${arch}.${ext}"
+    "artifactName": "MuxMelt-${version}-macos-${arch}.${ext}"
   },
   "appImage": {
-    "artifactName": "MuxMelt-Slim-Linux.${ext}"
+    "artifactName": "MuxMelt-${version}-linux-${arch}.${ext}"
   },
   "linux": {
     "target": [
