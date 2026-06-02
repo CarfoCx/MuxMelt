@@ -342,7 +342,7 @@ function bindEvents() {
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       const display = dir.length > 35 ? '...' + dir.slice(-32) : dir;
@@ -352,7 +352,7 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (outputDir) window.api.openFolder(outputDir);
+    if (outputDir) window.api.system.openFolder(outputDir);
   });
 
   clearBtn.addEventListener('click', () => {

@@ -62,7 +62,12 @@ async def tts_ws(ws: WebSocket):
                 safe_name = ''.join(c for c in safe_name if c.isalnum() or c in ('_', '-'))
                 if is_preview:
                     safe_name = f'preview_{safe_name}_{os.urandom(4).hex()}'
-                output_path = os.path.join(output_dir, f'{safe_name}.{output_format}')
+                base_output = f'{safe_name}.{output_format}'
+                output_path = os.path.join(output_dir, base_output)
+                counter = 1
+                while os.path.exists(output_path):
+                    output_path = os.path.join(output_dir, f'{safe_name}_{counter}.{output_format}')
+                    counter += 1
 
                 try:
                     async def on_progress(pct, status):

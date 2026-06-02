@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
-const { validateOutputDir, formatToolError } = require('./path-utils');
+const { validateOutputDir, formatToolError, autoIncrementPath } = require('./path-utils');
 
 /**
  * Apply a single operation to one image and save the result.
@@ -198,7 +198,8 @@ function registerIPC(ipcMain, getMainWindow) {
       const ext = path.extname(inputPath);
       const baseName = path.basename(inputPath, ext);
       const outExt = outputFormat ? ('.' + outputFormat) : ext;
-      const outputPath = path.join(outDir, baseName + '_edited' + outExt);
+      let outputPath = path.join(outDir, baseName + '_edited' + outExt);
+      outputPath = autoIncrementPath(outputPath);
 
       try {
         const win = getMainWindow();
@@ -282,7 +283,8 @@ function registerIPC(ipcMain, getMainWindow) {
       const ext = path.extname(inputPath);
       const baseName = path.basename(inputPath, ext);
       const outExt = outputFormat ? ('.' + outputFormat) : ext;
-      const outputPath = path.join(outDir, baseName + '_edited' + outExt);
+      let outputPath = path.join(outDir, baseName + '_edited' + outExt);
+      outputPath = autoIncrementPath(outputPath);
 
       try {
         const win = getMainWindow();

@@ -154,7 +154,7 @@ function showCompletionToast(message, isError = false, outputFiles = []) {
   setTimeout(() => { if (toast.parentNode) toast.remove(); }, 7000);
 
   // Also fire a native OS notification (useful when app is in background)
-  window.api.showNotification({
+  window.api.system.showNotification({
     title: 'MuxMelt',
     body: message
   });
@@ -204,9 +204,9 @@ window.sendToTool = function(toolId) {
 window.autoOpenOutputIfEnabled = async function(outputDir) {
   if (!outputDir) return;
   try {
-    const all = await window.api.loadSettings();
+    const all = await window.api.system.loadSettings();
     if (all.global && all.global.autoOpenOutput) {
-      window.api.openFolder(outputDir);
+      window.api.system.openFolder(outputDir);
     }
   } catch {}
 };
@@ -217,7 +217,7 @@ const RECENT_FILES_MAX = 20;
 window.addRecentFile = async function(filePath) {
   if (!filePath) return;
   try {
-    const all = await window.api.loadSettings();
+    const all = await window.api.system.loadSettings();
     all.global = all.global || {};
     let recent = all.global.recentFiles || [];
     // Remove duplicate if already exists
@@ -227,30 +227,30 @@ window.addRecentFile = async function(filePath) {
     // Trim to max
     if (recent.length > RECENT_FILES_MAX) recent = recent.slice(0, RECENT_FILES_MAX);
     all.global.recentFiles = recent;
-    await window.api.saveSettings(all);
+    await window.api.system.saveSettings(all);
   } catch {}
 };
 
 window.getRecentFiles = async function() {
   try {
-    const all = await window.api.loadSettings();
+    const all = await window.api.system.loadSettings();
     return (all.global && all.global.recentFiles) || [];
   } catch { return []; }
 };
 
 window.clearRecentFiles = async function() {
   try {
-    const all = await window.api.loadSettings();
+    const all = await window.api.system.loadSettings();
     if (all.global) {
       all.global.recentFiles = [];
-      await window.api.saveSettings(all);
+      await window.api.system.saveSettings(all);
     }
   } catch {}
 };
 
 // Set Windows taskbar progress (0-1, or -1 to clear)
 window.setTaskbarProgress = function(value) {
-  try { window.api.setProgress(value); } catch {}
+  try { window.api.system.setProgress(value); } catch {}
 };
 
 // Shared ETA calculation for batch tools
@@ -360,7 +360,7 @@ window.showFileContextMenu = function(e, filePath, onRemove) {
   revealBtn.textContent = getRevealLabel();
   revealBtn.addEventListener('click', () => {
     const dir = filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-    window.api.openFolder(dir);
+    window.api.system.openFolder(dir);
     menu.remove();
   });
   menu.appendChild(revealBtn);
@@ -418,7 +418,7 @@ const _thumbCacheMax = 200;
 window.getFileThumbnail = async function(filePath) {
   if (_thumbCache.has(filePath)) return _thumbCache.get(filePath);
   try {
-    const dataUrl = await window.api.readImagePreview(filePath);
+    const dataUrl = await window.api.system.readImagePreview(filePath);
     if (dataUrl) {
       // Evict oldest entries if cache is full
       if (_thumbCache.size >= _thumbCacheMax) {
@@ -440,7 +440,7 @@ document.addEventListener('paste', async (e) => {
       const blob = item.getAsFile();
       if (blob && blob.path) {
         // Electron file from clipboard — resolve and add
-        const resolved = await window.api.resolveDroppedPaths([blob.path]);
+        const resolved = await window.api.system.resolveDroppedPaths([blob.path]);
         if (resolved.length > 0) {
           document.dispatchEvent(new CustomEvent('paste-files', { detail: resolved }));
         }
@@ -457,7 +457,7 @@ let globalSettings = {};
 
 async function loadGlobalSettings() {
   try {
-    const all = await window.api.loadSettings();
+    const all = await window.api.system.loadSettings();
     globalSettings = all.global || {};
     return all;
   } catch (err) {
@@ -467,14 +467,14 @@ async function loadGlobalSettings() {
 }
 
 function saveGlobalSettings() {
-  window.api.loadSettings().then(all => {
+  window.api.system.loadSettings().then(all => {
     all.global = {
       ...(all.global || {}),
       logCollapsed: logPanel.classList.contains('collapsed'),
       lastTool: currentToolId,
     };
     globalSettings = all.global;
-    window.api.saveSettings(all);
+    window.api.system.saveSettings(all);
   });
 }
 
@@ -492,8 +492,8 @@ window.applyDefaultOutputDir = (outputDirBtn) => {
 };
 
 // Expose settings helpers for tools
-window.loadAllSettings = () => window.api.loadSettings();
-window.saveAllSettings = (settings) => window.api.saveSettings(settings);
+window.loadAllSettings = () => window.api.system.loadSettings();
+window.saveAllSettings = (settings) => window.api.system.saveSettings(settings);
 
 // ============================================================================
 // GPU monitoring
@@ -732,13 +732,13 @@ async function init() {
   const theme = allSettings.global?.theme || 'dark';
   document.documentElement.setAttribute('data-theme', theme);
 
-  pythonPort = await window.api.getPythonPort();
+  pythonPort = await window.api.python.getPythonPort();
   window.pythonPort = pythonPort;
 
   checkHealth();
   startGpuPolling();
 
-  window.api.onPythonCrashed((code) => {
+  window.api.python.onPythonCrashed((code) => {
     log(`Python backend crashed (exit code ${code})`, 'error');
   });
 
@@ -752,7 +752,7 @@ async function init() {
   const sidebarDonateBtn = document.getElementById('sidebarDonateBtn');
   if (sidebarDonateBtn) {
     sidebarDonateBtn.addEventListener('click', () => {
-      window.api.openExternal('https://ko-fi.com/carfo');
+      window.api.system.openExternal('https://ko-fi.com/carfo');
     });
   }
 
@@ -767,7 +767,7 @@ async function init() {
 
 async function checkForAppUpdates() {
   try {
-    await window.api.checkForUpdates();
+    await window.api.updater.checkForUpdates();
   } catch (err) {
     console.error('Update check failed:', err);
   }
@@ -781,8 +781,8 @@ const updateRestartBtn = document.getElementById('updateRestartBtn');
 const updateDismiss = document.getElementById('updateDismiss');
 let pendingUpdateInfo = null;
 
-if (window.api.onUpdateAvailable) {
-  window.api.onUpdateAvailable((info) => {
+if (window.api.updater.onUpdateAvailable) {
+  window.api.updater.onUpdateAvailable((info) => {
     pendingUpdateInfo = info;
     if (updateBanner && updateBannerText && updateDownloadBtn) {
       updateBannerText.textContent = info.isLocal
@@ -798,8 +798,8 @@ if (window.api.onUpdateAvailable) {
   });
 }
 
-if (window.api.onUpdateDownloaded) {
-  window.api.onUpdateDownloaded((info) => {
+if (window.api.updater.onUpdateDownloaded) {
+  window.api.updater.onUpdateDownloaded((info) => {
     pendingUpdateInfo = info;
     if (updateBanner && updateBannerText && updateDownloadBtn && updateRestartBtn) {
       updateBannerText.textContent = `Version ${info.version} is ready to install.`;
@@ -811,8 +811,8 @@ if (window.api.onUpdateDownloaded) {
   });
 }
 
-if (window.api.onUpdateDownloadProgress) {
-  window.api.onUpdateDownloadProgress((progress) => {
+if (window.api.updater.onUpdateDownloadProgress) {
+  window.api.updater.onUpdateDownloadProgress((progress) => {
     if (updateBannerText) {
       const pct = Math.round(progress.percent);
       updateBannerText.textContent = `Downloading update... ${pct}%`;
@@ -820,8 +820,8 @@ if (window.api.onUpdateDownloadProgress) {
   });
 }
 
-if (window.api.onUpdateError) {
-  window.api.onUpdateError((err) => {
+if (window.api.updater.onUpdateError) {
+  window.api.updater.onUpdateError((err) => {
     log(`Update error: ${err}`, 'error');
   });
 }
@@ -832,11 +832,11 @@ if (updateDownloadBtn) {
     updateDownloadBtn.textContent = pendingUpdateInfo && pendingUpdateInfo.isLocal ? 'Installing...' : 'Downloading...';
 
     if (pendingUpdateInfo && pendingUpdateInfo.isLocal && pendingUpdateInfo.installerPath) {
-      await window.api.downloadAndUpdate(pendingUpdateInfo.installerPath);
+      await window.api.updater.downloadAndUpdate(pendingUpdateInfo.installerPath);
       return;
     }
 
-    const result = await window.api.downloadUpdate();
+    const result = await window.api.updater.downloadUpdate();
     if (result && result.error) {
       updateDownloadBtn.disabled = false;
       updateDownloadBtn.textContent = 'Retry';
@@ -846,7 +846,7 @@ if (updateDownloadBtn) {
 
 if (updateRestartBtn) {
   updateRestartBtn.addEventListener('click', () => {
-    window.api.restartToUpdate();
+    window.api.updater.restartToUpdate();
   });
 }
 

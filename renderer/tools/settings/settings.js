@@ -64,7 +64,7 @@ async function loadCurrentSettings() {
 function bindEvents() {
   // Default output dir
   document.getElementById('defaultOutputDirBtn').addEventListener('click', async () => {
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (!dir) return;
 
     const all = await window.loadAllSettings();
@@ -154,21 +154,21 @@ function bindEvents() {
 
   // Donate button
   document.getElementById('donateBtn').addEventListener('click', () => {
-    window.api.openExternal('https://ko-fi.com/carfo');
+    window.api.system.openExternal('https://ko-fi.com/carfo');
   });
 
   // GitHub / Issues buttons
   document.getElementById('githubBtn').addEventListener('click', () => {
-    window.api.openExternal('https://github.com/CarfoCx/MuxMelt');
+    window.api.system.openExternal('https://github.com/CarfoCx/MuxMelt');
   });
 
   document.getElementById('issuesBtn').addEventListener('click', () => {
-    window.api.openExternal('https://github.com/CarfoCx/MuxMelt/issues');
+    window.api.system.openExternal('https://github.com/CarfoCx/MuxMelt/issues');
   });
 
   // Update folder path
   document.getElementById('updateFolderBtn').addEventListener('click', async () => {
-    const dir = await window.api.selectOutputDir(); // reusing dir selector logic
+    const dir = await window.api.system.selectOutputDir(); // reusing dir selector logic
     if (!dir) return;
 
     const all = await window.loadAllSettings();
@@ -207,7 +207,7 @@ function bindEvents() {
     hint.textContent = 'Comparing current version with latest release';
     
     try {
-      await window.api.checkForUpdates();
+      await window.api.updater.checkForUpdates();
       // The results will be handled by global listeners in app.js
       setTimeout(() => {
         btn.disabled = false;
@@ -257,7 +257,7 @@ function bindEvents() {
 async function loadSystemInfo() {
   // App version (git-based)
   try {
-    const version = await window.api.getAppVersion();
+    const version = await window.api.system.getAppVersion();
     document.getElementById('appVersion').textContent = version;
   } catch {
     document.getElementById('appVersion').textContent = 'unknown';
@@ -265,7 +265,7 @@ async function loadSystemInfo() {
 
   // Backend info
   try {
-    const port = window.pythonPort || await window.api.getPythonPort();
+    const port = window.pythonPort || await window.api.python.getPythonPort();
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 5000);
     const resp = await fetch(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
@@ -318,7 +318,7 @@ async function loadRecentFiles() {
       item.innerHTML = `<span class="recent-file-name">${window.escapeHtml(fileName)}</span><span class="recent-file-path">${window.escapeHtml(dirPath)}</span>`;
       item.addEventListener('click', () => {
         const dir = filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-        window.api.openFolder(dir);
+        window.api.system.openFolder(dir);
       });
       list.appendChild(item);
     });

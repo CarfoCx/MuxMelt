@@ -258,7 +258,7 @@ function bindEvents() {
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       persistedState.outputDir = outputDir;
@@ -278,7 +278,7 @@ function bindEvents() {
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(file.path);
     if (paths.length > 0) {
-      const resolved = await window.api.resolveDroppedPaths(paths);
+      const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) addFiles(resolved);
       else log('No supported files found in dropped items', 'warn');
     }
@@ -286,14 +286,14 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const paths = await window.api.selectFiles();
+    const paths = await window.api.system.selectFiles();
     if (paths.length > 0) addFiles(paths);
   });
 
   browseFolderBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (statusText) statusText.textContent = 'Scanning folder...';
-    const paths = await window.api.selectFolder();
+    const paths = await window.api.system.selectFolder();
     if (paths.length > 0) addFiles(paths);
     else log('No supported files found in folder', 'warn');
     if (statusText) statusText.textContent = 'Waiting for File';
@@ -302,7 +302,7 @@ function bindEvents() {
   dropZone.addEventListener('click', async (e) => {
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
     if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
-    const paths = await window.api.selectFiles();
+    const paths = await window.api.system.selectFiles();
     if (paths.length > 0) addFiles(paths);
   });
 
@@ -311,13 +311,13 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (outputDir) { window.api.openFolder(outputDir); }
+    if (outputDir) { window.api.system.openFolder(outputDir); }
     else if (files.length > 0 && files[0].output) {
       const dir = files[0].output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-      window.api.openFolder(dir);
+      window.api.system.openFolder(dir);
     } else if (files.length > 0) {
       const dir = files[0].path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-      window.api.openFolder(dir);
+      window.api.system.openFolder(dir);
     }
   });
 
@@ -383,7 +383,7 @@ function bindEvents() {
   // ffmpeg link
   document.getElementById('ffmpegLink').addEventListener('click', (e) => {
     e.preventDefault();
-    window.api.openExternal('https://ffmpeg.org/download.html');
+    window.api.system.openExternal('https://ffmpeg.org/download.html');
   });
 
   // Retry failed
@@ -445,7 +445,7 @@ function connectWebSocket(port) {
     log(`WebSocket disconnected, reconnecting in ${(delay / 1000).toFixed(1)}s...`, 'warn');
     if (reconnectAttempts === 5) {
       log('Multiple reconnection failures, restarting Python backend...', 'warn');
-      window.api.restartPython().then(r => {
+      window.api.python.restartPython().then(r => {
         log(r.success ? 'Python backend restarted' : `Failed to restart: ${r.error}`, r.success ? 'success' : 'error');
       });
     }
@@ -603,7 +603,7 @@ function getOutputPath(inputPath) {
 }
 
 async function confirmOverwrite(filePath) {
-  if (!await window.api.pathExists(filePath)) return { proceed: true };
+  if (!await window.api.system.pathExists(filePath)) return { proceed: true };
 
   try {
     const all = await window.loadAllSettings();
@@ -660,7 +660,7 @@ async function addFiles(paths) {
     else if (VIDEO_EXTS.has(ext)) type = 'video';
     else continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
-    const size = await window.api.getFileSize(p);
+    const size = await window.api.system.getFileSize(p);
     files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for File', state: 'pending', output: null });
     added++;
   }
@@ -805,8 +805,8 @@ async function openPreview(file) {
   previewTitle.textContent = file.name;
   previewModal.classList.add('active');
   const [beforeData, afterData] = await Promise.all([
-    window.api.readImagePreview(file.path),
-    window.api.readImagePreview(file.output)
+    window.api.system.readImagePreview(file.path),
+    window.api.system.readImagePreview(file.output)
   ]);
   if (!beforeData || !afterData) { log('Failed to load preview images', 'error'); previewModal.classList.remove('active'); return; }
   previewBefore.src = beforeData;

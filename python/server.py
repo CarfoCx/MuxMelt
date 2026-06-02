@@ -298,7 +298,13 @@ async def process_file(ws, file_path, scale, output_format, output_dir, profile)
             out_dir = str(Path(file_path).parent)
 
         os.makedirs(out_dir, exist_ok=True)
-        output_path = os.path.join(out_dir, f'{name}_{scale}x{out_ext}')
+        
+        base_output_name = f'{name}_{scale}x{out_ext}'
+        output_path = os.path.join(out_dir, base_output_name)
+        counter = 1
+        while os.path.exists(output_path):
+            output_path = os.path.join(out_dir, f'{name}_{scale}x_{counter}{out_ext}')
+            counter += 1
 
         file_type = 'image' if ext in IMAGE_EXTENSIONS else 'video' if ext in VIDEO_EXTENSIONS else 'unknown'
 

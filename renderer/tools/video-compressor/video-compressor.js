@@ -130,7 +130,7 @@ function bindEvents() {
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       persistedState.outputDir = outputDir;
@@ -149,7 +149,7 @@ function bindEvents() {
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(file.path);
     if (paths.length > 0) {
-      const resolved = await window.api.resolveDroppedPaths(paths);
+      const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) addFiles(resolved);
       else log('No supported video files found', 'warn');
     }
@@ -157,7 +157,7 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const paths = await window.api.selectFiles({ title: 'Select Videos', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Videos', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
     if (paths.length > 0) addFiles(paths);
   });
 
@@ -166,7 +166,7 @@ function bindEvents() {
     browseFolderBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (statusText) statusText.textContent = 'Scanning folder...';
-      const paths = await window.api.selectFolder();
+      const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
       if (statusText) statusText.textContent = 'Waiting for Video';
@@ -176,7 +176,7 @@ function bindEvents() {
   dropZone.addEventListener('click', async (e) => {
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
     if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
-    const paths = await window.api.selectFiles({ title: 'Select Videos', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Videos', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
     if (paths.length > 0) addFiles(paths);
   });
 
@@ -185,7 +185,7 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (lastOutputDir) window.api.openFolder(lastOutputDir);
+    if (lastOutputDir) window.api.system.openFolder(lastOutputDir);
   });
 
   compressBtn.addEventListener('click', startCompression);
@@ -201,7 +201,7 @@ function bindEvents() {
     });
   }
 
-  progressCleanup = window.api.onToolProgress((data) => {
+  progressCleanup = window.api.tools.onToolProgress((data) => {
     if (data.tool !== 'video-compressor') return;
     handleProgress(data);
   });
@@ -211,7 +211,7 @@ async function startCompression() {
   if (isProcessing) {
     compressBtn.disabled = true;
     compressBtn.textContent = 'Cancelling...';
-    try { await window.api.cancelVideoCompression(); } catch {}
+    try { await window.api.tools.videoCompressor.cancelVideoCompression(); } catch {}
     return;
   }
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
@@ -243,7 +243,7 @@ async function startCompression() {
     renderFileItem(files.indexOf(file));
 
     try {
-      const result = await window.api.compressVideo({
+      const result = await window.api.tools.videoCompressor.compressVideo({
         inputPath: file.path,
         crf: parseInt(crfSlider.value),
         preset: preset.value,
@@ -366,7 +366,7 @@ async function addFiles(paths) {
     const ext = getFileExtension(p);
     if (!VIDEO_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) continue;
-    const size = await window.api.getFileSize(p);
+    const size = await window.api.system.getFileSize(p);
     const info = await probeVideoInfo(p);
     files.push({ path: p, name: getFileName(p), size, width: info.width, height: info.height, progress: 0, status: 'Waiting for Video', state: 'pending' });
     added++;
@@ -381,8 +381,8 @@ async function addFiles(paths) {
 
 async function probeVideoInfo(filePath) {
   try {
-    if (!window.api.probeVideo) return {};
-    const result = await window.api.probeVideo(filePath);
+    if (!window.api.tools.videoCompressor.probeVideo) return {};
+    const result = await window.api.tools.videoCompressor.probeVideo(filePath);
     if (result && result.success) return result;
   } catch {}
   return {};

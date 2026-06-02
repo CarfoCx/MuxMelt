@@ -69,7 +69,7 @@ function cleanup() {
 function bindEvents() {
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       const display = dir.length > 35 ? '...' + dir.slice(-32) : dir;
@@ -96,7 +96,7 @@ function bindEvents() {
     dropZone.classList.remove('dragover');
     const paths = [...e.dataTransfer.files].map(file => file.path);
     if (paths.length > 0) {
-      const resolved = await window.api.resolveDroppedPaths(paths);
+      const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) setImageFromPaths(resolved);
       else log('No supported image found', 'warn');
     }
@@ -124,7 +124,7 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (lastOutputDir) window.api.openFolder(lastOutputDir);
+    if (lastOutputDir) window.api.system.openFolder(lastOutputDir);
   });
 
   applyBtn.addEventListener('click', () => {
@@ -135,13 +135,13 @@ function bindEvents() {
     openEditor(0);
   });
 
-  progressCleanup = window.api.onToolProgress((data) => {
+  progressCleanup = window.api.tools.onToolProgress((data) => {
     if (data.tool === 'bulk-imager' && data.status) statusText.textContent = data.status;
   });
 }
 
 async function browseForImage() {
-  const paths = await window.api.selectFiles({
+  const paths = await window.api.system.selectFiles({
     title: 'Select Image',
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }]
   });
@@ -419,13 +419,13 @@ async function applyToOne() {
 
   try {
     const result = chain.length === 1
-      ? await window.api.bulkProcess({
+      ? await window.api.tools.bulkImager.bulkProcess({
           files: [file.path],
           operation: chain[0].operation,
           operationOptions: chain[0].operationOptions,
           outputDir
         })
-      : await window.api.bulkProcessChain({
+      : await window.api.tools.bulkImager.bulkProcessChain({
           files: [file.path],
           chain,
           outputDir
@@ -485,7 +485,7 @@ async function setImageFromPaths(paths) {
     return;
   }
 
-  const size = await window.api.getFileSize(selected);
+  const size = await window.api.system.getFileSize(selected);
   files = [{ path: selected, name: getFileName(selected), size, progress: 0, status: 'Active', state: 'pending' }];
   lastOutputDir = '';
   openOutputBtn.style.display = 'none';

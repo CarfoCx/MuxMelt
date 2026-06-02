@@ -92,7 +92,7 @@ function bindEvents() {
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       const parts = dir.replace(/\\\\/g, '/').split('/');
@@ -110,7 +110,7 @@ function bindEvents() {
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(file.path);
     if (paths.length > 0) {
-      const resolved = await window.api.resolveDroppedPaths(paths);
+      const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) setVideo(resolved[0]);
       else log('No supported video file found', 'warn');
     }
@@ -118,13 +118,13 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const paths = await window.api.selectFiles({ title: 'Select Video', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Video', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
     if (paths.length > 0) setVideo(paths[0]);
   });
 
   dropZone.addEventListener('click', async (e) => {
     if (e.target.id === 'browseBtn') return;
-    const paths = await window.api.selectFiles({ title: 'Select Video', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Video', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
     if (paths.length > 0) setVideo(paths[0]);
   });
 
@@ -137,12 +137,12 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (lastOutputDir) window.api.openFolder(lastOutputDir);
+    if (lastOutputDir) window.api.system.openFolder(lastOutputDir);
   });
 
   createBtn.addEventListener('click', startCreation);
 
-  progressCleanup = window.api.onToolProgress((data) => {
+  progressCleanup = window.api.tools.onToolProgress((data) => {
     if (data.tool !== 'gif-maker') return;
     handleProgress(data);
   });
@@ -169,7 +169,7 @@ async function startCreation() {
   if (isProcessing) {
     createBtn.disabled = true;
     createBtn.textContent = 'Cancelling...';
-    try { await window.api.cancelGifMaker(); } catch {}
+    try { await window.api.tools.gifMaker.cancelGifMaker(); } catch {}
     return;
   }
   if (!videoFile) return;
@@ -192,7 +192,7 @@ async function startCreation() {
   log(`Creating GIF: FPS=${fpsSlider.value}, width=${widthInput.value}px, start=${startTime.value}, duration=${duration.value}s, dither=${ditherSelect.value}, colors=${maxColorsSlider.value}`);
 
   try {
-    const result = await window.api.makeGif({
+    const result = await window.api.tools.gifMaker.makeGif({
       inputPath: videoFile,
       fps: parseInt(fpsSlider.value),
       width: parseInt(widthInput.value),

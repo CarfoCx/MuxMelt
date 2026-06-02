@@ -145,7 +145,12 @@ class StemSeparator:
                 if self.cancel_event.is_set():
                     raise RuntimeError('Cancelled')
 
-                output_path = os.path.join(output_dir, f'{base_name}_{stem_name}.wav')
+                base_output = f'{base_name}_{stem_name}.wav'
+                output_path = os.path.join(output_dir, base_output)
+                counter = 1
+                while os.path.exists(output_path):
+                    output_path = os.path.join(output_dir, f'{base_name}_{stem_name}_{counter}.wav')
+                    counter += 1
                 shutil.move(available[stem_name], output_path)
                 outputs[stem_name] = output_path
 

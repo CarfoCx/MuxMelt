@@ -217,13 +217,13 @@ function bindEvents() {
 
   scanBrowseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const paths = await window.api.selectFiles({ title: 'Select Image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
     if (paths.length > 0) scanQR(paths[0]);
   });
 
   scanDropZone.addEventListener('click', async (e) => {
     if (e.target.id === 'scanBrowseBtn') return;
-    const paths = await window.api.selectFiles({ title: 'Select Image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
     if (paths.length > 0) scanQR(paths[0]);
   });
 
@@ -255,7 +255,7 @@ async function handleGenerate() {
   log(`Generating QR code: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}", size=${opts.size}px`);
 
   try {
-    const preview = await window.api.previewQR(opts);
+    const preview = await window.api.tools.qrStudio.previewQR(opts);
 
     if (preview && preview.success && preview.dataUrl) {
       qrPreviewBox.innerHTML = `<img src="${preview.dataUrl}" alt="QR Code">`;
@@ -289,7 +289,7 @@ async function handleSave() {
   // Use default output dir if available, otherwise prompt
   let dir = window.getDefaultOutputDir ? window.getDefaultOutputDir() : '';
   if (!dir) {
-    dir = await window.api.selectOutputDir();
+    dir = await window.api.system.selectOutputDir();
     if (!dir) return;
   }
 
@@ -297,7 +297,7 @@ async function handleSave() {
   saveBtn.textContent = 'Saving...';
 
   try {
-    const result = await window.api.generateQR({
+    const result = await window.api.tools.qrStudio.generateQR({
       ...opts,
       outputDir: dir
     });
@@ -332,7 +332,7 @@ async function scanQR(filePath) {
   log(`Scanning: ${getFileName(filePath)}`);
 
   try {
-    const result = await window.api.scanQR(filePath);
+    const result = await window.api.tools.qrStudio.scanQR(filePath);
 
     const decoded = result && (result.data || result.text);
     if (decoded) {

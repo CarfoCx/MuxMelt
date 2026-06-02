@@ -185,4 +185,25 @@ function generateOutputName(inputPath, operation, pattern) {
     .replace('{time}', timeStr);
 }
 
-module.exports = { validateOutputDir, validateOutputName, validateFileType, formatToolError, validateMagicBytes, generateOutputName, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, PDF_EXTS };
+/**
+ * Auto-increment a file path if it already exists to prevent accidental overwrites.
+ * e.g., video.mp4 -> video_1.mp4 -> video_2.mp4
+ */
+function autoIncrementPath(desiredPath) {
+  const fs = require('fs');
+  if (!fs.existsSync(desiredPath)) return desiredPath;
+
+  const dir = path.dirname(desiredPath);
+  const ext = path.extname(desiredPath);
+  const baseName = path.basename(desiredPath, ext);
+  
+  let counter = 1;
+  let newPath = path.join(dir, `${baseName}_${counter}${ext}`);
+  while (fs.existsSync(newPath)) {
+    counter++;
+    newPath = path.join(dir, `${baseName}_${counter}${ext}`);
+  }
+  return newPath;
+}
+
+module.exports = { validateOutputDir, validateOutputName, validateFileType, formatToolError, validateMagicBytes, generateOutputName, autoIncrementPath, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, PDF_EXTS };

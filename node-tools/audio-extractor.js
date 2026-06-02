@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const ffmpeg = require('./ffmpeg-runner');
-const { validateOutputDir, formatToolError } = require('./path-utils');
+const { validateOutputDir, formatToolError, autoIncrementPath } = require('./path-utils');
 
 const AUDIO_CODECS = {
   mp3:  ['-c:a', 'libmp3lame', '-b:a', '192k'],
@@ -43,7 +43,8 @@ function registerIPC(ipcMain, getMainWindow) {
       const ext = path.extname(inputPath);
       const baseName = path.basename(inputPath, ext);
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
-      const outputPath = path.join(outDir, baseName + '.' + audioFormat);
+      let outputPath = path.join(outDir, baseName + '.' + audioFormat);
+      outputPath = autoIncrementPath(outputPath);
 
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 

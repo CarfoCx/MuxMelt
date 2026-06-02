@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
 const ffmpeg = require('./ffmpeg-runner');
-const { validateOutputDir, formatToolError, validateMagicBytes } = require('./path-utils');
+const { validateOutputDir, formatToolError, validateMagicBytes, autoIncrementPath } = require('./path-utils');
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif', '.gif', '.svg', '.heic', '.heif']);
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov']);
@@ -126,7 +126,8 @@ function registerIPC(ipcMain, getMainWindow) {
       const baseName = path.basename(inputPath, ext);
       const outExt = '.' + targetFormat;
       const safeOutputDir = validateOutputDir(outputDir) || path.dirname(inputPath);
-      const outputPath = path.join(safeOutputDir, baseName + '_converted' + outExt);
+      let outputPath = path.join(safeOutputDir, baseName + '_converted' + outExt);
+      outputPath = autoIncrementPath(outputPath);
 
       // Ensure output directory exists
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });

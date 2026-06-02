@@ -5,7 +5,7 @@ const fs = require('fs');
 const QRCode = require('qrcode');
 const jsQR = require('jsqr');
 const sharp = require('sharp');
-const { validateOutputDir, validateOutputName } = require('./path-utils');
+const { validateOutputDir, validateOutputName, autoIncrementPath } = require('./path-utils');
 
 function registerIPC(ipcMain, getMainWindow) {
 
@@ -31,7 +31,8 @@ function registerIPC(ipcMain, getMainWindow) {
       fs.mkdirSync(outDir, { recursive: true });
 
       const fileName = validateOutputName(outputName) || `qr_${Date.now()}.png`;
-      const outputPath = path.join(outDir, fileName);
+      let outputPath = path.join(outDir, fileName);
+      outputPath = autoIncrementPath(outputPath);
 
       const qrOptions = {
         type: 'png',

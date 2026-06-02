@@ -27,7 +27,8 @@
     "electron-updater": "^6.3.9",
     "jsqr": "^1.4.0",
     "qrcode": "^1.5.4",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "webtorrent": "^3.0.16"
   },
   "devDependencies": {
     "electron": "^41.3.0",

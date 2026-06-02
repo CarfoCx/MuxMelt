@@ -95,7 +95,7 @@ function bindEvents() {
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       const parts = dir.replace(/\\\\/g, '/').split('/');
@@ -114,7 +114,7 @@ function bindEvents() {
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(file.path);
     if (paths.length > 0) {
-      const resolved = await window.api.resolveDroppedPaths(paths);
+      const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) addFiles(resolved);
       else log('No supported files found in dropped items', 'warn');
     }
@@ -122,7 +122,7 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const paths = await window.api.selectFiles();
+    const paths = await window.api.system.selectFiles();
     if (paths.length > 0) addFiles(paths);
   });
 
@@ -131,7 +131,7 @@ function bindEvents() {
     browseFolderBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (statusText) statusText.textContent = 'Scanning folder...';
-      const paths = await window.api.selectFolder();
+      const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
       if (statusText) statusText.textContent = 'Waiting for File';
@@ -141,7 +141,7 @@ function bindEvents() {
   dropZone.addEventListener('click', async (e) => {
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
     if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
-    const paths = await window.api.selectFiles();
+    const paths = await window.api.system.selectFiles();
     if (paths.length > 0) addFiles(paths);
   });
 
@@ -150,7 +150,7 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (lastOutputDir) window.api.openFolder(lastOutputDir);
+    if (lastOutputDir) window.api.system.openFolder(lastOutputDir);
   });
 
   convertBtn.addEventListener('click', startConversion);
@@ -166,7 +166,7 @@ function bindEvents() {
   }
 
   // Listen for progress
-  progressCleanup = window.api.onToolProgress((data) => {
+  progressCleanup = window.api.tools.onToolProgress((data) => {
     if (data.tool !== 'format-converter') return;
     handleProgress(data);
   });
@@ -177,7 +177,7 @@ async function startConversion() {
     // Cancel
     convertBtn.disabled = true;
     convertBtn.textContent = 'Cancelling...';
-    try { await window.api.cancelFormatConversion && window.api.cancelFormatConversion(); } catch {}
+    try { await window.api.tools.formatConverter.cancelFormatConversion && window.api.tools.formatConverter.cancelFormatConversion(); } catch {}
     return;
   }
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
@@ -233,7 +233,7 @@ async function startConversion() {
     renderFileItem(files.indexOf(file));
 
     try {
-      const result = await window.api.convertFormat({
+      const result = await window.api.tools.formatConverter.convertFormat({
         inputPath: file.path,
         targetFormat: outputFormat.value,
         quality: parseInt(qualitySlider.value),
@@ -361,7 +361,7 @@ async function addFiles(paths) {
     const ext = getFileExtension(p);
     if (!IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext) && !AUDIO_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
-    const size = await window.api.getFileSize(p);
+    const size = await window.api.system.getFileSize(p);
     files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for File', state: 'pending' });
     added++;
   }

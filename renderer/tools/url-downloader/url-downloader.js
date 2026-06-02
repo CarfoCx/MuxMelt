@@ -63,7 +63,7 @@ function bindEvents() {
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       updateOutputButton();
@@ -74,7 +74,7 @@ function bindEvents() {
   if (cookiesFileBtn) {
     cookiesFileBtn.addEventListener('click', async () => {
       if (isProcessing) return;
-      const files = await window.api.selectFiles({
+      const files = await window.api.system.selectFiles({
         title: 'Select Cookies File (.txt)',
         filters: [{ name: 'Cookies file (cookies.txt)', extensions: ['txt'] }]
       });
@@ -141,7 +141,7 @@ function bindEvents() {
       textSpan.textContent = 'Updating (yt-dlp)...';
       log('Starting yt-dlp dependencies update...');
       try {
-        const res = await window.api.updateYtDlp();
+        const res = await window.api.tools.urlDownloader.updateYtDlp();
         if (res && res.success) {
           log('yt-dlp upgraded successfully: ' + res.message, 'success');
           alert('Downloader dependencies (yt-dlp) updated successfully!');
@@ -185,12 +185,12 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (lastOutputDir) window.api.openFolder(lastOutputDir);
+    if (lastOutputDir) window.api.system.openFolder(lastOutputDir);
   });
 
   downloadBtn.addEventListener('click', startDownload);
 
-  progressCleanup = window.api.onToolProgress((data) => {
+  progressCleanup = window.api.tools.onToolProgress((data) => {
     if (data.tool !== 'url-downloader') return;
     handleProgress(data);
   });
@@ -276,7 +276,7 @@ async function fetchInfoForRow(row, url) {
   renderRows();
 
   try {
-    const res = await window.api.getVideoInfo({
+    const res = await window.api.tools.urlDownloader.getVideoInfo({
       url,
       cookiesFile: cookiesFile || undefined,
       cookieBrowser: document.getElementById('cookieBrowserSelect').value || undefined
@@ -304,7 +304,7 @@ async function startDownload() {
     isProcessing = false;
     downloadBtn.disabled = true;
     downloadBtn.textContent = 'Cancelling...';
-    try { await window.api.cancelUrlDownload(); } catch {}
+    try { await window.api.tools.urlDownloader.cancelUrlDownload(); } catch {}
     return;
   }
 
@@ -378,7 +378,7 @@ async function startDownload() {
 
       let result;
       try {
-        result = await window.api.downloadVideoUrl({
+        result = await window.api.tools.urlDownloader.downloadVideoUrl({
           url: row.url,
           outputDir,
           cookiesFile: cookiesFile || undefined,
@@ -704,7 +704,7 @@ function renderRows() {
 
     const outputBtn = el.querySelector('.url-output');
     if (outputBtn) {
-      outputBtn.addEventListener('click', () => window.api.openPath(row.output));
+      outputBtn.addEventListener('click', () => window.api.system.openPath(row.output));
     }
 
     el.querySelector('.url-remove').addEventListener('click', () => removeRow(row.id));

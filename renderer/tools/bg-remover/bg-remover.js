@@ -176,7 +176,7 @@ function bindEvents() {
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
-    const dir = await window.api.selectOutputDir();
+    const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
       const parts = dir.replace(/\\\\/g, '/').split('/');
@@ -194,7 +194,7 @@ function bindEvents() {
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(file.path);
     if (paths.length > 0) {
-      const resolved = await window.api.resolveDroppedPaths(paths);
+      const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) addFiles(resolved);
       else log('No supported image files found', 'warn');
     }
@@ -202,7 +202,7 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const paths = await window.api.selectFiles({ title: 'Select Images', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Images', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }] });
     if (paths.length > 0) addFiles(paths);
   });
 
@@ -211,7 +211,7 @@ function bindEvents() {
     browseFolderBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (statusText) statusText.textContent = 'Scanning folder...';
-      const paths = await window.api.selectFolder();
+      const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
       if (statusText) statusText.textContent = 'Waiting for Image';
@@ -221,7 +221,7 @@ function bindEvents() {
   dropZone.addEventListener('click', async (e) => {
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
     if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
-    const paths = await window.api.selectFiles({ title: 'Select Images', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }] });
+    const paths = await window.api.system.selectFiles({ title: 'Select Images', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }] });
     if (paths.length > 0) addFiles(paths);
   });
 
@@ -230,7 +230,7 @@ function bindEvents() {
   });
 
   openOutputBtn.addEventListener('click', () => {
-    if (lastOutputDir) window.api.openFolder(lastOutputDir);
+    if (lastOutputDir) window.api.system.openFolder(lastOutputDir);
   });
 
   processBtn.addEventListener('click', () => {
@@ -295,7 +295,7 @@ async function addFiles(paths) {
     const ext = getFileExtension(p);
     if (!IMAGE_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
-    const size = await window.api.getFileSize(p);
+    const size = await window.api.system.getFileSize(p);
     files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Image', state: 'pending' });
     added++;
   }

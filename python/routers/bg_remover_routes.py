@@ -58,7 +58,12 @@ async def bg_remover_ws(ws: WebSocket):
                         out_ext = f'.{output_format}'
                         out_dir = validate_output_dir(output_dir) or str(Path(file_path).parent)
                         os.makedirs(out_dir, exist_ok=True)
-                        output_path = os.path.join(out_dir, f'{name}_nobg{out_ext}')
+                        base_output = f'{name}_nobg{out_ext}'
+                        output_path = os.path.join(out_dir, base_output)
+                        counter = 1
+                        while os.path.exists(output_path):
+                            output_path = os.path.join(out_dir, f'{name}_nobg_{counter}{out_ext}')
+                            counter += 1
 
                         progress_q = thread_queue.Queue()
 
