@@ -1,0 +1,68 @@
+<div class="tool-body">
+  <div class="module-banner">
+    <strong>Torrent Downloader.</strong> Download files via WebTorrent — supports magnet links, info-hashes, and .torrent files with multiple concurrent downloads.
+  </div>
+  
+  <div style="padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0;">
+    
+    <div class="torrent-input-area">
+      <div class="torrent-input-row">
+        <div class="setting-group" style="flex: 1; min-width: 280px;">
+          <label>Magnet Link or Info-Hash:</label>
+          <input type="text" id="magnetInput" class="app-input" style="width: 100%; box-sizing: border-box;" placeholder="magnet:?xt=urn:btih:... or paste info-hash">
+        </div>
+        
+        <div class="setting-group" style="flex: 0.6; min-width: 220px;">
+          <label>Output Folder:</label>
+          <button class="output-dir-btn" id="outputDirBtn" title="Select where to save the files" style="width: 100%;">
+            <span id="outputDirText" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:90%; display:inline-block;">Select output directory...</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Torrent File:</label>
+        <div id="dropZone" class="torrent-drop-zone">
+          <svg class="drop-icon" viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          <span>Drop a .torrent file here or click to browse</span>
+          <strong id="fileCount" class="file-selected" style="display:none;"></strong>
+        </div>
+      </div>
+
+      <div class="torrent-add-row">
+        <button class="btn btn-primary" id="startBtn">
+          <span style="display:flex; align-items:center; gap:6px;">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Add Torrent
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <div id="downloadsContainer" class="torrent-downloads">
+      <div id="emptyState" class="torrent-empty-state">
+        <span class="empty-icon">&#128142;</span>
+        <p>No active downloads. Paste a magnet link or drop a .torrent file above to get started.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="footerStatus">Ready</span>
+    <span class="torrent-footer-count" id="footerCount"></span>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="cancelAllBtn" style="display:none;">Cancel All</button>
+    <button class="btn btn-secondary" id="openOutputBtn">Open Folder</button>
+  </div>
+</div>
