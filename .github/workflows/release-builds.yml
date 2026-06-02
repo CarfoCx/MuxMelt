@@ -45,12 +45,12 @@ jobs:
               dist/*-macos-arm64.dmg
               dist/*-macos-arm64.dmg.blockmap
           - name: Linux x64
-            slug: linux-x64
+            slug: linux-x86_64
             os: ubuntu-24.04
             command: npm run build:linux:x64
             files: |
-              dist/*-linux-x64.AppImage
-              dist/*-linux-x64.AppImage.blockmap
+              dist/*-linux-*.AppImage
+              dist/*-linux-*.AppImage.blockmap
               dist/latest-linux.yml
 
     steps:
