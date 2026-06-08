@@ -62,10 +62,10 @@ function bindEvents() {
   addUrlBtn.addEventListener('click', () => addRow(''));
 
   outputDirBtn.addEventListener('click', async () => {
-    if (isProcessing) return;
     const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
+      openOutputBtn.style.display = '';
       updateOutputButton();
       saveToolSettings();
     }
@@ -164,7 +164,7 @@ function bindEvents() {
     rows = [];
     lastOutputs = [];
     lastOutputDir = '';
-    openOutputBtn.style.display = 'none';
+    openOutputBtn.style.display = outputDir ? '' : 'none';
     retryBtn.style.display = 'none';
     window.clearLog();
     addRow('');
@@ -186,6 +186,7 @@ function bindEvents() {
 
   openOutputBtn.addEventListener('click', () => {
     if (lastOutputDir) window.api.system.openFolder(lastOutputDir);
+    else if (outputDir) window.api.system.openFolder(outputDir);
   });
 
   downloadBtn.addEventListener('click', startDownload);
@@ -333,7 +334,7 @@ async function startDownload() {
   downloadBtn.classList.add('btn-cancel');
   processingIndicator.classList.add('active');
   retryBtn.style.display = 'none';
-  openOutputBtn.style.display = 'none';
+  openOutputBtn.style.display = '';
   statusText.textContent = `Downloading ${pending.length} video URL(s)...`;
   if (etaText) etaText.textContent = '';
 
@@ -603,7 +604,7 @@ function renderRows() {
       mainContentHtml = `
         <div class="url-main has-info">
           <div class="url-thumbnail-container">
-            ${thumbnailSrc ? `<img src="${thumbnailSrc}" class="url-thumbnail" onerror="this.style.display='none'">` : ''}
+            ${thumbnailSrc ? `<img src="${thumbnailSrc}" class="url-thumbnail" referrerpolicy="no-referrer" onerror="this.parentElement.style.display='none'">` : ''}
           </div>
           <div class="url-info-details">
             <span class="url-video-title" title="${window.escapeHtml(row.info.title)}">${window.escapeHtml(row.info.title)}</span>
@@ -751,6 +752,7 @@ async function loadToolSettings() {
     if (s.outputDir) outputDir = s.outputDir;
     if (s.cookiesFile) { cookiesFile = s.cookiesFile; updateCookiesButton(); }
     updateOutputButton();
+    if (outputDir) openOutputBtn.style.display = '';
 
     if (s.quality && qualitySelect) qualitySelect.value = s.quality;
     if (s.cookieBrowser) document.getElementById('cookieBrowserSelect').value = s.cookieBrowser;

@@ -3,8 +3,35 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, execFileSync } = require('child_process');
+const { spawn } = require('child_process');
 const { validateOutputDir, formatToolError } = require('./path-utils');
+const { BrowserWindow } = require('electron');
+
+// Promise wrapper around spawn so long-running Python/pip calls never block the
+// Electron main process (execFileSync freezes the entire UI for its timeout).
+function execFileAsync(cmd, args, { timeout = 0 } = {}) {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let timer = null;
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    if (timeout > 0) {
+      timer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, timeout);
+    }
+    proc.stdout.on('data', (c) => { stdout += c.toString(); });
+    proc.stderr.on('data', (c) => { stderr += c.toString(); });
+    proc.on('error', (err) => { if (timer) clearTimeout(timer); reject(err); });
+    proc.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) resolve({ stdout, stderr });
+      else {
+        const err = new Error(stderr.trim() || stdout.trim() || `Process exited with code ${code}`);
+        err.code = code;
+        reject(err);
+      }
+    });
+  });
+}
 
 function defaultOutputDir() {
   return path.join(os.homedir(), 'Downloads', 'MuxMelt Downloads');
@@ -50,7 +77,7 @@ function buildRequestHeaders(url, options = {}) {
 
   if (!options.impersonate) {
     headers.push(
-      ['--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'],
+      ['--user-agent', options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'],
       ['--add-header', 'Accept-Language:en-US,en;q=0.9'],
     );
   }
@@ -64,6 +91,10 @@ function buildRequestHeaders(url, options = {}) {
       ['--referer', 'https://motherless.com/'],
       ['--add-header', 'Sec-Fetch-Site:cross-site'],
     );
+  }
+
+  if (options.referer) {
+    headers.push(['--referer', options.referer]);
   }
 
   if (directVideo) {
@@ -128,6 +159,20 @@ function shouldRetryWithImpersonation(error) {
     message.includes('private video');
 }
 
+// A "we parsed the page but found no video" failure, as opposed to a block.
+// yt-dlp emits these when a page embeds its stream in a way the generic
+// extractor can't see (e.g. a base64-encoded iframe/player URL). Browser
+// impersonation can't help here — only the in-app stream sniffer can — so
+// these are routed straight to the sniffer fallback.
+function isExtractionFailure(error) {
+  const message = String(error && error.message ? error.message : error || '').toLowerCase();
+  return message.includes('unsupported url') ||
+    message.includes('no video formats found') ||
+    message.includes('no media formats found') ||
+    message.includes('unable to extract') ||
+    message.includes('no suitable formats');
+}
+
 const IMPERSONATION_BROWSERS = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'];
 // Cap how many browser-cookie attempts we make. Each spawns yt-dlp and can
 // stall on a locked cookie DB (e.g. the browser is running), so trying all
@@ -164,21 +209,21 @@ function orderedImpersonationAttempts(options, cap = MAX_BROWSER_COOKIE_ATTEMPTS
   return attempts;
 }
 
-function hasPythonModule(pythonInfo, moduleName) {
+async function hasPythonModule(pythonInfo, moduleName) {
   try {
-    execFileSync(pythonInfo.cmd, [
+    await execFileAsync(pythonInfo.cmd, [
       ...(pythonInfo.args || []),
       '-c',
       `import ${moduleName}`
-    ], { stdio: 'ignore', timeout: 10000, windowsHide: true });
+    ], { timeout: 10000 });
     return true;
   } catch {
     return false;
   }
 }
 
-function installYtDlpImpersonationDeps(pythonInfo) {
-  execFileSync(pythonInfo.cmd, [
+async function installYtDlpImpersonationDeps(pythonInfo) {
+  await execFileAsync(pythonInfo.cmd, [
     ...(pythonInfo.args || []),
     '-m',
     'pip',
@@ -186,7 +231,7 @@ function installYtDlpImpersonationDeps(pythonInfo) {
     '--upgrade',
     'yt-dlp[default,curl-cffi]',
     '--no-warn-script-location'
-  ], { stdio: 'pipe', timeout: 300000, windowsHide: true });
+  ], { timeout: 300000 });
 }
 
 function formatDownloadError(err, url) {
@@ -382,6 +427,184 @@ function describeYtDlpStage(line, modeLabel) {
   return '';
 }
 
+// Extension of a URL's path (lowercased, no query/hash), or '' when none.
+function urlPathExt(u) {
+  try {
+    const m = new URL(u).pathname.toLowerCase().match(/\.([a-z0-9]+)$/);
+    return m ? m[1] : '';
+  } catch {
+    return '';
+  }
+}
+
+// HLS (.m3u8) and DASH (.mpd) manifests are the preferred capture target —
+// they carry every quality and let yt-dlp mux audio + video.
+function isManifestUrl(u) {
+  const ext = urlPathExt(u);
+  return ext === 'm3u8' || ext === 'mpd';
+}
+
+async function sniffVideoUrl(url, win, timeoutMs = 15000) {
+  if (win) {
+    win.webContents.send('tool-progress', {
+      tool: 'url-downloader',
+      url,
+      type: 'start',
+      progress: 0.05,
+      status: 'Universal fallback: Sniffing webpage for video streams...'
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const candidates = [];
+    let isDone = false;
+
+    // Isolated, non-persistent session so the request listener and captured
+    // cookies never touch the app's default session or other concurrent sniffs.
+    const partition = `sniffer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const snifferWin = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        backgroundThrottling: false,
+        offscreen: true,
+        partition
+      }
+    });
+    const snifferSession = snifferWin.webContents.session;
+
+    snifferWin.webContents.setWindowOpenHandler(() => {
+      return { action: 'deny' };
+    });
+
+    const standardUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
+    snifferWin.webContents.setUserAgent(standardUa);
+
+    const teardown = () => {
+      try { snifferSession.webRequest.onHeadersReceived(null); } catch {}
+      if (!snifferWin.isDestroyed()) snifferWin.destroy();
+    };
+
+    const done = async () => {
+      if (isDone) return;
+      isDone = true;
+
+      // Final DOM scrape: catch plain progressive players whose <video>/<source>
+      // src or og:video tag never surfaced as a sniffable network response.
+      try {
+        if (!snifferWin.isDestroyed()) {
+          const domUrls = await snifferWin.webContents.executeJavaScript(`
+            (() => {
+              const out = [];
+              const abs = (u) => { try { return new URL(u, location.href).href; } catch { return null; } };
+              document.querySelectorAll('video[src], video source[src], source[src]').forEach(el => {
+                const u = abs(el.getAttribute('src')); if (u) out.push(u);
+              });
+              document.querySelectorAll('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"]').forEach(m => {
+                const u = abs(m.getAttribute('content')); if (u) out.push(u);
+              });
+              return out;
+            })();
+          `).catch(() => []);
+          for (const u of (domUrls || [])) {
+            if (u && /^https?:/i.test(u) && !candidates.some(c => c.url === u)) {
+              candidates.push({ url: u, size: 0 });
+            }
+          }
+        }
+      } catch {}
+
+      candidates.sort((a, b) => {
+        const am = isManifestUrl(a.url);
+        const bm = isManifestUrl(b.url);
+        if (am && !bm) return -1;
+        if (!am && bm) return 1;
+        return b.size - a.size;
+      });
+
+      if (candidates.length === 0) {
+        teardown();
+        reject(new Error('Universal downloader could not find any video streams on this page.'));
+        return;
+      }
+
+      let cookiesText;
+      const userAgent = snifferWin.webContents.getUserAgent();
+      try {
+        const cookies = await snifferSession.cookies.get({});
+        cookiesText = '# Netscape HTTP Cookie File\n';
+        for (const c of cookies) {
+          const domain = c.domain;
+          const includeSubDomain = domain.startsWith('.') ? 'TRUE' : 'FALSE';
+          const cookiePath = c.path || '/';
+          const secure = c.secure ? 'TRUE' : 'FALSE';
+          const expiration = c.expirationDate ? Math.round(c.expirationDate) : 0;
+          cookiesText += `${domain}\t${includeSubDomain}\t${cookiePath}\t${secure}\t${expiration}\t${c.name}\t${c.value}\n`;
+        }
+      } catch {}
+
+      teardown();
+      resolve({ url: candidates[0].url, cookiesText, userAgent });
+    };
+
+    snifferSession.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, callback) => {
+      callback({ cancel: false });
+
+      const type = (details.responseHeaders['content-type'] || details.responseHeaders['Content-Type'] || [])[0] || '';
+      const sizeStr = (details.responseHeaders['content-length'] || details.responseHeaders['Content-Length'] || [])[0] || '0';
+      const size = parseInt(sizeStr, 10) || 0;
+      const ext = urlPathExt(details.url);
+
+      const isManifest = ext === 'm3u8' || ext === 'mpd';
+      const isVideoType = type.includes('video/') ||
+        type.includes('mpegurl') ||        // HLS: application/(vnd.apple.)?mpegurl
+        type.includes('dash+xml');         // DASH: application/dash+xml
+      const isVideoUrl = isManifest || ext === 'mp4' || ext === 'm4v' || ext === 'webm' || ext === 'mov';
+
+      // Skip obvious page/script/style assets that can share a video-ish MIME.
+      if ((isVideoType || isVideoUrl) && !['js', 'mjs', 'html', 'css'].includes(ext)) {
+        if (isManifest || size > 100000 || size === 0) {
+          candidates.push({ url: details.url, size });
+          // A manifest is the ideal target — give late variants a brief window, then finish.
+          if (isManifest || candidates.length >= 5) {
+            setTimeout(done, 1500);
+          }
+        }
+      }
+    });
+
+    snifferWin.loadURL(url).catch(() => {});
+
+    snifferWin.webContents.on('did-finish-load', () => {
+      snifferWin.webContents.executeJavaScript(`
+        setInterval(() => {
+          window.scrollBy(0, 500);
+          document.querySelectorAll('video').forEach(el => {
+            if (el.paused) { try { el.play(); } catch(e) {} }
+          });
+          document.querySelectorAll('button, a, div[class*="play"], div[id*="play"]').forEach(el => {
+            const text = (el.innerText || '').toLowerCase();
+            const html = (el.innerHTML || '').toLowerCase();
+            if (text.includes('agree') || text.includes('enter') || text.includes('yes') || text.includes('accept') || text === 'play' || text === 'continue' || html.includes('play')) {
+              try { el.click(); } catch(e) {}
+            }
+          });
+          
+          const x = window.innerWidth / 2;
+          const y = window.innerHeight / 2;
+          const element = document.elementFromPoint(x, y);
+          if (element) {
+            try { element.click(); } catch(e) {}
+          }
+        }, 1000);
+      `).catch(() => {});
+    });
+
+    setTimeout(done, timeoutMs);
+  });
+}
+
 function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   const activeProcessesByWindow = new Map();
 
@@ -420,6 +643,14 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         const statusPrefix = runOptions.statusPrefix || '';
         const modeLabel = runOptions.modeLabel ? `${runOptions.modeLabel} | ` : '';
         let lastStageStatus = '';
+        
+        // Smoothing state
+        let overallProgress = 0;
+        let currentStreamStart = 0;
+        let lastRawPercent = 0;
+        let smoothedEtaSeconds = -1;
+        let lastSpeed = '';
+
         const proc = spawn(pythonInfo.cmd, args, {
           stdio: ['ignore', 'pipe', 'pipe'],
           env: {
@@ -433,6 +664,22 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           activeProcessesByWindow.set(winId, new Set());
         }
         activeProcessesByWindow.get(winId).add(proc);
+
+        const parseEtaToSeconds = (etaStr) => {
+          if (!etaStr) return 0;
+          const parts = etaStr.split(':').map(Number);
+          if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+          if (parts.length === 2) return parts[0] * 60 + parts[1];
+          return 0;
+        };
+
+        const formatSecondsToEta = (sec) => {
+          const h = Math.floor(sec / 3600);
+          const m = Math.floor((sec % 3600) / 60);
+          const s = Math.floor(sec % 60);
+          if (h > 0) return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+          return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        };
 
         const handleLine = (line) => {
           const trimmed = line.trim();
@@ -460,15 +707,42 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           }
 
           if (progress && win) {
+            // Fluent Progress Smoothing
+            if (progress.percent < lastRawPercent && lastRawPercent - progress.percent > 50) {
+              // A new stream started (e.g. audio track after video track)
+              currentStreamStart = overallProgress;
+            } else if (progress.percent < lastRawPercent) {
+              // Minor regression (concurrent fragments jitter), enforce monotonicity
+              progress.percent = lastRawPercent;
+            }
+            lastRawPercent = progress.percent;
+
+            const remainingSpace = 100 - currentStreamStart;
+            const scaledPercent = currentStreamStart + (progress.percent * remainingSpace * 0.9 / 100);
+            
+            if (scaledPercent > overallProgress) {
+              overallProgress = scaledPercent;
+            }
+
+            // ETA Smoothing (Exponential Moving Average)
+            const currentEtaSeconds = parseEtaToSeconds(progress.eta);
+            if (currentEtaSeconds > 0) {
+              if (smoothedEtaSeconds === -1) smoothedEtaSeconds = currentEtaSeconds;
+              else smoothedEtaSeconds = smoothedEtaSeconds * 0.8 + currentEtaSeconds * 0.2;
+            }
+            const displayEta = smoothedEtaSeconds > 0 ? formatSecondsToEta(smoothedEtaSeconds) : '';
+            
+            if (progress.speed) lastSpeed = progress.speed;
+
             win.webContents.send('tool-progress', {
               tool: 'url-downloader',
               url,
               type: 'progress',
-              progress: progress.percent / 100,
+              progress: overallProgress / 100,
               status: [
-                `${statusPrefix}Downloading... ${Math.round(progress.percent)}%`,
-                progress.speed,
-                progress.eta ? `ETA ${progress.eta}` : ''
+                `${statusPrefix}Downloading... ${Math.round(overallProgress)}%`,
+                lastSpeed,
+                displayEta ? `ETA ${displayEta}` : ''
               ].filter(Boolean).join(' | '),
               size: progress.size
             });
@@ -506,8 +780,14 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             const combined = `${stderr}\n${stdout}`.trim();
             const lines = combined.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
             const usefulLines = lines.filter(l => l && !l.startsWith('[download]'));
-            const last = usefulLines.reverse().find(Boolean) || `yt-dlp exited with code ${code}`;
-            const err = new Error(last);
+            let errorMessage = `yt-dlp exited with code ${code}`;
+            const errorLine = usefulLines.find(l => l.toUpperCase().startsWith('ERROR:'));
+            if (errorLine) {
+              errorMessage = errorLine;
+            } else {
+              errorMessage = usefulLines.reverse().find(Boolean) || errorMessage;
+            }
+            const err = new Error(errorMessage);
             err.fullOutput = combined;
             reject(err);
           }
@@ -520,8 +800,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       try {
         await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, options));
       } catch (err) {
-        if (!shouldRetryWithImpersonation(err)) throw err;
-        if (!hasPythonModule(pythonInfo, 'curl_cffi')) {
+        const extractionFailure = isExtractionFailure(err);
+        if (!extractionFailure && !shouldRetryWithImpersonation(err)) throw err;
+        if (!extractionFailure && !(await hasPythonModule(pythonInfo, 'curl_cffi'))) {
           if (win) {
             win.webContents.send('tool-progress', {
               tool: 'url-downloader',
@@ -531,7 +812,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             });
           }
           try {
-            installYtDlpImpersonationDeps(pythonInfo);
+            await installYtDlpImpersonationDeps(pythonInfo);
           } catch (installErr) {
             // No network or a read-only install — don't abort. Impersonation may
             // already be available, or the retries will surface a clear error.
@@ -552,7 +833,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           cookiesFile: cookiesFile || undefined
         };
 
-        const retryConfigs = orderedImpersonationAttempts(options).map((attempt) => {
+        const retryConfigs = extractionFailure ? [] : orderedImpersonationAttempts(options).map((attempt) => {
           const label = attempt.cookiesFile
             ? 'Cookies mode'
             : (attempt.cookieBrowser ? `Browser mode (${attempt.cookieBrowser})` : 'Browser mode');
@@ -564,7 +845,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           return { ...baseConfig, ...attempt, statusMsg, label };
         });
 
-        let lastRetryErr = null;
+        // Seed with the original error so that when there are no impersonation
+        // attempts (extraction failure), the sniffer fallback below still runs.
+        let lastRetryErr = err;
         for (const config of retryConfigs) {
           if (win) {
             win.webContents.send('tool-progress', {
@@ -590,7 +873,63 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             lastRetryErr = e;
           }
         }
-        if (lastRetryErr) throw lastRetryErr;
+        if (lastRetryErr) {
+          let sniffedData = null;
+          try {
+            sniffedData = await sniffVideoUrl(url, win, 15000);
+          } catch (sniffErr) {
+            throw lastRetryErr;
+          }
+          
+          if (sniffedData && sniffedData.url) {
+            if (win) {
+              win.webContents.send('tool-progress', {
+                tool: 'url-downloader', url, type: 'start', progress: 0.1,
+                status: 'Stream found! Downloading...'
+              });
+            }
+            stdout = ''; stderr = ''; outputPath = '';
+            
+            let tempCookieFile = '';
+            if (sniffedData.cookiesText) {
+              tempCookieFile = path.join(os.tmpdir(), `muxmelt-cookies-${Date.now()}.txt`);
+              fs.writeFileSync(tempCookieFile, sniffedData.cookiesText);
+            }
+
+            const sniffConfig = {
+              ...options,
+              format,
+              cookiesFile: tempCookieFile || cookiesFile || undefined,
+              referer: url,
+              userAgent: sniffedData.userAgent,
+              impersonate: false // The stream might reject impersonation if it's already authenticated
+            };
+            
+            try {
+              const directStreamArgs = buildYtDlpArgs(pythonInfo, sniffedData.url, outDir, sniffConfig);
+              // Force generic extractor so it doesn't accidentally trigger a site-specific extractor that fails
+              const urlIndex = directStreamArgs.lastIndexOf(sniffedData.url);
+              if (urlIndex !== -1) {
+                // Insert --use-extractors generic before the URL
+                directStreamArgs.splice(urlIndex, 0, '--use-extractors', 'generic');
+              }
+              
+              await runDownload(directStreamArgs, {
+                statusPrefix: 'Universal | ',
+                modeLabel: 'Universal | ',
+                minProgress: 0.1
+              });
+            } catch (fallbackErr) {
+              throw fallbackErr;
+            } finally {
+              if (tempCookieFile && fs.existsSync(tempCookieFile)) {
+                try { fs.unlinkSync(tempCookieFile); } catch(e) {}
+              }
+            }
+          } else {
+            throw lastRetryErr;
+          }
+        }
       }
 
       if (!outputPath) {
@@ -720,9 +1059,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         return { success: false, error: err.message || 'Failed to fetch video info.' };
       }
 
-      if (!hasPythonModule(pythonInfo, 'curl_cffi')) {
+      if (!(await hasPythonModule(pythonInfo, 'curl_cffi'))) {
         try {
-          installYtDlpImpersonationDeps(pythonInfo);
+          await installYtDlpImpersonationDeps(pythonInfo);
         } catch (e) {
           console.error('Failed to install impersonation dependencies during info fetch:', e);
         }
@@ -761,9 +1100,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         'yt-dlp[default,curl-cffi]',
         '--no-warn-script-location'
       ];
-      
-      const stdout = execFileSync(pythonInfo.cmd, args, { stdio: 'pipe', timeout: 300000, windowsHide: true });
-      return { success: true, message: stdout.toString().trim() };
+
+      const { stdout } = await execFileAsync(pythonInfo.cmd, args, { timeout: 300000 });
+      return { success: true, message: stdout.trim() };
     } catch (err) {
       return { success: false, error: err.message || String(err) };
     }

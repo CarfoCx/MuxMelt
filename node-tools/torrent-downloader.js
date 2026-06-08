@@ -3,13 +3,16 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const WebTorrent = require('webtorrent');
 const { validateOutputDir } = require('./path-utils');
-
+let WebTorrent;
 let client = null;
 
-function getClient() {
+async function getClient() {
   if (!client) {
+    if (!WebTorrent) {
+      const mod = await import('webtorrent');
+      WebTorrent = mod.default || mod;
+    }
     client = new WebTorrent();
   }
   return client;
@@ -70,7 +73,7 @@ function registerIPC(ipcMain, getMainWindow) {
       const torrentId = crypto.randomUUID();
       sendProgress(torrentId, { status: 'metadata', progress: 0 });
 
-      const c = getClient();
+      const c = await getClient();
       
       const torrent = c.add(source, { path: outDir }, (t) => {
         const files = t.files.map(f => ({ name: f.name, length: f.length, path: f.path }));
