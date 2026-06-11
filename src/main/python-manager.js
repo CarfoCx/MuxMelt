@@ -169,7 +169,16 @@ function waitForServer(SHUTDOWN_TOKEN, retries = 90) {
   return new Promise((resolve, reject) => {
     const check = (attempt) => {
       const req = http.get(`http://127.0.0.1:${PYTHON_PORT}/health${tokenQuery}`, (res) => {
-        resolve();
+        // Drain the body so the socket is released, and only treat a 2xx as
+        // "ready" — a 500 from a half-initialized server is not ready yet.
+        res.resume();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve();
+        } else if (attempt >= retries) {
+          reject(new Error(`Python server responded with HTTP ${res.statusCode} after ${retries} seconds`));
+        } else {
+          setTimeout(() => check(attempt + 1), 1000);
+        }
       });
       req.on('error', () => {
         if (attempt >= retries) {
@@ -251,6 +260,7 @@ function getPythonInfo() {
 }
 
 module.exports = {
+  isPortAvailable,
   findAvailablePort,
   findPython,
   startPythonServer,

@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   system: {
@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('api', {
     loadSettings: () => ipcRenderer.invoke('load-settings'),
     saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
     resolveDroppedPaths: (paths) => ipcRenderer.invoke('resolve-dropped-paths', paths),
+    // File.path was removed in Electron 32; this is the only way for the
+    // renderer to get a filesystem path from a dropped/pasted File object.
+    getPathForFile: (file) => {
+      try { return webUtils.getPathForFile(file); } catch { return ''; }
+    },
     readImagePreview: (filePath) => ipcRenderer.invoke('read-image-preview', filePath),
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     setProgress: (value) => ipcRenderer.invoke('set-progress', value),

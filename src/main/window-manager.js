@@ -1,5 +1,18 @@
-const { BrowserWindow, shell } = require('electron');
+const { BrowserWindow, shell, session } = require('electron');
 const path = require('path');
+
+// The renderer is a local page; it never legitimately needs camera, mic,
+// geolocation, etc. Clipboard write is the one permission the UI uses
+// ("Copy Path" in the file context menu). Deny everything else.
+const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write']);
+let permissionHandlerInstalled = false;
+function installPermissionHandler() {
+  if (permissionHandlerInstalled) return;
+  permissionHandlerInstalled = true;
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(ALLOWED_PERMISSIONS.has(permission));
+  });
+}
 
 let mainWindow = null;
 let splashWindow = null;
@@ -23,7 +36,8 @@ function createSplashWindow(appDir) {
     icon: path.join(appDir, 'build', 'icon.png'),
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     }
   });
 
@@ -97,6 +111,7 @@ function closeSplash() {
 }
 
 function createWindow(appDir) {
+  installPermissionHandler();
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -105,7 +120,8 @@ function createWindow(appDir) {
     webPreferences: {
       preload: path.join(appDir, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     },
     backgroundColor: '#0f0f1a',
     icon: path.join(appDir, 'build', 'icon.png'),

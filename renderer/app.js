@@ -439,9 +439,10 @@ document.addEventListener('paste', async (e) => {
   for (const item of items) {
     if (item.type.startsWith('image/')) {
       const blob = item.getAsFile();
-      if (blob && blob.path) {
-        // Electron file from clipboard — resolve and add
-        const resolved = await window.api.system.resolveDroppedPaths([blob.path]);
+      // Only files copied from disk have a path; in-memory screenshots don't.
+      const blobPath = blob ? window.api.system.getPathForFile(blob) : '';
+      if (blobPath) {
+        const resolved = await window.api.system.resolveDroppedPaths([blobPath]);
         if (resolved.length > 0) {
           document.dispatchEvent(new CustomEvent('paste-files', { detail: resolved }));
         }
@@ -654,12 +655,22 @@ async function loadTool(toolId) {
     if (_loadingToolId !== toolId) return;
     toolContent.replaceChildren(container);
   } catch {
+    // If another tool was requested while this one was loading, that load owns
+    // the UI now — don't stomp its content or roll its state back.
+    if (_loadingToolId !== toolId) return;
     toolContent.innerHTML = `
       <div class="tool-placeholder">
         <div class="tool-placeholder-icon">&#128679;</div>
         <div class="tool-placeholder-text">This tool is coming soon</div>
       </div>`;
+    // Roll the sidebar highlight and title back too, so the UI doesn't claim
+    // the failed tool is active.
     currentToolId = previousToolId;
+    document.querySelectorAll('.sidebar-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.tool === previousToolId);
+    });
+    const prevLabel = document.querySelector(`.sidebar-item[data-tool="${previousToolId}"] .sidebar-label`);
+    document.title = prevLabel ? `${prevLabel.textContent} - MuxMelt` : 'MuxMelt';
     saveGlobalSettings();
     return;
   }
@@ -920,6 +931,14 @@ document.addEventListener('keydown', (e) => {
 
   // Enter — click the primary action button in the current tool
   if (e.key === 'Enter' && !e.ctrlKey && !e.altKey) {
+    // A focused button/link/sidebar item already handles Enter itself;
+    // triggering the primary action too would double-fire.
+    const el = document.activeElement;
+    if (el && el !== document.body &&
+        (el.tagName === 'BUTTON' || el.tagName === 'A' ||
+         el.getAttribute('role') === 'button' || el.isContentEditable)) {
+      return;
+    }
     const primaryBtn = toolContent.querySelector('.btn-primary:not(:disabled)');
     if (primaryBtn) {
       e.preventDefault();

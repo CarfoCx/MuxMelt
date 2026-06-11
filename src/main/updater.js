@@ -260,17 +260,21 @@ function registerUpdaterIpcHandlers(sendUpdateEvent) {
       throw new Error('Requested installer does not match the trusted update folder.');
     }
 
-    // Integrity check when version.json publishes a hash.
+    // Copy to temp first, then verify the integrity of the copy we will
+    // actually launch. Hashing the source and launching the copy would leave
+    // a window where the file could be swapped between check and use. The
+    // async copy also keeps a multi-hundred-MB installer from freezing the UI.
+    const tempDir = app.getPath('temp');
+    const targetPath = path.join(tempDir, path.basename(installerPath));
+    await fs.promises.copyFile(installerPath, targetPath);
+
     if (sha256) {
-      const actual = (await hashFile(installerPath)).toLowerCase();
+      const actual = (await hashFile(targetPath)).toLowerCase();
       if (actual !== sha256) {
+        try { await fs.promises.unlink(targetPath); } catch {}
         throw new Error('Installer failed integrity check (SHA-256 mismatch).');
       }
     }
-
-    const tempDir = app.getPath('temp');
-    const targetPath = path.join(tempDir, path.basename(installerPath));
-    fs.copyFileSync(installerPath, targetPath);
 
     const isWin = process.platform === 'win32';
     if (isWin) {

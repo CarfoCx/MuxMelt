@@ -14,9 +14,18 @@ async function getClient() {
       WebTorrent = mod.default || mod;
     }
     client = new WebTorrent();
+    // Client-level errors (e.g. adding a duplicate torrent) are emitted on the
+    // client, not the torrent. With no listener the EventEmitter throws and
+    // takes down the whole main process.
+    client.on('error', (err) => {
+      console.error('WebTorrent client error:', err.message || err);
+      if (onClientError) onClientError(err);
+    });
   }
   return client;
 }
+
+let onClientError = null;
 
 function registerIPC(ipcMain, getMainWindow) {
   const activeTorrents = new Map();
@@ -28,6 +37,10 @@ function registerIPC(ipcMain, getMainWindow) {
       win.webContents.send('tool-progress', { tool: 'torrent-downloader', id, ...payload });
     }
   }
+
+  onClientError = (err) => {
+    sendProgress(null, { status: 'error', message: err.message || String(err) });
+  };
 
   function startProgressThrottle(id, torrent) {
     if (progressTimers.has(id)) return;

@@ -29,6 +29,7 @@ function registerIPC(ipcMain, getMainWindow) {
       fadeOut        // seconds, 0 = disabled
     } = options;
 
+    let outputPath = null;
     try {
       if (!ffmpeg.findFfmpeg()) {
         return { success: false, error: 'ffmpeg not found. Please install ffmpeg and add it to your PATH.' };
@@ -43,8 +44,7 @@ function registerIPC(ipcMain, getMainWindow) {
       const ext = path.extname(inputPath);
       const baseName = path.basename(inputPath, ext);
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
-      let outputPath = path.join(outDir, baseName + '.' + audioFormat);
-      outputPath = autoIncrementPath(outputPath);
+      outputPath = autoIncrementPath(path.join(outDir, baseName + '.' + audioFormat));
 
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
@@ -142,6 +142,9 @@ function registerIPC(ipcMain, getMainWindow) {
       };
     } catch (err) {
       activeCancels.delete(winId);
+      // autoIncrementPath guarantees this path is ours, so a leftover file
+      // after a failed/cancelled run is always a partial output.
+      if (outputPath) { try { fs.rmSync(outputPath, { force: true }); } catch {} }
       return { success: false, error: formatToolError(err, 'Audio Extractor') };
     }
   });

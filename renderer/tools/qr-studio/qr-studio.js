@@ -211,7 +211,7 @@ function bindEvents() {
   scanDropZone.addEventListener('drop', async (e) => {
     e.preventDefault(); e.stopPropagation(); scanDropZone.classList.remove('dragover');
     const paths = [];
-    for (const file of e.dataTransfer.files) paths.push(file.path);
+    for (const file of e.dataTransfer.files) paths.push(window.api.system.getPathForFile(file));
     if (paths.length > 0) scanQR(paths[0]);
   });
 
