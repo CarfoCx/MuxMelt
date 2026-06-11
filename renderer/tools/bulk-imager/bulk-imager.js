@@ -94,7 +94,7 @@ function bindEvents() {
     e.preventDefault();
     e.stopPropagation();
     dropZone.classList.remove('dragover');
-    const paths = [...e.dataTransfer.files].map(file => file.path);
+    const paths = [...e.dataTransfer.files].map(file => window.api.system.getPathForFile(file));
     if (paths.length > 0) {
       const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) setImageFromPaths(resolved);

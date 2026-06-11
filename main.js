@@ -14,11 +14,12 @@ const {
   getMainWindow, 
   delay 
 } = require('./src/main/window-manager');
-const { 
-  findAvailablePort, 
-  startPythonServer, 
-  killPython, 
-  getPythonPort, 
+const {
+  isPortAvailable,
+  findAvailablePort,
+  startPythonServer,
+  killPython,
+  getPythonPort,
   getPythonInfo
 } = require('./src/main/python-manager');
 const { runSlimSetup, needsSlimSetup } = require('./src/main/setup-manager');
@@ -93,7 +94,16 @@ function loadSettings() {
 }
 
 function saveSettings(settings) {
-  try { fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2)); } catch (err) { console.error('Failed to save settings:', err.message); }
+  // Write-then-rename so a crash mid-write can't truncate settings.json —
+  // it is read before app.whenReady() to decide GPU configuration.
+  const tmpPath = SETTINGS_PATH + '.tmp';
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2));
+    fs.renameSync(tmpPath, SETTINGS_PATH);
+  } catch (err) {
+    console.error('Failed to save settings:', err.message);
+    try { fs.rmSync(tmpPath, { force: true }); } catch {}
+  }
 }
 
 function clearChromiumGpuCaches() {
@@ -120,9 +130,15 @@ async function restartPythonCallback() {
     return { success: false, error: 'Restart already in progress' };
   }
   pythonRestartInProgress = true;
-  killPython(SHUTDOWN_TOKEN);
+  // Force-kill right away — a restart usually means the backend is wedged.
+  killPython(SHUTDOWN_TOKEN, true);
   try {
-    await startPythonServer({ 
+    // Wait for the old process to actually release the port before respawning
+    // (taskkill is async). Keep the same port: the renderer caches it.
+    for (let i = 0; i < 20 && !(await isPortAvailable(getPythonPort())); i++) {
+      await new Promise(r => setTimeout(r, 250));
+    }
+    await startPythonServer({
       BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: APP_DIR 
     }, SHUTDOWN_TOKEN, getMainWindow);
     return { success: true };

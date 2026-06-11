@@ -75,8 +75,9 @@ function bindEvents() {
     dropZone.classList.remove('dragover');
     if (e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
-      if (file.path && file.name.endsWith('.torrent')) {
-        torrentFile = file.path;
+      const filePath = window.api.system.getPathForFile(file);
+      if (filePath && file.name.endsWith('.torrent')) {
+        torrentFile = filePath;
         magnetInput.value = '';
         updateFileText();
       }

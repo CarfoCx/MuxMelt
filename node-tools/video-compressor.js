@@ -40,11 +40,16 @@ function registerIPC(ipcMain, getMainWindow) {
       const audioBr = audioBitrate || '128k';
 
       const ext = path.extname(inputPath).toLowerCase();
+      // WebM cannot contain H.264/H.265 or AAC — re-muxing the compressed
+      // streams into .webm makes ffmpeg fail outright, so emit .mp4 instead.
+      const outExt = ext === '.webm' ? '.mp4' : ext;
       const baseName = path.basename(inputPath, ext);
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
-      let outputPath = path.join(outDir, baseName + '_compressed' + ext);
+      let outputPath = path.join(outDir, baseName + '_compressed' + outExt);
       outputPath = autoIncrementPath(outputPath);
-      tempOutputPath = path.join(outDir, `${baseName}_compressed.${process.pid}.${Date.now()}.tmp${ext}`);
+      tempOutputPath = path.join(outDir, `${baseName}_compressed.${process.pid}.${Date.now()}.tmp${outExt}`);
+      // faststart is a mov/mp4 muxer option; it has no meaning for mkv/avi.
+      const faststartArgs = (outExt === '.mp4' || outExt === '.mov') ? ['-movflags', '+faststart'] : [];
 
       fs.mkdirSync(outDir, { recursive: true });
 
@@ -106,7 +111,7 @@ function registerIPC(ipcMain, getMainWindow) {
         const crfIndex = args.indexOf('-crf');
         if (crfIndex !== -1) args[crfIndex + 1] = String(encodeCrf);
         args.push('-c:a', 'aac', '-b:a', audioBr);
-        args.push('-movflags', '+faststart');
+        args.push(...faststartArgs);
         args.push(tempOutputPath);
 
         const onProgress = (info) => {
@@ -193,7 +198,7 @@ function registerIPC(ipcMain, getMainWindow) {
           });
         }
 
-        const pass2Args = ['-i', inputPath, ...commonArgs, '-pass', '2', '-passlogfile', passlogfile, '-c:a', 'aac', '-b:a', audioBr, '-movflags', '+faststart', tempOutputPath];
+        const pass2Args = ['-i', inputPath, ...commonArgs, '-pass', '2', '-passlogfile', passlogfile, '-c:a', 'aac', '-b:a', audioBr, ...faststartArgs, tempOutputPath];
 
         const onPass2Progress = (info) => {
           const w = getMainWindow();

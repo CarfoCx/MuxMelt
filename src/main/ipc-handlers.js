@@ -111,10 +111,12 @@ function registerIpcHandlers(options) {
   });
 
   ipcMain.handle('resolve-dropped-paths', async (event, paths) => {
+    if (!Array.isArray(paths)) return [];
     const results = [];
     for (const p of paths) {
+      if (typeof p !== 'string') continue;
       try {
-        const stat = fs.statSync(p);
+        const stat = await fs.promises.stat(p);
         if (stat.isDirectory()) {
           results.push(...await scanFolder(p));
         } else if (stat.isFile()) {
@@ -149,7 +151,7 @@ function registerIpcHandlers(options) {
 
   ipcMain.handle('get-file-size', async (event, filePath) => {
     try {
-      const stat = fs.statSync(filePath);
+      const stat = await fs.promises.stat(filePath);
       return stat.size;
     } catch {
       return 0;
@@ -157,8 +159,10 @@ function registerIpcHandlers(options) {
   });
 
   ipcMain.handle('path-exists', async (event, filePath) => {
+    if (typeof filePath !== 'string' || !filePath) return false;
     try {
-      return !!filePath && fs.existsSync(filePath);
+      await fs.promises.access(filePath);
+      return true;
     } catch {
       return false;
     }
@@ -190,10 +194,11 @@ function registerIpcHandlers(options) {
   });
 
   ipcMain.handle('show-notification', async (event, opts) => {
+    opts = (opts && typeof opts === 'object') ? opts : {};
     if (Notification.isSupported()) {
       const notification = new Notification({
-        title: opts.title || 'MuxMelt',
-        body: opts.body || '',
+        title: typeof opts.title === 'string' ? opts.title : 'MuxMelt',
+        body: typeof opts.body === 'string' ? opts.body : '',
         silent: false
       });
       notification.show();
@@ -208,9 +213,11 @@ function registerIpcHandlers(options) {
   });
 
   ipcMain.handle('set-progress', (event, value) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return;
     const mainWindow = getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setProgressBar(value);
+      // -1 clears the taskbar progress; anything else is a 0-1 fraction.
+      mainWindow.setProgressBar(value < 0 ? -1 : Math.min(value, 1));
     }
   });
 

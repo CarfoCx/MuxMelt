@@ -286,6 +286,7 @@ function registerIPC(ipcMain, getMainWindow) {
       let outputPath = path.join(outDir, baseName + '_edited' + outExt);
       outputPath = autoIncrementPath(outputPath);
 
+      const tempFiles = [];
       try {
         const win = getMainWindow();
         if (win) {
@@ -300,7 +301,6 @@ function registerIPC(ipcMain, getMainWindow) {
         }
 
         // Apply operations in sequence using temp files
-        const tempFiles = [];
         let currentInput = inputPath;
 
         for (let step = 0; step < chain.length; step++) {
@@ -316,14 +316,14 @@ function registerIPC(ipcMain, getMainWindow) {
           currentInput = stepOutput;
         }
 
-        // Clean up temp files
-        for (const tmp of tempFiles) {
-          try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
-        }
-
         results.push({ input: inputPath, output: outputPath, success: true });
       } catch (err) {
         results.push({ input: inputPath, success: false, error: err.message });
+      } finally {
+        // Clean up temp files even when a mid-chain step failed
+        for (const tmp of tempFiles) {
+          try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
+        }
       }
     }
 

@@ -7,21 +7,33 @@ const fs = require('fs');
 /**
  * Check whether ffmpeg is reachable on the system PATH or bundled alongside
  * the app.  Returns the resolved command string or null.
+ *
+ * The PATH probe spawns `ffmpeg -version` synchronously (up to 5s), so the
+ * result is cached after the first lookup — every probe/convert/compress call
+ * goes through here and must not re-block the main process. A null (not
+ * found) result is not cached, so installing ffmpeg mid-session is picked up.
  */
+let _cachedFfmpeg;
 function findFfmpeg() {
+  if (_cachedFfmpeg !== undefined && _cachedFfmpeg !== null) return _cachedFfmpeg;
+
   // 1) Check for a bundled binary next to the app
   const ffmpegName = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
   const bundled = path.join(__dirname, '..', 'ffmpeg', ffmpegName);
-  if (fs.existsSync(bundled)) return bundled;
+  if (fs.existsSync(bundled)) {
+    _cachedFfmpeg = bundled;
+    return _cachedFfmpeg;
+  }
 
   // 2) Fall back to PATH
   try {
     const { execSync } = require('child_process');
     execSync('ffmpeg -version', { stdio: 'ignore', timeout: 5000 });
-    return 'ffmpeg';
+    _cachedFfmpeg = 'ffmpeg';
   } catch {
-    return null;
+    _cachedFfmpeg = null;
   }
+  return _cachedFfmpeg;
 }
 
 /**
@@ -54,7 +66,8 @@ function parseProgress(line) {
     matched = true;
   }
 
-  const sizeMatch = line.match(/size=\s*([\d]+)kB/);
+  // ffmpeg < 7 prints "size=    1024kB", ffmpeg >= 7 prints "size=    1024KiB"
+  const sizeMatch = line.match(/size=\s*(\d+)\s*[kK]i?B/);
   if (sizeMatch) {
     info.sizeKB = parseInt(sizeMatch[1], 10);
     matched = true;

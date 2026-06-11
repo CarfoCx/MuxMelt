@@ -36,6 +36,7 @@ function registerIPC(ipcMain, getMainWindow) {
     } = options;
 
     let palettePath = null;
+    let outputPath = null;
 
     try {
       if (!ffmpeg.findFfmpeg()) {
@@ -47,8 +48,7 @@ function registerIPC(ipcMain, getMainWindow) {
       const ext = path.extname(inputPath);
       const baseName = path.basename(inputPath, ext);
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
-      let outputPath = path.join(outDir, baseName + '.gif');
-      outputPath = autoIncrementPath(outputPath);
+      outputPath = autoIncrementPath(path.join(outDir, baseName + '.gif'));
 
       fs.mkdirSync(outDir, { recursive: true });
 
@@ -206,6 +206,9 @@ function registerIPC(ipcMain, getMainWindow) {
       };
     } catch (err) {
       activeCancels.delete(winId);
+      // autoIncrementPath guarantees this path is ours, so a leftover file
+      // after a failed/cancelled run is always a partial output.
+      if (outputPath) { try { fs.rmSync(outputPath, { force: true }); } catch {} }
       return { success: false, error: formatToolError(err, 'GIF Maker') };
     } finally {
       activeCancels.delete(winId);

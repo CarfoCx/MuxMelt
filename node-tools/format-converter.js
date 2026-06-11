@@ -115,6 +115,7 @@ function registerIPC(ipcMain, getMainWindow) {
       keepMetadata
     } = options;
 
+    let outputPath = null;
     try {
       const ext = path.extname(inputPath).toLowerCase();
 
@@ -126,8 +127,7 @@ function registerIPC(ipcMain, getMainWindow) {
       const baseName = path.basename(inputPath, ext);
       const outExt = '.' + targetFormat;
       const safeOutputDir = validateOutputDir(outputDir) || path.dirname(inputPath);
-      let outputPath = path.join(safeOutputDir, baseName + '_converted' + outExt);
-      outputPath = autoIncrementPath(outputPath);
+      outputPath = autoIncrementPath(path.join(safeOutputDir, baseName + '_converted' + outExt));
 
       // Ensure output directory exists
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -195,6 +195,9 @@ function registerIPC(ipcMain, getMainWindow) {
       return { success: false, error: `Unsupported file type: ${ext}` };
     } catch (err) {
       activeCancels.delete(winId);
+      // autoIncrementPath guarantees this path didn't exist before we started,
+      // so a leftover file here is always our own partial output.
+      if (outputPath) { try { fs.rmSync(outputPath, { force: true }); } catch {} }
       return { success: false, error: formatToolError(err, 'Format Converter') };
     }
   });

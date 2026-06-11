@@ -278,7 +278,7 @@ function bindEvents() {
   dropZone.addEventListener('drop', async (e) => {
     e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover');
     const paths = [];
-    for (const file of e.dataTransfer.files) paths.push(file.path);
+    for (const file of e.dataTransfer.files) paths.push(window.api.system.getPathForFile(file));
     if (paths.length > 0) {
       const resolved = await window.api.system.resolveDroppedPaths(paths);
       if (resolved.length > 0) addFiles(resolved);
