@@ -54,6 +54,15 @@ def layer1():
           request_authorized(http(b'token=' + tok.encode(), [(b'origin', b'https://evil.com')]), tok) is False)
     check('OPTIONS preflight allowed without token', request_authorized(http(b'', method='OPTIONS'), tok))
     check('ws with correct token allowed', request_authorized(ws(b'token=' + tok.encode()), tok))
+    # The renderer is loaded via loadFile(), so its WebSocket handshake carries
+    # the literal "Origin: file://" (whereas its fetch() calls send "null").
+    # Both must be accepted, or /ws is wrongly rejected with 403.
+    check('ws from file:// origin allowed',
+          request_authorized(ws(b'token=' + tok.encode(), [(b'origin', b'file://')]), tok))
+    check('http from null origin allowed (fetch from file://)',
+          request_authorized(http(b'token=' + tok.encode(), [(b'origin', b'null')]), tok))
+    check('ws with token + evil origin denied',
+          request_authorized(ws(b'token=' + tok.encode(), [(b'origin', b'https://evil.com')]), tok) is False)
     check('ws without token denied', request_authorized(ws(b''), tok) is False)
     check('no-token-config allows all', request_authorized(http(b''), None) is True)
 

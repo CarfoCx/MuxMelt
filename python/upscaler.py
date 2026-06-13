@@ -303,6 +303,10 @@ class Upscaler:
             print(f'GPU: {self._gpu_name}')
             print(f'VRAM: {self._vram_total / (1024 ** 3):.1f} GB')
 
+            # Tile/frame shapes are highly repetitive, so let cuDNN pick the
+            # fastest convolution algorithm for them once and reuse it.
+            torch.backends.cudnn.benchmark = True
+
             if _nvml_available:
                 try:
                     self._nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -413,6 +417,71 @@ class Upscaler:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
+    def _free_gpu_cache(self):
+        """Release cached GPU memory on whichever accelerator is in use."""
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
+        elif self.device == 'mps':
+            torch.mps.empty_cache()
+
+    def _run_ffmpeg_with_progress(self, cmd, progress_file, total_frames,
+                                  progress_callback, base, span, label):
+        """Run an ffmpeg command that writes machine-readable progress to
+        ``progress_file`` (via ``-progress``), forwarding frame progress to
+        ``progress_callback`` mapped onto [base, base + span]. Honours
+        cancellation and raises RuntimeError with the stderr tail on failure."""
+        import time
+
+        # stderr is drained in a thread so a full pipe can never deadlock us.
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        stderr_chunks = []
+
+        def drain():
+            for line in proc.stderr:
+                stderr_chunks.append(line)
+
+        drainer = threading.Thread(target=drain, daemon=True)
+        drainer.start()
+
+        deadline = time.monotonic() + 3600  # mirror the old subprocess timeout
+
+        def latest_frame():
+            try:
+                with open(progress_file, 'r', errors='replace') as fh:
+                    last = 0
+                    for line in fh:
+                        if line.startswith('frame='):
+                            try:
+                                last = int(line.split('=', 1)[1].strip())
+                            except ValueError:
+                                pass
+                    return last
+            except OSError:
+                return 0
+
+        try:
+            while proc.poll() is None:
+                if self.cancel_event.is_set():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    raise CancellationError('Processing cancelled by user')
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    raise RuntimeError('ffmpeg timed out after 3600s')
+                if progress_callback and total_frames > 0:
+                    frac = min(latest_frame() / total_frames, 1.0)
+                    progress_callback(base + span * frac, f'{label}... {int(frac * 100)}%')
+                time.sleep(0.5)
+        finally:
+            drainer.join(timeout=2)
+
+        if proc.returncode != 0:
+            stderr = b''.join(stderr_chunks).decode('utf-8', errors='replace')
+            raise RuntimeError(f'ffmpeg failed: {stderr[-300:]}')
+
     def cancel(self):
         """Signal cancellation of the current processing batch."""
         self.cancel_event.set()
@@ -496,10 +565,7 @@ class Upscaler:
             for old_key in list(self._models.keys()):
                 if old_key != key:
                     del self._models[old_key]
-            if self.device == 'cuda':
-                torch.cuda.empty_cache()
-            elif self.device == 'mps':
-                torch.mps.empty_cache()
+            self._free_gpu_cache()
 
         self._models[key] = engine
         print(f'Loaded {model_info["filename"]} on {self.device} (tile={tile_size})')
@@ -539,25 +605,29 @@ class Upscaler:
                 f'Resize the image before upscaling.'
             )
 
-        # Try inference; on OOM, retry with smaller tiles
+        # Try inference; on OOM, keep halving the tile size until it fits or we
+        # hit the floor (below which the model can't run usefully).
+        MIN_TILE = 64
+        original_tile = engine.tile
         try:
-            output = engine.enhance(img, outscale=scale, progress_callback=progress_callback)
-        except RuntimeError as e:
-            if 'out of memory' in str(e).lower() and self.device in ('cuda', 'mps'):
-                if self.device == 'cuda':
-                    torch.cuda.empty_cache()
-                else:
-                    torch.mps.empty_cache()
-                # Retry with half the tile size
-                old_tile = engine.tile
-                engine.tile = max(128, old_tile // 2)
-                print(f'OOM: retrying with tile size {engine.tile} (was {old_tile})')
+            while True:
                 try:
                     output = engine.enhance(img, outscale=scale, progress_callback=progress_callback)
-                finally:
-                    engine.tile = old_tile  # restore original
-            else:
-                raise
+                    break
+                except RuntimeError as e:
+                    is_oom = 'out of memory' in str(e).lower()
+                    if not (is_oom and self.device in ('cuda', 'mps')):
+                        raise
+                    self._free_gpu_cache()
+                    if engine.tile <= MIN_TILE:
+                        # Already as small as it gets — let the OOM propagate so
+                        # the user gets the actionable VRAM guidance.
+                        raise
+                    new_tile = max(MIN_TILE, engine.tile // 2)
+                    print(f'OOM: retrying with tile size {new_tile} (was {engine.tile})')
+                    engine.tile = new_tile
+        finally:
+            engine.tile = original_tile  # restore tuned size for the next file
 
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
@@ -610,40 +680,74 @@ class Upscaler:
             if progress_callback:
                 progress_callback(0.0, 'Extracting frames...')
 
-            # Use JPEG for extracted frames (faster I/O, less disk space)
+            # Extract frames losslessly as PNG so the upscaler isn't fed
+            # already-degraded (JPEG-compressed) input. Costs more disk/time
+            # but preserves the quality the model was trained to enhance.
             result = subprocess.run([
                 'ffmpeg', '-i', input_path,
-                '-qscale:v', '2',
                 '-vsync', '0',
-                os.path.join(frames_dir, 'frame_%08d.jpg')
+                os.path.join(frames_dir, 'frame_%08d.png')
             ], capture_output=True, timeout=3600)
 
             if result.returncode != 0:
                 stderr = result.stderr.decode('utf-8', errors='replace')
                 raise RuntimeError(f'ffmpeg frame extraction failed: {stderr[:300]}')
 
-            frame_files = sorted(f for f in os.listdir(frames_dir) if f.endswith('.jpg'))
+            frame_files = sorted(f for f in os.listdir(frames_dir) if f.endswith('.png'))
             total = len(frame_files)
 
             if total == 0:
                 raise RuntimeError('ffmpeg extracted 0 frames from the video')
 
-            for i, frame_file in enumerate(frame_files):
-                if self.cancel_event.is_set():
-                    raise CancellationError('Processing cancelled by user')
+            # Overlap disk I/O with GPU work: prefetch the next frame's decode
+            # and offload PNG encoding of finished frames to a writer pool, so
+            # the GPU isn't stalled waiting on OpenCV's (GIL-releasing) codecs.
+            from concurrent.futures import ThreadPoolExecutor
 
-                frame_path = os.path.join(frames_dir, frame_file)
-                out_frame_path = os.path.join(upscaled_dir, frame_file.replace('.jpg', '.png'))
+            def read_frame(path):
+                im = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+                if im is None:
+                    raise RuntimeError(f'Failed to read extracted frame: {os.path.basename(path)}')
+                return im
 
-                img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
-                if img is None:
-                    raise RuntimeError(f'Failed to read extracted frame: {frame_file}')
-                output = engine.enhance(img, outscale=scale)
-                cv2.imwrite(out_frame_path, output)
+            def write_frame(path, arr):
+                if not cv2.imwrite(path, arr):
+                    raise RuntimeError(f'Failed to write upscaled frame: {os.path.basename(path)}')
 
-                if progress_callback:
-                    pct = (i + 1) / total * 0.95
-                    progress_callback(pct, f'Upscaling frame {i + 1}/{total}')
+            reader = ThreadPoolExecutor(max_workers=1)
+            writer = ThreadPoolExecutor(max_workers=2)
+            pending_writes = []
+            try:
+                paths = [os.path.join(frames_dir, f) for f in frame_files]
+                next_read = reader.submit(read_frame, paths[0])
+
+                for i, frame_file in enumerate(frame_files):
+                    if self.cancel_event.is_set():
+                        raise CancellationError('Processing cancelled by user')
+
+                    img = next_read.result()
+                    if i + 1 < total:
+                        next_read = reader.submit(read_frame, paths[i + 1])
+
+                    output = engine.enhance(img, outscale=scale)
+
+                    out_frame_path = os.path.join(upscaled_dir, frame_file)
+                    # Bound in-flight writes; block on the oldest if we're ahead,
+                    # which also surfaces any writer exception promptly.
+                    while len(pending_writes) >= 4:
+                        pending_writes.pop(0).result()
+                    pending_writes.append(writer.submit(write_frame, out_frame_path, output))
+
+                    if progress_callback:
+                        pct = (i + 1) / total * 0.95
+                        progress_callback(pct, f'Upscaling frame {i + 1}/{total}')
+
+                # Ensure every frame is on disk before reassembly.
+                for f in pending_writes:
+                    f.result()
+            finally:
+                reader.shutdown(wait=True)
+                writer.shutdown(wait=True)
 
             if self.cancel_event.is_set():
                 raise CancellationError('Processing cancelled by user')
@@ -653,8 +757,10 @@ class Upscaler:
 
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
+            progress_file = os.path.join(temp_dir, 'encode_progress.txt')
             cmd = [
                 'ffmpeg', '-y',
+                '-progress', progress_file, '-nostats',
                 '-framerate', str(fps),
                 '-i', os.path.join(upscaled_dir, 'frame_%08d.png'),
                 '-i', input_path,
@@ -674,11 +780,10 @@ class Upscaler:
                 cmd.extend(['-c:v', 'libx264', '-crf', '18', '-preset', 'medium'])
 
             cmd.append(output_path)
-            result = subprocess.run(cmd, capture_output=True, timeout=3600)
-
-            if result.returncode != 0:
-                stderr = result.stderr.decode('utf-8', errors='replace')
-                raise RuntimeError(f'ffmpeg video encoding failed: {stderr[:300]}')
+            self._run_ffmpeg_with_progress(
+                cmd, progress_file, total, progress_callback,
+                base=0.96, span=0.04, label='Reassembling video',
+            )
 
             if progress_callback:
                 progress_callback(1.0, 'Complete')

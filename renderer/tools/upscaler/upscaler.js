@@ -36,6 +36,7 @@ let log = null;
 // ETA tracking
 let batchStartTime = 0;
 let batchTotalFiles = 0;
+let batchMegapixels = 0;
 
 // Reconnection
 let reconnectDelay = 1000;
@@ -239,6 +240,7 @@ function bindEvents() {
       if (modelProfile === 'anime' && scale === 2) {
         log('Note: Anime 2x uses the same model as General 2x', 'info');
       }
+      refreshIdleStatus();
       saveSettings();
     });
   });
@@ -250,6 +252,7 @@ function bindEvents() {
     if (modelProfile === 'anime' && scale === 2) {
       log('Note: Anime 2x uses the same model as General 2x (no anime-specific 2x model exists)', 'info');
     }
+    refreshIdleStatus();
     saveSettings();
   });
 
@@ -365,6 +368,7 @@ function bindEvents() {
     persistedState.isProcessing = true;
     batchStartTime = Date.now();
     batchTotalFiles = filesToProcess.length;
+    batchMegapixels = 0;
     upscaleBtn.disabled = false;
     upscaleBtn.textContent = 'Cancel';
     upscaleBtn.classList.add('btn-cancel');
@@ -446,14 +450,31 @@ function connectWebSocket(port) {
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
     log(`WebSocket disconnected, reconnecting in ${(delay / 1000).toFixed(1)}s...`, 'warn');
     if (reconnectAttempts === 5) {
-      log('Multiple reconnection failures, restarting Python backend...', 'warn');
-      window.api.python.restartPython().then(r => {
-        log(r.success ? 'Python backend restarted' : `Failed to restart: ${r.error}`, r.success ? 'success' : 'error');
+      // Only restart the backend if it's genuinely unreachable. If /health
+      // still answers, the process is alive and the WebSocket is being refused
+      // for some other reason (auth/origin) — restarting just churns the GPU
+      // and reloads models for nothing.
+      backendReachable().then(reachable => {
+        if (reachable) {
+          log('Backend is running but the live connection keeps failing — not restarting. Retrying...', 'error');
+          if (statusText) statusText.textContent = 'Connection refused by backend';
+        } else {
+          log('Backend appears down, restarting Python...', 'warn');
+          window.api.python.restartPython().then(r => {
+            log(r.success ? 'Python backend restarted' : `Failed to restart: ${r.error}`, r.success ? 'success' : 'error');
+          });
+        }
       });
     }
     reconnectTimerId = setTimeout(() => connectWebSocket(port), delay);
   };
   ws.onerror = () => { if (statusText) statusText.textContent = 'Connection error'; };
+}
+
+function backendReachable() {
+  return fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`)
+    .then(r => r.ok)
+    .catch(() => false);
 }
 
 function handleWSMessage(data) {
@@ -501,7 +522,10 @@ function handleWSMessage(data) {
       files[fileIndex].output = data.output;
       setFooterProgress(1, true);
       renderFileItem(fileIndex);
-      log(`Complete: ${fname} \u2192 ${data.output.replace(/\\/g, '/').split('/').pop()}`, 'success');
+      const outName = data.output.replace(/\\/g, '/').split('/').pop();
+      const tput = formatThroughput(data.megapixels, data.elapsed);
+      if (typeof data.megapixels === 'number') batchMegapixels += data.megapixels;
+      log(`Complete: ${fname} \u2192 ${outName}${tput ? ` (${tput})` : ''}`, 'success');
       updateETA();
       persistRuntimeState();
       break;
@@ -530,7 +554,9 @@ function handleWSMessage(data) {
       let parts = [`${completed} completed`];
       if (errors > 0) parts.push(`${errors} failed`);
       if (cancelled > 0) parts.push(`${cancelled} cancelled`);
-      statusText.textContent = `Done! ${parts.join(', ')}`;
+      const batchElapsed = (Date.now() - batchStartTime) / 1000;
+      const batchTput = formatThroughput(batchMegapixels, batchElapsed);
+      statusText.textContent = `Done! ${parts.join(', ')}${batchTput ? ` · ${batchTput}` : ''}`;
       persistedState.statusText = statusText.textContent;
       persistedState.etaText = '';
       log(`Batch finished: ${parts.join(', ')}`, errors > 0 ? 'warn' : 'success');
@@ -579,6 +605,30 @@ function formatDuration(s) {
   const m = Math.floor(s / 60), sec = s % 60;
   if (m < 60) return `${m}m ${sec}s`;
   return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+// "12.3 MP/s" style throughput, or '' when we don't have usable numbers.
+function formatThroughput(megapixels, elapsed) {
+  if (typeof megapixels !== 'number' || typeof elapsed !== 'number') return '';
+  if (megapixels <= 0 || elapsed <= 0) return '';
+  const mps = megapixels / elapsed;
+  return mps >= 10 ? `${mps.toFixed(0)} MP/s` : `${mps.toFixed(1)} MP/s`;
+}
+
+// Human label for the active model + scale, e.g. "General · 2x".
+function activeConfigLabel() {
+  const profileLabel = modelProfile === 'anime' ? 'Anime' : 'General';
+  return `${profileLabel} · ${scale}x`;
+}
+
+// When idle, keep the status line reflecting the active model/scale so the
+// user can see what the next run will use. Never clobbers a processing or
+// finished-batch ("Done!") status.
+function refreshIdleStatus() {
+  if (isProcessing || !statusText) return;
+  if (statusText.textContent.startsWith('Done!')) return;
+  statusText.textContent = files.length > 0 ? `Ready · ${activeConfigLabel()}` : 'Waiting for File';
+  persistedState.statusText = statusText.textContent;
 }
 
 // ---- File management ----
@@ -668,6 +718,7 @@ async function addFiles(paths) {
   }
   if (added > 0) log(`Added ${added} file(s)`);
   persistedState.files = files;
+  refreshIdleStatus();
   persistedState.statusText = statusText ? statusText.textContent : persistedState.statusText;
   renderFileList();
   updateUpscaleButton();

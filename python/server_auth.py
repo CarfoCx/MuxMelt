@@ -16,11 +16,16 @@ _LOCAL_ORIGIN_RE = re.compile(r'^https?://(localhost|127\.0\.0\.1)(:\d+)?$')
 
 
 def origin_allowed(origin):
-    """Renderer file:// pages send no Origin or the literal 'null'. Anything
-    else must be an explicit localhost origin (defence in depth)."""
+    """The renderer is loaded from disk via loadFile(), so its origin is the
+    file:// scheme. Chromium serializes that origin inconsistently across
+    request types: cross-origin fetch()/XHR send ``Origin: null`` (an opaque
+    origin), while the WebSocket handshake sends the literal ``Origin: file://``.
+    Both are the same trusted renderer, so accept either, plus an explicit
+    localhost origin (defence in depth). Anything else is rejected."""
     return (
         origin is None
         or origin == 'null'
+        or origin.startswith('file://')
         or bool(_LOCAL_ORIGIN_RE.match(origin))
     )
 

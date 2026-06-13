@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import argparse
 import queue as thread_queue
 from pathlib import Path
@@ -354,6 +355,8 @@ async def process_file(ws, file_path, scale, output_format, output_dir, profile)
 async def process_image(ws, file_path, output_path, scale, profile):
     import cv2
     name = Path(file_path).name
+    started = time.monotonic()
+    megapixels = None
 
     await ws.send_json({
         'type': 'progress',
@@ -366,6 +369,7 @@ async def process_image(ws, file_path, output_path, scale, profile):
     img = await loop.run_in_executor(None, cv2.imread, file_path)
     if img is not None:
         h, w = img.shape[:2]
+        megapixels = (w * h) / 1_000_000
         await send_log(ws, f'Input: {name} ({w}x{h})')
 
     progress_q = thread_queue.Queue()
@@ -408,13 +412,16 @@ async def process_image(ws, file_path, output_path, scale, profile):
         'type': 'complete',
         'file': file_path,
         'output': output_path,
-        'progress': 1.0
+        'progress': 1.0,
+        'megapixels': megapixels,
+        'elapsed': time.monotonic() - started,
     })
 
 
 async def process_video(ws, file_path, output_path, scale, output_ext, profile):
     import cv2
     name = Path(file_path).name
+    started = time.monotonic()
 
     cap = cv2.VideoCapture(file_path)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -470,7 +477,9 @@ async def process_video(ws, file_path, output_path, scale, output_ext, profile):
         'type': 'complete',
         'file': file_path,
         'output': output_path,
-        'progress': 1.0
+        'progress': 1.0,
+        'megapixels': (w * h * frames) / 1_000_000 if frames > 0 else None,
+        'elapsed': time.monotonic() - started,
     })
 
 
