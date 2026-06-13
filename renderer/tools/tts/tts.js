@@ -22,6 +22,7 @@ let resultArea, charCount, openOutputBtn;
 
 let allVoices = [];
 let isPreviewing = false;
+let _ttsAudio = null; // active result/preview audio, stopped on cleanup
 
 const ENGLISH_VOICE_PRESETS = [
   { id: 'en-US-AvaNeural', label: 'Soothing - Ava', detail: 'US female, calm and polished', group: 'Soft and warm' },
@@ -78,6 +79,7 @@ function init(ctx) {
 }
 
 function cleanup() {
+  if (_ttsAudio) { _ttsAudio.pause(); _ttsAudio = null; }
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
@@ -293,8 +295,10 @@ function showAudioResult(outputPath, isPreview) {
       </div>`;
     
     const playBtn = document.getElementById('ttsPlayBtn');
+    if (_ttsAudio) { _ttsAudio.pause(); }
     let audio = new Audio(fileUrl);
-    
+    _ttsAudio = audio;
+
     playBtn.addEventListener('click', () => {
       if (!audio.paused) {
         audio.pause();

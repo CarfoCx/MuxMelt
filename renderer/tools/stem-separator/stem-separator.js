@@ -33,6 +33,7 @@ const MODEL_DESCRIPTIONS = {
 };
 let lastOutputDir = '';
 let _pasteHandler = null;
+let _currentAudio = null; // active stem preview, so cleanup() can stop it
 
 function init(ctx) {
   pythonPort = ctx.pythonPort;
@@ -66,6 +67,7 @@ function init(ctx) {
 
 function cleanup() {
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
+  if (_currentAudio) { _currentAudio.pause(); _currentAudio = null; }
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
@@ -349,7 +351,26 @@ function renderFileItem(index) {
   if (window.updateQueueSummary) window.updateQueueSummary(files);
   const existing = fileList.children[index];
   if (!existing) return;
-  fileList.replaceChild(createFileElement(files[index], index), existing);
+  const file = files[index];
+  // Demucs emits frequent percentage updates; only fully rebuild the row when
+  // it completes (to attach the stem audio-preview buttons). Otherwise update
+  // status/progress in place to avoid rebuilding the DOM on every tick.
+  if (file.state === 'complete') {
+    fileList.replaceChild(createFileElement(file, index), existing);
+  } else {
+    updateFileElement(existing, file);
+  }
+}
+
+function updateFileElement(el, file) {
+  const status = el.querySelector('.file-status');
+  if (status) status.textContent = file.status;
+  const fill = el.querySelector('.file-progress-fill');
+  if (fill) {
+    fill.style.width = `${Math.round(file.progress * 100)}%`;
+    fill.classList.toggle('complete', file.state === 'complete');
+    fill.classList.toggle('error', file.state === 'error' || file.state === 'cancelled');
+  }
 }
 
 function createFileElement(file, index) {
@@ -402,6 +423,7 @@ function createFileElement(file, index) {
         btn.innerHTML = '&#9654;';
         btn.classList.remove('playing');
         btn._audio = null;
+        _currentAudio = null;
         return;
       }
       // Stop any other playing previews in the file list
@@ -413,6 +435,7 @@ function createFileElement(file, index) {
       // Play this one
       const audio = new Audio(src);
       btn._audio = audio;
+      _currentAudio = audio;
       btn.innerHTML = '&#9632;';
       btn.classList.add('playing');
       audio.play().catch(() => {
@@ -424,6 +447,7 @@ function createFileElement(file, index) {
         btn.innerHTML = '&#9654;';
         btn.classList.remove('playing');
         btn._audio = null;
+        if (_currentAudio === audio) _currentAudio = null;
       });
     });
   });

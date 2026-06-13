@@ -328,7 +328,20 @@ function renderFileItem(index) {
   if (window.updateQueueSummary) window.updateQueueSummary(files);
   const existing = fileList.children[index];
   if (!existing) return;
-  fileList.replaceChild(createFileElement(files[index], index), existing);
+  // Update in place rather than rebuilding the row (and rebinding listeners)
+  // on every progress tick.
+  updateFileElement(existing, files[index]);
+}
+
+function updateFileElement(el, file) {
+  const status = el.querySelector('.file-status');
+  if (status) status.textContent = file.status;
+  const fill = el.querySelector('.file-progress-fill');
+  if (fill) {
+    fill.style.width = `${Math.round(file.progress * 100)}%`;
+    fill.classList.toggle('complete', file.state === 'complete');
+    fill.classList.toggle('error', file.state === 'error');
+  }
 }
 
 function createFileElement(file, index) {

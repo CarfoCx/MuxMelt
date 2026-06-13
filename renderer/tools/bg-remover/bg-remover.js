@@ -28,6 +28,10 @@ let bgMode, bgColor, bgColorGroup, bgBlur, bgBlurGroup, bgBlurValue;
 let compareOverlay, compareClose, compareContainer, compareBefore, compareAfter, compareSlider, compareTitle;
 let lastOutputDir = '';
 let _pasteHandler = null;
+// Window-level drag handlers for the compare slider; tracked so cleanup() can
+// remove them (otherwise they leak — and keep the old DOM alive — every time
+// the tool is opened and closed).
+let _winMouseMove = null, _winMouseUp = null, _winTouchMove = null, _winTouchEnd = null;
 
 function init(ctx) {
   pythonPort = ctx.pythonPort;
@@ -71,6 +75,10 @@ function init(ctx) {
 
 function cleanup() {
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
+  if (_winMouseMove) { window.removeEventListener('mousemove', _winMouseMove); _winMouseMove = null; }
+  if (_winMouseUp) { window.removeEventListener('mouseup', _winMouseUp); _winMouseUp = null; }
+  if (_winTouchMove) { window.removeEventListener('touchmove', _winTouchMove); _winTouchMove = null; }
+  if (_winTouchEnd) { window.removeEventListener('touchend', _winTouchEnd); _winTouchEnd = null; }
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
@@ -338,7 +346,26 @@ function renderFileItem(index) {
   if (window.updateQueueSummary) window.updateQueueSummary(files);
   const existing = fileList.children[index];
   if (!existing) return;
-  fileList.replaceChild(createFileElement(files[index], index), existing);
+  const file = files[index];
+  // Only fully rebuild when the file finishes (to attach the compare hint +
+  // click handler). For progress/error updates, mutate in place so we don't
+  // re-fetch the thumbnail on every tick.
+  if (file.state === 'complete') {
+    fileList.replaceChild(createFileElement(file, index), existing);
+  } else {
+    updateFileElement(existing, file);
+  }
+}
+
+function updateFileElement(el, file) {
+  const status = el.querySelector('.file-status');
+  if (status) status.textContent = file.status;
+  const fill = el.querySelector('.file-progress-fill');
+  if (fill) {
+    fill.style.width = `${Math.round(file.progress * 100)}%`;
+    fill.classList.toggle('complete', file.state === 'complete');
+    fill.classList.toggle('error', file.state === 'error');
+  }
 }
 
 function createFileElement(file, index) {
@@ -431,8 +458,10 @@ function initCompareSlider() {
     const pct = ((e.clientX - rect.left) / rect.width) * 100;
     setComparePosition(pct);
   });
-  window.addEventListener('mousemove', (e) => { if (isDragging) onMove(e.clientX); });
-  window.addEventListener('mouseup', () => { isDragging = false; });
+  _winMouseMove = (e) => { if (isDragging) onMove(e.clientX); };
+  _winMouseUp = () => { isDragging = false; };
+  window.addEventListener('mousemove', _winMouseMove);
+  window.addEventListener('mouseup', _winMouseUp);
 
   // Touch support
   compareSlider.addEventListener('touchstart', (e) => { e.preventDefault(); isDragging = true; });
@@ -442,8 +471,10 @@ function initCompareSlider() {
     const pct = ((e.touches[0].clientX - rect.left) / rect.width) * 100;
     setComparePosition(pct);
   });
-  window.addEventListener('touchmove', (e) => { if (isDragging) onMove(e.touches[0].clientX); });
-  window.addEventListener('touchend', () => { isDragging = false; });
+  _winTouchMove = (e) => { if (isDragging) onMove(e.touches[0].clientX); };
+  _winTouchEnd = () => { isDragging = false; };
+  window.addEventListener('touchmove', _winTouchMove);
+  window.addEventListener('touchend', _winTouchEnd);
 }
 
 // ---- Settings persistence ----
