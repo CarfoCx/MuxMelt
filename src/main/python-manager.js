@@ -126,7 +126,10 @@ function startPythonServer(options, SHUTDOWN_TOKEN, getMainWindow) {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        PYTHONPATH: [pythonCwd, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+        PYTHONPATH: [pythonCwd, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+        // Lets the backend cache downloaded LLM models under the app's userData
+        // dir (same location Electron uses), so they persist and stay offline.
+        ...(options.userDataDir ? { MUXMELT_DATA_DIR: options.userDataDir } : {})
       }
     }
   );

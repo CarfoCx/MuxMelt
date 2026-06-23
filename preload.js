@@ -25,6 +25,18 @@ contextBridge.exposeInMainWorld('api', {
     checkOverwrite: (filePath) => ipcRenderer.invoke('check-overwrite', filePath),
   },
 
+  windowControls: {
+    minimize: () => ipcRenderer.invoke('window-minimize'),
+    maximizeToggle: () => ipcRenderer.invoke('window-maximize-toggle'),
+    close: () => ipcRenderer.invoke('window-close'),
+    isMaximized: () => ipcRenderer.invoke('window-is-maximized'),
+    onMaximizeChange: (callback) => {
+      const handler = (_, isMax) => callback(isMax);
+      ipcRenderer.on('window-maximized', handler);
+      return () => ipcRenderer.removeListener('window-maximized', handler);
+    },
+  },
+
   python: {
     getPythonPort: () => ipcRenderer.invoke('get-python-port'),
     getPythonToken: () => ipcRenderer.invoke('get-python-token'),

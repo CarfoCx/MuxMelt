@@ -380,12 +380,18 @@ async function installPythonDeps(pythonBin) {
     }
   }
 
-  // Install remaining deps from requirements.txt
+  // Install remaining deps from requirements.txt. The extra index supplies
+  // prebuilt CPU wheels for llama-cpp-python (the only package it hosts), and
+  // --prefer-binary keeps pip from compiling it from source on the build
+  // machine — so no C++ toolchain is required for the bundled chat engine.
   console.log('  Installing remaining dependencies...');
   const requirementsPath = path.join(__dirname, '..', 'python', 'requirements.txt');
-  execSync(`"${pythonBin}" -m pip install -r "${requirementsPath}" --no-warn-script-location`, {
-    stdio: 'inherit', timeout: 600000
-  });
+  execSync(
+    `"${pythonBin}" -m pip install -r "${requirementsPath}" ` +
+    '--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu ' +
+    '--prefer-binary --no-warn-script-location',
+    { stdio: 'inherit', timeout: 600000 }
+  );
 
   console.log('  All Python dependencies installed');
 }

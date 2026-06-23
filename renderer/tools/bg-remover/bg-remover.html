@@ -1,7 +1,7 @@
 <!-- Tool body -->
 <div class="tool-body">
   <div class="module-banner">
-    <strong>Background Remover.</strong> Remove image backgrounds and export transparent, solid color, or blurred results.
+    <strong>Background Editor.</strong> Remove image backgrounds and export them transparent, on a solid color, blurred, or composited onto your own background image.
   </div>
 
   <!-- Drop zone -->
@@ -37,7 +37,15 @@
         <option value="transparent">Transparent</option>
         <option value="color">Solid Color</option>
         <option value="blur">Blur</option>
+        <option value="image">Image</option>
       </select>
+    </div>
+
+    <div class="setting-group bg-image-group" id="bgImageGroup" style="display:none;">
+      <label>Input:</label>
+      <button class="output-dir-btn" id="bgImageBtn" title="Choose a background image to place behind the subject (right-click to clear)">
+        Choose image&hellip;
+      </button>
     </div>
 
     <div class="setting-group bg-color-group" id="bgColorGroup" style="display:none;">
@@ -114,6 +122,6 @@
   <div class="tool-footer-right">
     <button class="btn btn-clear" id="clearBtn">Clear All</button>
     <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
-    <button class="btn btn-primary" id="processBtn" disabled>Remove Backgrounds</button>
+    <button class="btn btn-primary" id="processBtn" disabled>Apply Background Edit</button>
   </div>
 </div>

@@ -17,6 +17,7 @@ let reconnectTimerId = null;
 const MAX_RECONNECT_DELAY = 30000;
 
 let ttsText, languageSelect, voiceSelect, speedSlider, speedValue, pitchSlider, pitchValue, outputFormat;
+let spellcheckToggle;
 let outputDirBtn, generateBtn, previewBtn, clearBtn, statusText, processingIndicator;
 let resultArea, charCount, openOutputBtn;
 
@@ -56,6 +57,7 @@ function init(ctx) {
   log = ctx.log;
 
   ttsText = document.getElementById('ttsText');
+  spellcheckToggle = document.getElementById('spellcheckToggle');
   languageSelect = document.getElementById('languageSelect');
   voiceSelect = document.getElementById('voiceSelect');
   speedSlider = document.getElementById('speedSlider');
@@ -334,6 +336,18 @@ function bindEvents() {
     charCount.textContent = ttsText.value.length;
     statusText.textContent = ttsText.value.trim() ? 'Text Entered' : 'Waiting for Text';
   });
+
+  if (spellcheckToggle) {
+    ttsText.spellcheck = spellcheckToggle.checked;
+    spellcheckToggle.addEventListener('change', () => {
+      ttsText.spellcheck = spellcheckToggle.checked;
+      // Chromium only re-evaluates spellcheck on the next edit/focus, so nudge
+      // focus to apply (or clear) the red underlines immediately.
+      const hadFocus = document.activeElement === ttsText;
+      ttsText.blur();
+      if (spellcheckToggle.checked || hadFocus) ttsText.focus();
+    });
+  }
 
   languageSelect.addEventListener('change', populateVoices);
 

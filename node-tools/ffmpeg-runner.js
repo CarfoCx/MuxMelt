@@ -37,6 +37,41 @@ function findFfmpeg() {
 }
 
 /**
+ * Async variant used to warm the ffmpeg cache during startup, off the UI
+ * thread. findFfmpeg()'s PATH probe is a synchronous execSync that can block
+ * the main process for up to 5s — calling this once at launch means the first
+ * convert/probe doesn't pay that cost (or freeze the window) on a user click.
+ * A not-found result is left uncached so installing ffmpeg mid-session works.
+ */
+function findFfmpegAsync() {
+  return new Promise((resolve) => {
+    if (_cachedFfmpeg !== undefined && _cachedFfmpeg !== null) return resolve(_cachedFfmpeg);
+
+    const ffmpegName = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+    const bundled = path.join(__dirname, '..', 'ffmpeg', ffmpegName);
+    if (fs.existsSync(bundled)) {
+      _cachedFfmpeg = bundled;
+      return resolve(_cachedFfmpeg);
+    }
+
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      _cachedFfmpeg = val;
+      resolve(val);
+    };
+    try {
+      const proc = spawn('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
+      proc.on('error', () => finish(null));
+      proc.on('close', (code) => finish(code === 0 ? 'ffmpeg' : null));
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+/**
  * Parse an ffmpeg stderr line and extract progress fields.
  * Returns an object with whatever fields were found, or null if nothing matched.
  */
@@ -258,6 +293,7 @@ function run({ args, onProgress, durationSeconds }) {
 
 module.exports = {
   findFfmpeg,
+  findFfmpegAsync,
   parseProgress,
   probeDuration,
   probeVideoInfo,

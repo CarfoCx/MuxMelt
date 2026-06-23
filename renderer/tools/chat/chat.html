@@ -1,0 +1,53 @@
+<!-- Tool body -->
+<div class="tool-body chat-body">
+  <div class="module-banner">
+    <strong>Local Chat.</strong> A private AI assistant that runs entirely on your computer — no account, no API key, no internet needed after the model downloads once.
+  </div>
+
+  <!-- Model bar -->
+  <div class="settings-bar chat-model-bar">
+    <div class="setting-group">
+      <label>Model:</label>
+      <select id="modelSelect">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+    <div class="setting-group">
+      <span class="chat-model-status" id="modelStatus">Connecting…</span>
+    </div>
+    <div class="setting-group">
+      <button class="btn btn-secondary" id="downloadModelBtn" style="display:none;">Download model</button>
+    </div>
+  </div>
+
+  <!-- Download progress (hidden until a download is running) -->
+  <div class="chat-download" id="chatDownload" style="display:none;">
+    <div class="chat-download-label" id="chatDownloadLabel">Downloading model…</div>
+    <div class="file-progress-bar">
+      <div class="file-progress-fill" id="chatDownloadFill" style="width:0%"></div>
+    </div>
+  </div>
+
+  <!-- Conversation -->
+  <div class="chat-messages" id="chatMessages">
+    <div class="chat-empty" id="chatEmpty">
+      Pick a model and say hello. Everything stays on your machine.
+    </div>
+  </div>
+
+  <!-- Composer -->
+  <div class="chat-composer">
+    <textarea id="chatInput" class="chat-input" rows="1" placeholder="Type a message…  (Enter to send, Shift+Enter for a new line)"></textarea>
+    <button class="btn btn-primary" id="chatSendBtn">Send</button>
+  </div>
+</div>
+
+<!-- Bottom bar -->
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Local Chat</span>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="chatClearBtn">Clear Chat</button>
+  </div>
+</div>

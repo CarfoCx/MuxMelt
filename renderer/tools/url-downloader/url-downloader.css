@@ -554,6 +554,26 @@
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
+.url-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Per-row download button — accent it so it reads as the primary row action */
+.url-action-btn.download-url-btn {
+  color: var(--accent);
+}
+.url-action-btn.download-url-btn:hover:not(:disabled) {
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+
+/* Trailing button cluster in edit mode (download / cancel-edit / open file) */
+.url-main-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 
 /* Loader inline */
 .url-row-spinner {

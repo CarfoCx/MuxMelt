@@ -33,6 +33,16 @@ function execFileAsync(cmd, args, { timeout = 0 } = {}) {
   });
 }
 
+// Selectable quality presets -> max video height passed to yt-dlp's format
+// selector. Keeping this as data avoids a copy-pasted if-ladder per resolution.
+const RESOLUTION_FORMATS = {
+  '2160p': 2160,
+  '1080p': 1080,
+  '720p': 720,
+  '480p': 480,
+  '360p': 360,
+};
+
 function defaultOutputDir() {
   return path.join(os.homedir(), 'Downloads', 'MuxMelt Downloads');
 }
@@ -296,19 +306,16 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
 
   // Quality options
   const format = options.format || 'best';
+  const maxHeight = RESOLUTION_FORMATS[format];
   if (format === 'audioonly') {
     const aFormat = options.audioFormat || 'mp3';
     args.push('-x', '--audio-format', aFormat, '--audio-quality', '0');
-  } else if (format === '2160p') {
-    args.push('-f', 'bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best[height<=2160]', '--merge-output-format', 'mp4');
-  } else if (format === '1080p') {
-    args.push('-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]', '--merge-output-format', 'mp4');
-  } else if (format === '720p') {
-    args.push('-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]', '--merge-output-format', 'mp4');
-  } else if (format === '480p') {
-    args.push('-f', 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]', '--merge-output-format', 'mp4');
-  } else if (format === '360p') {
-    args.push('-f', 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]', '--merge-output-format', 'mp4');
+  } else if (maxHeight) {
+    args.push(
+      '-f',
+      `bestvideo[height<=${maxHeight}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]`,
+      '--merge-output-format', 'mp4'
+    );
   } else if (format === 'custom') {
     if (options.customFormat) {
       args.push('-f', options.customFormat);
@@ -467,6 +474,10 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
+        // This window deliberately loads untrusted (often hostile) pages and
+        // auto-clicks consent/play controls, so lock it down: sandbox the
+        // renderer and never expose Node.
+        sandbox: true,
         backgroundThrottling: false,
         offscreen: true,
         partition
@@ -477,6 +488,16 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
     snifferWin.webContents.setWindowOpenHandler(() => {
       return { action: 'deny' };
     });
+
+    // Keep the sniffer on http(s) pages only. The page-driving script below
+    // clicks elements heuristically, which can trigger navigations to custom
+    // protocol handlers (e.g. an installed-app scheme) — block anything that
+    // isn't a normal web navigation.
+    const blockNonHttpNav = (e, navUrl) => {
+      if (!/^https?:\/\//i.test(navUrl)) e.preventDefault();
+    };
+    snifferWin.webContents.on('will-navigate', blockNonHttpNav);
+    snifferWin.webContents.on('will-redirect', blockNonHttpNav);
 
     const standardUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
     snifferWin.webContents.setUserAgent(standardUa);
@@ -584,9 +605,13 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
             if (el.paused) { try { el.play(); } catch(e) {} }
           });
           document.querySelectorAll('button, a, div[class*="play"], div[id*="play"]').forEach(el => {
-            const text = (el.innerText || '').toLowerCase();
-            const html = (el.innerHTML || '').toLowerCase();
-            if (text.includes('agree') || text.includes('enter') || text.includes('yes') || text.includes('accept') || text === 'play' || text === 'continue' || html.includes('play')) {
+            const text = (el.innerText || '').trim().toLowerCase();
+            // Only act on short, button-like labels. Matching innerHTML or long
+            // text clicked unrelated containers (e.g. any block containing the
+            // word "play"), which could trip downloads or popups.
+            if (!text || text.length > 20) return;
+            if (text === 'play' || text === 'continue' || text === 'enter' || text === 'yes' ||
+                text.includes('agree') || text.includes('accept')) {
               try { el.click(); } catch(e) {}
             }
           });
@@ -890,10 +915,16 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             }
             stdout = ''; stderr = ''; outputPath = '';
             
+            let tempCookieDir = '';
             let tempCookieFile = '';
             if (sniffedData.cookiesText) {
-              tempCookieFile = path.join(os.tmpdir(), `muxmelt-cookies-${Date.now()}.txt`);
-              fs.writeFileSync(tempCookieFile, sniffedData.cookiesText);
+              // Harvested session cookies are sensitive. Write them into a
+              // private, unpredictable temp dir with owner-only permissions
+              // rather than a predictably-named, world-readable file in the
+              // shared temp root (which also collided on concurrent downloads).
+              tempCookieDir = fs.mkdtempSync(path.join(os.tmpdir(), 'muxmelt-'));
+              tempCookieFile = path.join(tempCookieDir, 'cookies.txt');
+              fs.writeFileSync(tempCookieFile, sniffedData.cookiesText, { mode: 0o600 });
             }
 
             const sniffConfig = {
@@ -922,8 +953,8 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             } catch (fallbackErr) {
               throw fallbackErr;
             } finally {
-              if (tempCookieFile && fs.existsSync(tempCookieFile)) {
-                try { fs.unlinkSync(tempCookieFile); } catch(e) {}
+              if (tempCookieDir) {
+                try { fs.rmSync(tempCookieDir, { recursive: true, force: true }); } catch(e) {}
               }
             }
           } else {

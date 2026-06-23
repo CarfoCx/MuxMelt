@@ -9,6 +9,28 @@
   <link rel="stylesheet" id="toolStylesheet" href="">
 </head>
 <body>
+
+  <!-- Custom window title bar (the OS frame is disabled; see window-manager.js).
+       Drawn here so it can be themed — modern in the default themes, a classic
+       beveled caption bar in the Classic schemes. -->
+  <div class="titlebar" id="titlebar">
+    <div class="titlebar-drag" id="titlebarDrag">
+      <span class="titlebar-title">MuxMelt</span>
+    </div>
+    <div class="titlebar-controls">
+      <button class="titlebar-btn" id="winMinBtn" title="Minimize" aria-label="Minimize">
+        <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><rect x="1" y="5" width="9" height="1" fill="currentColor"/></svg>
+      </button>
+      <button class="titlebar-btn" id="winMaxBtn" title="Maximize" aria-label="Maximize">
+        <svg class="ico-max" width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><rect x="1.5" y="1.5" width="8" height="8" fill="none" stroke="currentColor"/></svg>
+        <svg class="ico-restore" width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><rect x="1.5" y="3.5" width="6" height="6" fill="none" stroke="currentColor"/><path d="M3.5 3.5 V1.5 H9.5 V7.5 H7.5" fill="none" stroke="currentColor"/></svg>
+      </button>
+      <button class="titlebar-btn titlebar-close" id="winCloseBtn" title="Close" aria-label="Close">
+        <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><path d="M1.5 1.5 L9.5 9.5 M9.5 1.5 L1.5 9.5" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+    </div>
+  </div>
+
   <div id="app">
 
     <a href="#toolContent" class="skip-nav">Skip to content</a>
@@ -50,7 +72,7 @@
         </button>
         <button class="sidebar-item" data-tool="bg-remover">
           <span class="sidebar-icon">&#9986;</span>
-          <span class="sidebar-label">BG Remover</span>
+          <span class="sidebar-label">Background Editor</span>
         </button>
         <button class="sidebar-item" data-tool="bulk-imager">
           <span class="sidebar-icon">&#128444;</span>
@@ -67,6 +89,10 @@
         <button class="sidebar-item" data-tool="tts">
           <span class="sidebar-icon">&#128483;</span>
           <span class="sidebar-label">Text to Speech</span>
+        </button>
+        <button class="sidebar-item" data-tool="chat">
+          <span class="sidebar-icon">&#128172;</span>
+          <span class="sidebar-label">Local Chat</span>
         </button>
       </div>
 

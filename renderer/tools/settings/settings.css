@@ -6,7 +6,11 @@
 }
 
 .settings-section {
-  margin-bottom: 28px;
+  margin-bottom: 16px;
+  padding: 10px 20px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .settings-section-title {

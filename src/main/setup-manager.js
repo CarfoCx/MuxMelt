@@ -179,7 +179,9 @@ async function runSlimSetupWindows(send, options) {
   send('setup-progress', { percent: 75, status: 'Installing processing tools...' });
   const reqDir = appDir;
   const reqPath = path.join(reqDir, 'python', 'requirements.txt');
-  await runCommand(SLIM_PYTHON_EXE, ['-m', 'pip', 'install', '-r', reqPath, '--no-warn-script-location'], { timeout: 600000 });
+  await runCommand(SLIM_PYTHON_EXE, ['-m', 'pip', 'install', '-r', reqPath,
+    '--extra-index-url', 'https://abetlen.github.io/llama-cpp-python/whl/cpu',
+    '--prefer-binary', '--no-warn-script-location'], { timeout: 600000 });
 }
 
 async function runSlimSetupUnix(send, options) {
@@ -233,7 +235,9 @@ async function runSlimSetupUnix(send, options) {
   send('setup-progress', { percent: 70, status: 'Installing processing tools...' });
   const reqDir = appDir;
   const reqPath = path.join(reqDir, 'python', 'requirements.txt');
-  await runCommand(SLIM_PYTHON_EXE, ['-m', 'pip', 'install', '-r', reqPath, '--no-warn-script-location'], { timeout: 600000 });
+  await runCommand(SLIM_PYTHON_EXE, ['-m', 'pip', 'install', '-r', reqPath,
+    '--extra-index-url', 'https://abetlen.github.io/llama-cpp-python/whl/cpu',
+    '--prefer-binary', '--no-warn-script-location'], { timeout: 600000 });
 }
 
 function needsSlimSetup(IS_SLIM, SLIM_PYTHON_EXE) {

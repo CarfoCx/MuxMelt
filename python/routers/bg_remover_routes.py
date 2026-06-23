@@ -47,6 +47,7 @@ async def bg_remover_ws(ws: WebSocket):
                 bg_mode = data.get('bg_mode', 'transparent')
                 bg_color = data.get('bg_color', '#FFFFFF')
                 bg_blur = int(data.get('bg_blur', 25))
+                bg_image = data.get('bg_image', '') or ''
 
                 for file_path in files:
                     if remover.cancel_event.is_set():
@@ -80,7 +81,8 @@ async def bg_remover_ws(ws: WebSocket):
                                          _fmt=output_format,
                                          _bgm=bg_mode,
                                          _bgc=bg_color,
-                                         _bgb=bg_blur):
+                                         _bgb=bg_blur,
+                                         _bgi=bg_image):
                             return remover.remove_background(
                                 _fp, _op, progress_callback=_cb,
                                 alpha_matting=_am,
@@ -91,6 +93,7 @@ async def bg_remover_ws(ws: WebSocket):
                                 bg_mode=_bgm,
                                 bg_color=_bgc,
                                 bg_blur=_bgb,
+                                bg_image=_bgi,
                             )
 
                         task = loop.run_in_executor(None, _run_removal)

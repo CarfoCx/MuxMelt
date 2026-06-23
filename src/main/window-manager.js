@@ -117,6 +117,10 @@ function createWindow(appDir) {
     height: 800,
     minWidth: 820,
     minHeight: 540,
+    // Frameless: the OS title bar (which looks like Win11) is removed and the
+    // app draws its own themeable title bar in the renderer. The window stays
+    // resizable from its edges.
+    frame: false,
     webPreferences: {
       preload: path.join(appDir, 'preload.js'),
       contextIsolation: true,
@@ -127,6 +131,16 @@ function createWindow(appDir) {
     icon: path.join(appDir, 'build', 'icon.png'),
     show: false
   });
+
+  // Keep the renderer's maximize/restore button glyph in sync with real state
+  // (the user can still maximize via Win+Up, snap, or a double-click).
+  const sendMaxState = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-maximized', mainWindow.isMaximized());
+    }
+  };
+  mainWindow.on('maximize', sendMaxState);
+  mainWindow.on('unmaximize', sendMaxState);
 
   // The app is a single local page that swaps tool HTML in-place via fetch; it
   // never legitimately navigates the top frame or opens new windows. Deny both

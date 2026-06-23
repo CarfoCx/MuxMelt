@@ -735,7 +735,38 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
 // Init
 // ============================================================================
 
+// Custom (frameless) window controls — minimize / maximize-restore / close.
+function setupWindowControls() {
+  const wc = window.api && window.api.windowControls;
+  if (!wc) return;
+
+  const minBtn = document.getElementById('winMinBtn');
+  const maxBtn = document.getElementById('winMaxBtn');
+  const closeBtn = document.getElementById('winCloseBtn');
+  const dragArea = document.getElementById('titlebarDrag');
+
+  const reflectMaxState = (isMax) => {
+    if (!maxBtn) return;
+    maxBtn.classList.toggle('is-maximized', !!isMax);
+    maxBtn.title = isMax ? 'Restore' : 'Maximize';
+    maxBtn.setAttribute('aria-label', isMax ? 'Restore' : 'Maximize');
+  };
+  const toggleMax = async () => {
+    try { reflectMaxState(await wc.maximizeToggle()); } catch {}
+  };
+
+  if (minBtn) minBtn.addEventListener('click', () => { wc.minimize().catch(() => {}); });
+  if (closeBtn) closeBtn.addEventListener('click', () => { wc.close().catch(() => {}); });
+  if (maxBtn) maxBtn.addEventListener('click', toggleMax);
+  // Double-clicking the caption maximizes/restores, like a native title bar.
+  if (dragArea) dragArea.addEventListener('dblclick', toggleMax);
+
+  wc.onMaximizeChange(reflectMaxState);
+  wc.isMaximized().then(reflectMaxState).catch(() => {});
+}
+
 async function init() {
+  setupWindowControls();
   const allSettings = await loadGlobalSettings();
   if (allSettings.global?.logCollapsed) {
     logPanel.classList.add('collapsed');

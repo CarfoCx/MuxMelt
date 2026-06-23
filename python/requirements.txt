@@ -11,3 +11,8 @@ demucs>=4.0.0
 rembg[gpu]
 edge-tts>=6.1.0
 yt-dlp[default,curl-cffi]>=2024.8.6
+# Pinned to the newest version with prebuilt CPU wheels on the abetlen index
+# (covers cp313 win_amd64 / macosx arm64 / linux x86_64). The build/setup
+# scripts add `--extra-index-url .../whl/cpu --prefer-binary` so this installs
+# from a wheel instead of compiling from source (no C++ toolchain needed).
+llama-cpp-python==0.3.19

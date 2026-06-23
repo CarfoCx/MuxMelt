@@ -49,6 +49,8 @@ body {
   overflow: hidden;
   height: 100vh;
   user-select: none;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Keyboard focus indicators */
@@ -66,8 +68,74 @@ input:focus-visible {
 
 #app {
   display: flex;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
 }
+
+/* ===== Custom window title bar ===== */
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  height: 34px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg, var(--bg-secondary));
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;        /* whole bar drags the window */
+  user-select: none;
+}
+
+.titlebar-drag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding-left: 12px;
+}
+
+.titlebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: stretch;
+  -webkit-app-region: no-drag;     /* buttons are clickable, not draggable */
+}
+
+.titlebar-btn {
+  width: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.titlebar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.titlebar-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* maximize vs restore glyph swap */
+.titlebar-btn .ico-restore { display: none; }
+.titlebar-btn.is-maximized .ico-max { display: none; }
+.titlebar-btn.is-maximized .ico-restore { display: inline-flex; }
 
 /* ===== Sidebar ===== */
 .sidebar {
@@ -1463,4 +1531,346 @@ input[type="range"] {
 .recent-files-list::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 2px;
+}
+
+/* ============================================================================
+   Classic (Windows 98 / Winamp) themes
+   ----------------------------------------------------------------------------
+   A flat, boxy, 3D-beveled look. Deliberately removes the modern theme's
+   backdrop blur, soft shadows, gradients, rounded corners, and transitions —
+   all of which are render-cost the GPU pays every frame. These themes are
+   lighter to composite, not just a recolor. Uses Tahoma / MS Sans Serif, which
+   ship with Windows, so no web fonts are fetched (CSP blocks those anyway).
+
+   The signature 3D edge is a 2px double bevel built from a multi-colour border
+   plus a 1px inset highlight/shadow, exactly as the Win9x widget set did:
+     raised  = light top-left, dark bottom-right
+     sunken  = dark  top-left, light bottom-right (inputs, troughs, pressed)
+
+   COLOUR SCHEMES: every colour is sourced from a --w-* variable, so a new
+   scheme is just a palette block — the structural rules below ([data-theme^=
+   "retro"]) are shared by all of them. To add one: copy a block, change the
+   --w-* values, add an <option value="retro-yourname"> in settings.html.
+   ========================================================================== */
+
+/* ---- Default palette (Classic Gray) + token bridge ---------------------- */
+[data-theme^="retro"] {
+  /* bevel + colour palette (overridden by the scheme blocks that follow) */
+  --w-face: #c0c0c0;          /* button / panel face            */
+  --w-light: #ffffff;         /* bevel highlight (top-left)      */
+  --w-hi: #dfdfdf;            /* inner highlight                 */
+  --w-shadow: #808080;        /* bevel shadow (bottom-right)     */
+  --w-dark: #000000;          /* outer dark edge                 */
+  --w-text: #000000;          /* text on a face                  */
+  --w-dim: #404040;           /* secondary/dim text              */
+  --w-field: #ffffff;         /* sunken input background         */
+  --w-field-text: #000000;    /* input text                      */
+  --w-sel: #000080;           /* selection / highlight           */
+  --w-sel-text: #ffffff;      /* text on selection               */
+  --w-title1: #000080;        /* title-bar gradient start        */
+  --w-title2: #1084d0;        /* title-bar gradient end          */
+  --w-title-text: #ffffff;    /* caption text                    */
+  --w-desktop: #008080;       /* window background ("desktop")    */
+  --w-success: #008000;
+  --w-error: #800000;
+  --w-warning: #808000;
+
+  /* bridge MuxMelt's generic design tokens onto the active palette */
+  --bg-primary: var(--w-desktop);
+  --bg-secondary: var(--w-face);
+  --bg-tertiary: var(--w-face);
+  --bg-hover: var(--w-face);
+  --sidebar-bg: var(--w-face);
+  --accent: var(--w-sel);
+  --accent-hover: var(--w-title2);
+  --accent-glow: transparent;
+  --text-primary: var(--w-text);
+  --text-secondary: var(--w-text);
+  --text-dim: var(--w-dim);
+  --border: var(--w-shadow);
+  --success: var(--w-success);
+  --error: var(--w-error);
+  --warning: var(--w-warning);
+  --radius: 0px;
+  --radius-sm: 0px;
+}
+
+/* ---- Scheme: Slate (dark mode) ------------------------------------------ */
+[data-theme="retro-dark"] {
+  --w-face: #3f3f46; --w-light: #6b6b75; --w-hi: #52525b; --w-shadow: #27272a; --w-dark: #09090b;
+  --w-text: #e7e7ea; --w-dim: #a1a1aa;
+  --w-field: #18181b; --w-field-text: #e7e7ea;
+  --w-sel: #1e40af; --w-sel-text: #ffffff;
+  --w-title1: #1e3a8a; --w-title2: #3b82f6; --w-title-text: #ffffff;
+  --w-desktop: #18181b;
+  --w-success: #22c55e; --w-error: #f87171; --w-warning: #fbbf24;
+}
+
+/* ---- Scheme: Spruce (sage green) ---------------------------------------- */
+[data-theme="retro-spruce"] {
+  --w-face: #aebab2; --w-light: #e6efe9; --w-hi: #cbd6cf; --w-shadow: #6c7a72; --w-dark: #283029;
+  --w-text: #08160e; --w-dim: #3c4a42;
+  --w-field: #f1f6f2; --w-field-text: #08160e;
+  --w-sel: #2f6b4f; --w-sel-text: #ffffff;
+  --w-title1: #1e4d38; --w-title2: #3f9068; --w-title-text: #ffffff;
+  --w-desktop: #2f4a3c;
+  --w-success: #1d7a3f; --w-error: #8a2f2f; --w-warning: #6f5f17;
+}
+
+/* ---- Scheme: Plum (muted purple) ---------------------------------------- */
+[data-theme="retro-plum"] {
+  --w-face: #bdb0c4; --w-light: #efe9f2; --w-hi: #d6ccdb; --w-shadow: #776c80; --w-dark: #2a2230;
+  --w-text: #160d1c; --w-dim: #473f50;
+  --w-field: #f6f2f8; --w-field-text: #160d1c;
+  --w-sel: #5b2a6b; --w-sel-text: #ffffff;
+  --w-title1: #4a1d57; --w-title2: #8a4fa0; --w-title-text: #ffffff;
+  --w-desktop: #3a2a4f;
+  --w-success: #3f7a4f; --w-error: #9a3f5f; --w-warning: #7a5f1f;
+}
+
+/* ---- Scheme: Desert (tan / brown) --------------------------------------- */
+[data-theme="retro-desert"] {
+  --w-face: #cdc0a8; --w-light: #f3ecda; --w-hi: #e0d6c0; --w-shadow: #897f62; --w-dark: #33301f;
+  --w-text: #1c1709; --w-dim: #4a4330;
+  --w-field: #fbf7ea; --w-field-text: #1c1709;
+  --w-sel: #7a5a2a; --w-sel-text: #ffffff;
+  --w-title1: #6b4f24; --w-title2: #b08a3f; --w-title-text: #ffffff;
+  --w-desktop: #6b5a3a;
+  --w-success: #5a6a1f; --w-error: #8a3a2a; --w-warning: #7a5f12;
+}
+
+/* ---- Scheme: Winamp (charcoal metal + green LCD) ------------------------ */
+[data-theme="retro-winamp"] {
+  --w-face: #2e2e2e; --w-light: #555555; --w-hi: #3d3d3d; --w-shadow: #171717; --w-dark: #000000;
+  --w-text: #d6d6d6; --w-dim: #8a8a8a;
+  --w-field: #0d0d0d; --w-field-text: #39e08a;
+  --w-sel: #1f7a45; --w-sel-text: #eafff0;
+  --w-title1: #161616; --w-title2: #343434; --w-title-text: #39e08a;
+  --w-desktop: #0a0a0a;
+  --w-success: #39e08a; --w-error: #ff5a5a; --w-warning: #ffcf4a;
+}
+
+/* ===== Shared structure (applies to every retro scheme) ================== */
+
+/* Square everything (except spinners) and kill transitions/soft text shadows —
+   instant state changes are both authentic and cheaper to paint. */
+[data-theme^="retro"] *:not([class*="spinner"]) { border-radius: 0 !important; }
+[data-theme^="retro"] *,
+[data-theme^="retro"] *::before,
+[data-theme^="retro"] *::after {
+  transition: none !important;
+  text-shadow: none !important;
+}
+
+[data-theme^="retro"] body {
+  background: var(--w-desktop);
+  font-family: 'Tahoma', 'MS Sans Serif', 'Segoe UI', sans-serif;
+}
+
+/* The whole interior is the gray window face (like a real Win9x client area) —
+   without this the "desktop" colour shows through the transparent content area
+   as dark gutters on the sides, making pages look cut off. */
+[data-theme^="retro"] .main-area,
+[data-theme^="retro"] .tool-content,
+[data-theme^="retro"] .tool-instance,
+[data-theme^="retro"] .tool-body {
+  background: var(--w-face);
+}
+
+/* Chromium ignores ::-webkit-scrollbar styling whenever `scrollbar-width` is
+   `thin`/`none` (set globally on *). Restore `auto` so the chunky beveled
+   scrollbars below actually render in the Classic themes. */
+[data-theme^="retro"] * { scrollbar-width: auto; }
+
+[data-theme^="retro"] button,
+[data-theme^="retro"] input,
+[data-theme^="retro"] select,
+[data-theme^="retro"] textarea {
+  font-family: 'Tahoma', 'MS Sans Serif', 'Segoe UI', sans-serif;
+}
+
+/* ---- Raised surfaces: buttons & panels ---------------------------------- */
+[data-theme^="retro"] button:not(.sidebar-item):not(.log-header):not(.shortcuts-close):not(.update-banner-dismiss),
+[data-theme^="retro"] .btn,
+[data-theme^="retro"] .output-dir-btn,
+[data-theme^="retro"] .url-action-btn,
+[data-theme^="retro"] .url-remove,
+[data-theme^="retro"] .url-output,
+[data-theme^="retro"] .add-url-row-btn {
+  background: var(--w-face);
+  color: var(--w-text);
+  border: 2px solid;
+  border-color: var(--w-light) var(--w-dark) var(--w-dark) var(--w-light);
+  box-shadow: inset 1px 1px 0 var(--w-hi), inset -1px -1px 0 var(--w-shadow);
+  font-weight: 400;
+}
+[data-theme^="retro"] button:not(.sidebar-item):active,
+[data-theme^="retro"] .btn:active,
+[data-theme^="retro"] .output-dir-btn:active {
+  border-color: var(--w-dark) var(--w-light) var(--w-light) var(--w-dark);
+  box-shadow: inset 1px 1px 0 var(--w-shadow), inset -1px -1px 0 var(--w-hi);
+  transform: none;                 /* override the modern scale() press */
+  padding-top: 1px;
+  padding-left: 1px;
+}
+[data-theme^="retro"] .btn:hover,
+[data-theme^="retro"] button:not(.sidebar-item):hover { background: var(--w-face); }
+
+/* Accent buttons aren't coloured in Win98 — make them default-button face with
+   the heavier ring the OS gave the focused/default button. */
+[data-theme^="retro"] .btn-primary,
+[data-theme^="retro"] .btn-danger,
+[data-theme^="retro"] .btn-donate {
+  background: var(--w-face);
+  color: var(--w-text);
+  outline: 1px solid var(--w-dark);
+  outline-offset: -3px;
+}
+
+/* ---- Sunken surfaces: text fields, dropdowns ---------------------------- */
+[data-theme^="retro"] input[type="text"],
+[data-theme^="retro"] input[type="url"],
+[data-theme^="retro"] input[type="number"],
+[data-theme^="retro"] input[type="search"],
+[data-theme^="retro"] input:not([type]),
+[data-theme^="retro"] textarea,
+[data-theme^="retro"] select,
+[data-theme^="retro"] .url-input,
+[data-theme^="retro"] .settings-input,
+[data-theme^="retro"] .settings-select,
+[data-theme^="retro"] .adv-text-input,
+[data-theme^="retro"] .url-quality-select {
+  background: var(--w-field);
+  color: var(--w-field-text);
+  border: 2px solid;
+  border-color: var(--w-shadow) var(--w-light) var(--w-light) var(--w-shadow);
+  box-shadow: inset 1px 1px 0 var(--w-dark), inset -1px -1px 0 var(--w-hi);
+}
+[data-theme^="retro"] input:focus,
+[data-theme^="retro"] textarea:focus,
+[data-theme^="retro"] select:focus { outline: none; }
+
+/* ---- Containers / cards: raised panels ---------------------------------- */
+[data-theme^="retro"] .sidebar,
+[data-theme^="retro"] .module-banner,
+[data-theme^="retro"] .log-panel,
+[data-theme^="retro"] .settings-section,
+[data-theme^="retro"] .shortcuts-modal,
+[data-theme^="retro"] .context-menu,
+[data-theme^="retro"] .completion-toast,
+[data-theme^="retro"] .url-row,
+[data-theme^="retro"] .url-settings,
+[data-theme^="retro"] .advanced-settings-panel,
+[data-theme^="retro"] .advanced-settings-toggle {
+  background: var(--w-face);
+  border: 2px solid;
+  border-color: var(--w-light) var(--w-dark) var(--w-dark) var(--w-light);
+  box-shadow: inset 1px 1px 0 var(--w-hi), inset -1px -1px 0 var(--w-shadow);
+  backdrop-filter: none;
+}
+
+/* Strip the leftover blur/gradients from the shared shell pieces. */
+[data-theme^="retro"] .tool-footer,
+[data-theme^="retro"] .module-banner {
+  background: var(--w-face);
+  backdrop-filter: none;
+}
+
+/* ---- Title bars: gradient caption (the iconic Win98 title bar) ---------- */
+[data-theme^="retro"] .tool-header,
+[data-theme^="retro"] .log-header {
+  background: linear-gradient(90deg, var(--w-title1), var(--w-title2));
+  backdrop-filter: none;
+  border: none;
+  color: var(--w-title-text);
+}
+[data-theme^="retro"] .tool-header h2,
+[data-theme^="retro"] .log-header { color: var(--w-title-text); }
+
+/* ---- Window title bar: navy caption inside the raised window border ----- */
+[data-theme^="retro"] body {
+  /* the whole app reads as one raised Win9x window */
+  border: 2px solid;
+  border-color: var(--w-light) var(--w-dark) var(--w-dark) var(--w-light);
+}
+[data-theme^="retro"] .titlebar {
+  background: linear-gradient(90deg, var(--w-title1), var(--w-title2));
+  border-bottom: none;
+  height: 30px;
+  padding: 2px 2px 0;
+}
+[data-theme^="retro"] .titlebar-title {
+  color: var(--w-title-text);
+  font-weight: 700;
+  padding-left: 4px;
+}
+[data-theme^="retro"] .titlebar-controls {
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+}
+[data-theme^="retro"] .titlebar-btn {
+  width: 24px;
+  height: 22px;
+  /* (raised bevel + face/text colours come from the shared button rule) */
+}
+[data-theme^="retro"] .titlebar-close:hover { background: var(--w-face); color: var(--w-text); }
+[data-theme^="retro"] .titlebar-close svg { stroke-width: 1.4; }
+
+/* ---- Sidebar: menu list with selection highlight ----------------------- */
+[data-theme^="retro"] .sidebar-item { color: var(--w-text); }
+[data-theme^="retro"] .sidebar-item:hover,
+[data-theme^="retro"] .sidebar-item.active {
+  background: var(--w-sel);
+  color: var(--w-sel-text);
+}
+[data-theme^="retro"] .sidebar-item.active .sidebar-icon,
+[data-theme^="retro"] .sidebar-item:hover .sidebar-icon { filter: none; }
+[data-theme^="retro"] .sidebar-item:active { transform: none; }
+
+/* ---- Progress bars: sunken trough + segmented fill --------------------- */
+[data-theme^="retro"] .url-progress,
+[data-theme^="retro"] .progress-bar,
+[data-theme^="retro"] .progress-track {
+  background: var(--w-field);
+  border: 2px solid;
+  border-color: var(--w-shadow) var(--w-light) var(--w-light) var(--w-shadow);
+  box-shadow: inset 1px 1px 0 var(--w-dark);
+}
+[data-theme^="retro"] .url-progress-fill,
+[data-theme^="retro"] .progress-bar-fill,
+[data-theme^="retro"] .progress-fill {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--w-sel) 0 11px,
+    var(--w-face) 11px 13px
+  );
+}
+[data-theme^="retro"] .url-progress-fill.complete { background: repeating-linear-gradient(90deg, var(--w-success) 0 11px, var(--w-face) 11px 13px); }
+[data-theme^="retro"] .url-progress-fill.error { background: repeating-linear-gradient(90deg, var(--w-error) 0 11px, var(--w-face) 11px 13px); }
+
+/* ---- Focus rectangle: the dotted Win98 ring ----------------------------- */
+[data-theme^="retro"] :focus-visible { outline: 1px dotted var(--w-text); outline-offset: -4px; }
+[data-theme^="retro"] .btn:focus-visible { box-shadow: inset 1px 1px 0 var(--w-hi), inset -1px -1px 0 var(--w-shadow); outline: 1px dotted var(--w-text); outline-offset: -5px; }
+
+/* ---- Chunky beveled scrollbars ------------------------------------------ */
+[data-theme^="retro"] ::-webkit-scrollbar { width: 16px; height: 16px; }
+[data-theme^="retro"] ::-webkit-scrollbar-track { background: var(--w-hi); }
+[data-theme^="retro"] ::-webkit-scrollbar-thumb {
+  background: var(--w-face);
+  border: 2px solid;
+  border-color: var(--w-light) var(--w-dark) var(--w-dark) var(--w-light);
+}
+[data-theme^="retro"] ::-webkit-scrollbar-thumb:hover { background: var(--w-face); }
+
+/* ---- Misc pills / badges flattened -------------------------------------- */
+[data-theme^="retro"] .gpu-badge,
+[data-theme^="retro"] .file-count,
+[data-theme^="retro"] .queue-pill,
+[data-theme^="retro"] .shortcut-hint,
+[data-theme^="retro"] .shortcut-row kbd {
+  background: var(--w-face);
+  border: 1px solid;
+  border-color: var(--w-shadow) var(--w-light) var(--w-light) var(--w-shadow);
+  color: var(--w-text);
 }

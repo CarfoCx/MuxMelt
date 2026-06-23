@@ -20,6 +20,8 @@ let outputDirBtn, qualitySelect, cookiesFileBtn, statusText, processingIndicator
 
 const EDIT_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`;
 
+const DOWNLOAD_SVG = `<svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+
 function init(ctx) {
   log = ctx.log;
 
@@ -189,7 +191,7 @@ function bindEvents() {
     else if (outputDir) window.api.system.openFolder(outputDir);
   });
 
-  downloadBtn.addEventListener('click', startDownload);
+  downloadBtn.addEventListener('click', () => startDownload());
 
   progressCleanup = window.api.tools.onToolProgress((data) => {
     if (data.tool !== 'url-downloader') return;
@@ -300,7 +302,10 @@ async function fetchInfoForRow(row, url) {
   }
 }
 
-async function startDownload() {
+// `onlyRow` (optional) restricts the download to a single queue row — used by
+// the per-row Download button. When omitted, every pending/failed row in the
+// queue is processed (the "Download All" button).
+async function startDownload(onlyRow = null) {
   if (isProcessing) {
     isProcessing = false;
     downloadBtn.disabled = true;
@@ -309,20 +314,25 @@ async function startDownload() {
     return;
   }
 
-  rows.forEach(row => {
-    row.url = row.url.trim();
+  const single = onlyRow && onlyRow.id ? onlyRow : null;
+  const targetRows = single ? [single] : rows;
+
+  // Trim, and allow a completed row to be re-downloaded on an explicit click.
+  targetRows.forEach(row => {
+    row.url = (row.url || '').trim();
     if (row.url && row.state === 'complete') row.state = 'pending';
   });
 
-  const invalid = rows.filter(row => row.url && !isValidHttpUrl(row.url));
+  const invalid = targetRows.filter(row => row.url && !isValidHttpUrl(row.url));
   if (invalid.length > 0) {
     invalid.forEach(row => { row.state = 'error'; row.status = 'Invalid URL'; });
     renderRows();
-    log('One or more URLs are invalid. Use full http or https links.', 'error');
+    log(single ? 'That URL is invalid. Use a full http or https link.'
+              : 'One or more URLs are invalid. Use full http or https links.', 'error');
     return;
   }
 
-  const pending = rows.filter(row => row.url && (row.state === 'pending' || row.state === 'error'));
+  const pending = targetRows.filter(row => row.url && (row.state === 'pending' || row.state === 'error'));
   if (pending.length === 0) return;
 
   isProcessing = true;
@@ -614,6 +624,7 @@ function renderRows() {
             </div>
           </div>
           <div class="url-row-actions">
+            <button class="url-action-btn download-url-btn" title="Download this video" ${isProcessing ? 'disabled' : ''}>${DOWNLOAD_SVG}</button>
             <button class="url-action-btn edit-url-btn" title="Edit URL">${EDIT_SVG}</button>
             ${row.output ? `<button class="url-output" title="${window.escapeHtml(row.output)}">Open file</button>` : ''}
           </div>
@@ -624,8 +635,11 @@ function renderRows() {
       mainContentHtml = `
         <div class="url-main">
           <input class="url-input" type="url" placeholder="https://example.com/watch..." value="${window.escapeHtml(row.url)}" ${isProcessing ? 'disabled' : ''}>
-          ${row.info ? `<button class="url-action-btn cancel-edit-btn" title="Cancel edit" style="margin-left: 4px;">&times;</button>` : ''}
-          ${row.output ? `<button class="url-output" title="${window.escapeHtml(row.output)}">Open file</button>` : ''}
+          <div class="url-main-actions">
+            ${row.url.trim() ? `<button class="url-action-btn download-url-btn" title="Download this video" ${isProcessing ? 'disabled' : ''}>${DOWNLOAD_SVG}</button>` : ''}
+            ${row.info ? `<button class="url-action-btn cancel-edit-btn" title="Cancel edit">&times;</button>` : ''}
+            ${row.output ? `<button class="url-output" title="${window.escapeHtml(row.output)}">Open file</button>` : ''}
+          </div>
         </div>
       `;
     }
@@ -677,6 +691,19 @@ function renderRows() {
             }
           });
         }, 50);
+      });
+    }
+
+    const downloadUrlBtn = el.querySelector('.download-url-btn');
+    if (downloadUrlBtn) {
+      downloadUrlBtn.addEventListener('click', () => {
+        if (isProcessing) return;
+        row.url = (row.url || '').trim();
+        if (!row.url || !isValidHttpUrl(row.url)) {
+          log('Enter a valid http or https URL before downloading this row.', 'error');
+          return;
+        }
+        startDownload(row);
       });
     }
 

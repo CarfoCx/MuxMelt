@@ -139,7 +139,7 @@ async function restartPythonCallback() {
       await new Promise(r => setTimeout(r, 250));
     }
     await startPythonServer({
-      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: APP_DIR 
+      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: APP_DIR, userDataDir: app.getPath('userData')
     }, SHUTDOWN_TOKEN, getMainWindow);
     return { success: true };
   } catch (err) {
@@ -173,14 +173,29 @@ registerIpcHandlers({
   restartPythonCallback
 });
 
-try { require('./node-tools/format-converter').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load format-converter:', e.message); }
-try { require('./node-tools/audio-extractor').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load audio-extractor:', e.message); }
-try { require('./node-tools/gif-maker').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load gif-maker:', e.message); }
-try { require('./node-tools/video-compressor').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load video-compressor:', e.message); }
-try { require('./node-tools/url-downloader').registerIPC(ipcMain, getMainWindow, () => getPythonInfo()); } catch (e) { console.error('Failed to load url-downloader:', e.message); }
-try { require('./node-tools/bulk-imager').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load bulk-imager:', e.message); }
-try { require('./node-tools/qr-studio').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load qr-studio:', e.message); }
-try { require('./node-tools/torrent-downloader').registerIPC(ipcMain, getMainWindow); } catch (e) { console.error('Failed to load torrent-downloader:', e.message); }
+// Tools that only need (ipcMain, getMainWindow). Loaded in a loop so a single
+// broken module logs and is skipped without taking the others down.
+for (const name of [
+  'format-converter',
+  'audio-extractor',
+  'gif-maker',
+  'video-compressor',
+  'bulk-imager',
+  'qr-studio',
+  'torrent-downloader'
+]) {
+  try {
+    require(`./node-tools/${name}`).registerIPC(ipcMain, getMainWindow);
+  } catch (e) {
+    console.error(`Failed to load ${name}:`, e.message);
+  }
+}
+// url-downloader additionally needs the resolved Python interpreter.
+try {
+  require('./node-tools/url-downloader').registerIPC(ipcMain, getMainWindow, () => getPythonInfo());
+} catch (e) {
+  console.error('Failed to load url-downloader:', e.message);
+}
 
 app.whenReady().then(async () => {
   try {
@@ -209,11 +224,15 @@ app.whenReady().then(async () => {
     
     updateSplash(55, 'Starting media backend', `Port ${port}`);
     await startPythonServer({ 
-      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: APP_DIR 
+      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: APP_DIR, userDataDir: app.getPath('userData')
     }, SHUTDOWN_TOKEN, getMainWindow);
 
     updateSplash(82, 'Loading workspace');
     createWindow(__dirname);
+
+    // Warm the ffmpeg lookup off the UI thread so the first convert/probe
+    // doesn't block on a synchronous PATH probe when the user clicks.
+    require('./node-tools/ffmpeg-runner').findFfmpegAsync().catch(() => {});
 
     if (app.isPackaged) {
       updateSplash(92, 'Checking for updates');

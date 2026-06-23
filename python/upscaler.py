@@ -658,6 +658,8 @@ class Upscaler:
             raise ValueError(f'Failed to open video: {input_path}')
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
 
         if total_frames <= 0:
@@ -669,6 +671,24 @@ class Upscaler:
                 'Video upscaling requires ffmpeg. '
                 'Install from https://ffmpeg.org/download.html'
             )
+
+        # Upscaling extracts every frame to lossless PNG (source + upscaled
+        # copies) into temp before reassembly — tens of GB for long/HD videos.
+        # Estimate the footprint up front and fail with actionable guidance
+        # rather than dying with ENOSPC deep into extraction.
+        if src_w > 0 and src_h > 0:
+            bytes_per_px = 1.5  # rough compressed-PNG estimate
+            est_bytes = total_frames * (src_w * src_h + (src_w * scale) * (src_h * scale)) * bytes_per_px
+            try:
+                free_bytes = shutil.disk_usage(tempfile.gettempdir()).free
+            except OSError:
+                free_bytes = None
+            if free_bytes is not None and est_bytes > free_bytes * 0.9:
+                raise ValueError(
+                    f'This video needs roughly {est_bytes / 1e9:.0f} GB of temporary disk space to '
+                    f'upscale ({total_frames} frames at {scale}x), but only {free_bytes / 1e9:.0f} GB '
+                    f'is free. Free up space, trim the video, or upscale at 2x instead.'
+                )
 
         temp_dir = tempfile.mkdtemp(prefix='upscaler_')
         frames_dir = os.path.join(temp_dir, 'frames')

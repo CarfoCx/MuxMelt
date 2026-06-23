@@ -6,8 +6,14 @@
 
   <!-- Text input area -->
   <div class="tts-input-area">
-    <label class="tts-label">Text to Speech:</label>
-    <textarea id="ttsText" class="tts-textarea" placeholder="Enter the text you want to convert to speech..." rows="8"></textarea>
+    <div class="tts-input-header">
+      <label class="tts-label">Text to Speech:</label>
+      <label class="tts-spellcheck-toggle" title="Underline misspelled words while you type">
+        <input type="checkbox" id="spellcheckToggle" checked>
+        <span>Spellcheck</span>
+      </label>
+    </div>
+    <textarea id="ttsText" class="tts-textarea" placeholder="Enter the text you want to convert to speech..." rows="8" spellcheck="true"></textarea>
     <div class="tts-char-count"><span id="charCount">0</span> characters</div>
   </div>
 

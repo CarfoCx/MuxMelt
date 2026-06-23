@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from server_auth import TokenAuthMiddleware
 from upscaler import Upscaler, CancellationError
+from routers.validation import validate_output_dir
 
 upscaler = None
 available_modules = ['upscaler']
@@ -62,20 +63,20 @@ try:
 except ImportError:
     pass
 
+try:
+    from routers.chat_routes import router as chat_router
+    app.include_router(chat_router, prefix='/chat')
+    available_modules.append('chat')
+except ImportError:
+    pass
+
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.webm'}
 
-
-def validate_output_dir(output_dir):
-    """Validate and normalize output directory to prevent path traversal."""
-    if not output_dir:
-        return output_dir
-    normalized = os.path.normpath(output_dir)
-    if '..' in normalized.split(os.sep):
-        raise ValueError('Invalid output directory: path traversal not allowed')
-    if not os.path.isabs(normalized):
-        raise ValueError('Output directory must be an absolute path')
-    return normalized
+# Only one upscale job may run at a time: the Upscaler is a process-global
+# singleton with one shared cancel_event and one model cache, so a second
+# concurrent job would have its cancellation crossed and its model evicted.
+_upscale_in_progress = False
 
 
 
@@ -139,18 +140,29 @@ async def shutdown(token: str = None):
 
 @app.websocket('/ws')
 async def websocket_endpoint(ws: WebSocket):
+    global _upscale_in_progress
     await ws.accept()
     try:
         while True:
             try:
                 data = await ws.receive_json()
+            except WebSocketDisconnect:
+                break
             except Exception as json_err:
-                await ws.send_json({'type': 'error', 'error': f'Invalid message: {str(json_err)}'})
+                try:
+                    await ws.send_json({'type': 'error', 'error': f'Invalid message: {str(json_err)}'})
+                except Exception:
+                    break
                 continue
             action = data.get('action')
 
             if action == 'upscale':
-                upscaler.reset_cancel()
+                if _upscale_in_progress:
+                    await ws.send_json({
+                        'type': 'error',
+                        'error': 'The upscaler is already processing another job. Wait for it to finish before starting a new one.'
+                    })
+                    continue
 
                 files = data.get('files', [])
                 if not files:
@@ -164,21 +176,27 @@ async def websocket_endpoint(ws: WebSocket):
                 output_dir = data.get('output_dir', '')
                 profile = data.get('profile', 'general')
 
-                # Pre-load model with progress feedback
-                await ensure_model_with_progress(ws, scale, profile, files[0] if files else '')
+                _upscale_in_progress = True
+                try:
+                    upscaler.reset_cancel()
 
-                for file_path in files:
-                    if upscaler.cancel_event.is_set():
-                        await ws.send_json({
-                            'type': 'error',
-                            'file': file_path,
-                            'error': 'Cancelled'
-                        })
-                        continue
+                    # Pre-load model with progress feedback
+                    await ensure_model_with_progress(ws, scale, profile, files[0] if files else '')
 
-                    await process_file(ws, file_path, scale, output_format, output_dir, profile)
+                    for file_path in files:
+                        if upscaler.cancel_event.is_set():
+                            await ws.send_json({
+                                'type': 'error',
+                                'file': file_path,
+                                'error': 'Cancelled'
+                            })
+                            continue
 
-                await ws.send_json({'type': 'all_complete'})
+                        await process_file(ws, file_path, scale, output_format, output_dir, profile)
+
+                    await ws.send_json({'type': 'all_complete'})
+                finally:
+                    _upscale_in_progress = False
 
             elif action == 'cancel':
                 upscaler.cancel()
@@ -198,6 +216,20 @@ async def send_log(ws, message, level='info'):
     await ws.send_json({'type': 'log', 'message': message, 'level': level})
 
 
+def _is_oom_error(e):
+    """True for a CUDA/GPU out-of-memory condition. Prefers torch's dedicated
+    OutOfMemoryError when the installed torch exposes it, but always falls back
+    to message sniffing so older torch (where OOM surfaces as a plain
+    RuntimeError) is still recognised — without misclassifying every
+    RuntimeError as OOM."""
+    if 'out of memory' not in str(e).lower():
+        return False
+    oom_type = getattr(torch.cuda, 'OutOfMemoryError', None)
+    if oom_type is not None and isinstance(e, oom_type):
+        return True
+    return isinstance(e, RuntimeError)
+
+
 def categorize_error(e):
     """Return a user-friendly error message based on exception type."""
     msg = str(e)
@@ -212,17 +244,16 @@ def categorize_error(e):
                     'Install from https://ffmpeg.org/download.html')
         return f'File not found: {msg}'
 
-    if isinstance(e, torch.cuda.OutOfMemoryError if hasattr(torch.cuda, 'OutOfMemoryError') else RuntimeError):
-        if 'out of memory' in msg.lower() or 'CUDA out of memory' in msg:
-            vram_info = ''
-            if upscaler and upscaler.device == 'cuda':
-                vram_gb = upscaler._vram_total / (1024 ** 3)
-                vram_info = f' (Your GPU has {vram_gb:.0f}GB VRAM.)'
-            return (f'GPU ran out of memory.{vram_info} Try: '
-                    '1) Use 2x instead of 4x scale, '
-                    '2) Close other GPU-intensive apps (games, browsers), '
-                    '3) Use a smaller image/video, '
-                    '4) Restart the app to clear GPU memory')
+    if _is_oom_error(e):
+        vram_info = ''
+        if upscaler and upscaler.device == 'cuda':
+            vram_gb = upscaler._vram_total / (1024 ** 3)
+            vram_info = f' (Your GPU has {vram_gb:.0f}GB VRAM.)'
+        return (f'GPU ran out of memory.{vram_info} Try: '
+                '1) Use 2x instead of 4x scale, '
+                '2) Close other GPU-intensive apps (games, browsers), '
+                '3) Use a smaller image/video, '
+                '4) Restart the app to clear GPU memory')
 
     if isinstance(e, RuntimeError):
         if 'ffmpeg' in msg.lower():

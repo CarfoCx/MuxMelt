@@ -8,3 +8,4 @@ build/bundle/
 .env
 .claude/
 package-lock.json
+scratch/

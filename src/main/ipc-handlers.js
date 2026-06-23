@@ -8,6 +8,20 @@ const IMAGE_PREVIEW_EXTS = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif'
 ]);
 
+// Allowlist of file types the renderer may ask the OS to open. The app only
+// ever opens its own outputs (media) and tool sidecars (subtitles, metadata),
+// so an allowlist is safer than trying to enumerate every dangerous extension.
+const OPENABLE_EXTS = new Set([
+  // images
+  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif', '.ico',
+  // video
+  '.mp4', '.m4v', '.mkv', '.webm', '.avi', '.mov', '.flv', '.wmv', '.mpg', '.mpeg',
+  // audio
+  '.mp3', '.wav', '.flac', '.ogg', '.aac', '.m4a', '.wma', '.opus',
+  // sidecar/metadata files tools can produce
+  '.txt', '.srt', '.vtt', '.ass', '.json', '.pdf', '.nfo', '.description'
+]);
+
 function registerIpcHandlers(options) {
   const {
     getMainWindow,
@@ -53,6 +67,30 @@ function registerIpcHandlers(options) {
     return files;
   });
 
+  // ---- Custom window-frame controls (the window is frameless) ----
+  ipcMain.handle('window-minimize', () => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.minimize();
+  });
+
+  ipcMain.handle('window-maximize-toggle', () => {
+    const w = getMainWindow();
+    if (!w || w.isDestroyed()) return false;
+    if (w.isMaximized()) w.unmaximize();
+    else w.maximize();
+    return w.isMaximized();
+  });
+
+  ipcMain.handle('window-close', () => {
+    const w = getMainWindow();
+    if (w && !w.isDestroyed()) w.close();
+  });
+
+  ipcMain.handle('window-is-maximized', () => {
+    const w = getMainWindow();
+    return !!(w && !w.isDestroyed() && w.isMaximized());
+  });
+
   ipcMain.handle('get-python-port', () => getPythonPort());
 
   ipcMain.handle('get-python-token', () => (getPythonToken ? getPythonToken() : null));
@@ -73,12 +111,8 @@ function registerIpcHandlers(options) {
       if (expectDirectory && !stat.isDirectory()) return false;
       
       if (!expectDirectory) {
-        const dangerousExtensions = new Set([
-          '.exe', '.bat', '.cmd', '.msi', '.lnk', '.vbs', '.js', '.vbe', '.jse',
-          '.wsf', '.wsh', '.msc', '.com', '.scr', '.pif', '.reg', '.sh', '.bash', '.app'
-        ]);
         const ext = path.extname(resolvedPath).toLowerCase();
-        if (dangerousExtensions.has(ext)) {
+        if (!OPENABLE_EXTS.has(ext)) {
           return false;
         }
       }

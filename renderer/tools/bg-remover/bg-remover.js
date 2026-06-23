@@ -25,6 +25,8 @@ let dropZone, browseBtn, fileList, processBtn, clearBtn, openOutputBtn;
 let outputDirBtn, statusText, processingIndicator, outputFormat, etaText;
 let alphaMatting;
 let bgMode, bgColor, bgColorGroup, bgBlur, bgBlurGroup, bgBlurValue;
+let bgImageGroup, bgImageBtn;
+let bgImagePath = '';
 let compareOverlay, compareClose, compareContainer, compareBefore, compareAfter, compareSlider, compareTitle;
 let lastOutputDir = '';
 let _pasteHandler = null;
@@ -56,6 +58,8 @@ function init(ctx) {
   bgBlur = document.getElementById('bgBlur');
   bgBlurGroup = document.getElementById('bgBlurGroup');
   bgBlurValue = document.getElementById('bgBlurValue');
+  bgImageGroup = document.getElementById('bgImageGroup');
+  bgImageBtn = document.getElementById('bgImageBtn');
   compareOverlay = document.getElementById('compareOverlay');
   compareClose = document.getElementById('compareClose');
   compareContainer = document.getElementById('compareContainer');
@@ -70,7 +74,7 @@ function init(ctx) {
   connectWebSocket(pythonPort);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   loadToolSettings();
-  log('Background Remover initialized');
+  log('Background Editor initialized');
 }
 
 function cleanup() {
@@ -138,7 +142,7 @@ function handleWSMessage(data) {
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
       processBtn.disabled = false;
-      processBtn.textContent = 'Remove Backgrounds';
+      processBtn.textContent = 'Apply Background Edit';
       processBtn.classList.remove('btn-cancel');
       const completed = files.filter(f => f.state === 'complete').length;
       const errors = files.filter(f => f.state === 'error').length;
@@ -154,7 +158,7 @@ function handleWSMessage(data) {
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
       processBtn.disabled = false;
-      processBtn.textContent = 'Remove Backgrounds';
+      processBtn.textContent = 'Apply Background Edit';
       processBtn.classList.remove('btn-cancel');
       statusText.textContent = `Fatal error: ${data.error}`;
       log(`Fatal: ${data.error}`, 'error');
@@ -169,11 +173,34 @@ function bindEvents() {
 
   // Background mode controls
   bgMode.addEventListener('change', () => {
-    bgColorGroup.style.display = bgMode.value === 'color' ? '' : 'none';
-    bgBlurGroup.style.display = bgMode.value === 'blur' ? '' : 'none';
+    updateBgModeGroups();
     saveToolSettings();
   });
   bgColor.addEventListener('input', () => { saveToolSettings(); });
+
+  // Image background: pick the replacement image (right-click to clear).
+  if (bgImageBtn) {
+    bgImageBtn.addEventListener('click', async () => {
+      if (isProcessing) return;
+      const paths = await window.api.system.selectFiles({
+        title: 'Select Background Image',
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }]
+      });
+      if (paths && paths.length > 0) {
+        bgImagePath = paths[0];
+        updateBgImageButton();
+        saveToolSettings();
+      }
+    });
+    bgImageBtn.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (bgImagePath) {
+        bgImagePath = '';
+        updateBgImageButton();
+        saveToolSettings();
+      }
+    });
+  }
   bgBlur.addEventListener('input', () => {
     bgBlurValue.textContent = bgBlur.value;
     saveToolSettings();
@@ -261,6 +288,13 @@ function bindEvents() {
       return;
     }
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    if (bgMode.value === 'image' && !bgImagePath) {
+      log('Select a background image first, or choose a different Background mode.', 'warn');
+      if (statusText) statusText.textContent = 'Choose a background image';
+      return;
+    }
+
     const filesToProcess = files
       .filter(f => f.state === 'pending' || f.state === 'error')
       .map(f => { f.state = 'pending'; f.progress = 0; f.status = 'Queued...'; return f.path; });
@@ -286,9 +320,29 @@ function bindEvents() {
       alpha_matting: alphaMatting.checked,
       bg_mode: bgMode.value,
       bg_color: bgColor.value,
-      bg_blur: parseInt(bgBlur.value, 10)
+      bg_blur: parseInt(bgBlur.value, 10),
+      bg_image: bgImagePath
     }));
   });
+}
+
+// Show only the controls relevant to the chosen background mode.
+function updateBgModeGroups() {
+  bgColorGroup.style.display = bgMode.value === 'color' ? '' : 'none';
+  bgBlurGroup.style.display = bgMode.value === 'blur' ? '' : 'none';
+  if (bgImageGroup) bgImageGroup.style.display = bgMode.value === 'image' ? '' : 'none';
+}
+
+function updateBgImageButton() {
+  if (!bgImageBtn) return;
+  if (!bgImagePath) {
+    bgImageBtn.innerHTML = 'Choose image&hellip;';
+    bgImageBtn.title = 'Choose a background image to place behind the subject (right-click to clear)';
+    return;
+  }
+  const name = bgImagePath.replace(/\\/g, '/').split('/').pop();
+  bgImageBtn.textContent = name;
+  bgImageBtn.title = bgImagePath + ' — right-click to clear';
 }
 
 // ---- File management ----
@@ -484,11 +538,10 @@ async function loadToolSettings() {
     const s = all['bg-remover'] || {};
     if (s.outputFormat) outputFormat.value = s.outputFormat;
     if (typeof s.alphaMatting === 'boolean') alphaMatting.checked = s.alphaMatting;
-    if (s.bgMode) {
-      bgMode.value = s.bgMode;
-      bgColorGroup.style.display = s.bgMode === 'color' ? '' : 'none';
-      bgBlurGroup.style.display = s.bgMode === 'blur' ? '' : 'none';
-    }
+    if (s.bgImage) bgImagePath = s.bgImage;
+    if (s.bgMode) bgMode.value = s.bgMode;
+    updateBgModeGroups();
+    updateBgImageButton();
     if (s.bgColor) bgColor.value = s.bgColor;
     if (s.bgBlur) { bgBlur.value = s.bgBlur; bgBlurValue.textContent = s.bgBlur; }
     if (s.outputDir) {
@@ -512,6 +565,7 @@ function saveToolSettings() {
         bgMode: bgMode.value,
         bgColor: bgColor.value,
         bgBlur: bgBlur.value,
+        bgImage: bgImagePath,
         outputDir
       };
       window.saveAllSettings(all);
