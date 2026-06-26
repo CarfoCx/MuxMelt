@@ -125,6 +125,7 @@ contextBridge.exposeInMainWorld('api', {
       downloadVideoUrl: (options) => ipcRenderer.invoke('url-downloader-download', options),
       cancelUrlDownload: () => ipcRenderer.invoke('url-downloader-cancel'),
       getVideoInfo: (options) => ipcRenderer.invoke('url-downloader-info', options),
+      getThumbnail: (options) => ipcRenderer.invoke('url-downloader-thumbnail', options),
       updateYtDlp: () => ipcRenderer.invoke('url-downloader-update-ytdlp'),
     },
 

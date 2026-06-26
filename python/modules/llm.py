@@ -29,21 +29,43 @@ def _models_dir():
     return d
 
 
-# Downloadable GGUF chat models. All Apache-2.0 licensed (safe to use offline
-# and to redistribute the weights you download). To add one, drop another entry
-# here and it shows up in the picker automatically.
+# Downloadable GGUF chat models, ordered as an accuracy ladder (small/fast →
+# large/accurate). The bigger Qwen2.5 sizes (1.5B/7B/14B) are Apache-2.0; the 3B
+# is under the Qwen Research licence. Bigger models answer far more accurately
+# but need more RAM and run slower on CPU — the picker lets the user choose.
+# A higher-quality quant (Q5_K_M) keeps more of the model's precision than Q4 at
+# a small size/speed cost. To add a model, drop another entry here and it shows
+# up in the picker automatically.
 MODELS = {
     'qwen2.5-1.5b-instruct-q4': {
-        'name': 'Qwen2.5 1.5B Instruct — fast (~1 GB)',
+        'name': 'Qwen2.5 1.5B — fastest (~1 GB)',
         'file': 'Qwen2.5-1.5B-Instruct-Q4_K_M.gguf',
         'url': 'https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf',
         'approx_mb': 1100,
     },
     'qwen2.5-3b-instruct-q4': {
-        'name': 'Qwen2.5 3B Instruct — balanced (~2 GB)',
+        'name': 'Qwen2.5 3B — balanced (~2 GB)',
         'file': 'Qwen2.5-3B-Instruct-Q4_K_M.gguf',
         'url': 'https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf',
         'approx_mb': 2000,
+    },
+    'qwen2.5-7b-instruct-q4': {
+        'name': 'Qwen2.5 7B — high accuracy (~4.7 GB)',
+        'file': 'Qwen2.5-7B-Instruct-Q4_K_M.gguf',
+        'url': 'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf',
+        'approx_mb': 4700,
+    },
+    'qwen2.5-7b-instruct-q5': {
+        'name': 'Qwen2.5 7B — higher precision Q5 (~5.4 GB)',
+        'file': 'Qwen2.5-7B-Instruct-Q5_K_M.gguf',
+        'url': 'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q5_K_M.gguf',
+        'approx_mb': 5400,
+    },
+    'qwen2.5-14b-instruct-q4': {
+        'name': 'Qwen2.5 14B — most accurate (~9 GB)',
+        'file': 'Qwen2.5-14B-Instruct-Q4_K_M.gguf',
+        'url': 'https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf',
+        'approx_mb': 9000,
     },
 }
 DEFAULT_MODEL = 'qwen2.5-3b-instruct-q4'
@@ -155,10 +177,17 @@ class ChatLLM:
             )
             self._loaded_model_id = model_id
 
-    def chat_stream(self, messages, on_token, max_tokens=512, temperature=0.7):
+    def chat_stream(self, messages, on_token, max_tokens=512, temperature=0.7,
+                    top_p=0.95, top_k=40, repeat_penalty=1.1, min_p=0.05):
         """Stream the assistant reply token-by-token via on_token(text).
         Uses the chat template embedded in the GGUF metadata. Stops early when
-        cancel_event is set."""
+        cancel_event is set.
+
+        The sampling knobs shape answer quality: lower `temperature` + `top_p`
+        make replies more deterministic/factual; `repeat_penalty` curbs the
+        looping small models are prone to; `min_p` trims low-probability tokens
+        (a steadier alternative to top_k alone). The caller maps a user-facing
+        style preset (Precise/Balanced/Creative) onto these values."""
         if self._llm is None:
             raise RuntimeError('Model not loaded.')
 
@@ -167,6 +196,10 @@ class ChatLLM:
             stream=True,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            repeat_penalty=repeat_penalty,
+            min_p=min_p,
         )
         for chunk in stream:
             if self.cancel_event.is_set():

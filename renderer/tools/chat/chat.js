@@ -24,7 +24,7 @@ let isDownloading = false;
 let streamingText = '';
 let currentBubble = null; // the assistant bubble being streamed into
 
-let modelSelect, modelStatus, downloadModelBtn, chatDownload, chatDownloadLabel, chatDownloadFill;
+let modelSelect, styleSelect, modelStatus, downloadModelBtn, chatDownload, chatDownloadLabel, chatDownloadFill;
 let chatMessages, chatEmpty, chatInput, chatSendBtn, chatClearBtn, statusText;
 
 function init(ctx) {
@@ -33,6 +33,7 @@ function init(ctx) {
   log = ctx.log;
 
   modelSelect = document.getElementById('modelSelect');
+  styleSelect = document.getElementById('styleSelect');
   modelStatus = document.getElementById('modelStatus');
   downloadModelBtn = document.getElementById('downloadModelBtn');
   chatDownload = document.getElementById('chatDownload');
@@ -236,7 +237,8 @@ function send() {
 
   isGenerating = true;
   updateControls();
-  ws.send(JSON.stringify({ action: 'chat', model: selectedModel, messages }));
+  const style = (styleSelect && styleSelect.value) || 'balanced';
+  ws.send(JSON.stringify({ action: 'chat', model: selectedModel, messages, style }));
 }
 
 function finishGeneration(failed = false) {

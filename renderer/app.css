@@ -1,10 +1,42 @@
+/* ============================================================================
+   THEME TOKENS
+   ----------------------------------------------------------------------------
+   Every theme is just a palette block that overrides these CSS variables. The
+   structural rules elsewhere in this file only ever read the variables, never a
+   literal colour, so a new theme = one block here + one <option> in
+   settings.html. Each "Modern" theme also points --app-bg-image at a generated
+   SVG artwork in renderer/themes/, layered behind the translucent panels.
+
+   Token map:
+     --bg-primary      deepest base / progress troughs
+     --bg-secondary    panels, sidebar, cards (translucent so the art shows)
+     --bg-tertiary     inputs, pills, raised chips
+     --bg-hover        hover fill
+     --sidebar-bg      sidebar + titlebar (falls back to --bg-secondary)
+     --accent          primary brand colour
+     --accent-hover    brighter/secondary accent (hovers, gradients)
+     --accent-rgb      "r, g, b" of the accent, for rgba() glows
+     --accent-glow     soft accent halo
+     --header-bg       tool header / footer bar
+     --banner-grad     module-banner gradient
+     --app-bg-image    full-window backdrop artwork (url(...) or none)
+   ========================================================================== */
+
 :root {
+  /* structural constants shared by all themes */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --sidebar-width: 240px;
+
+  /* ---- Midnight (default dark) ---- */
   --bg-primary: #09090b;
-  --bg-secondary: rgba(24, 24, 27, 0.65);
-  --bg-tertiary: rgba(39, 39, 42, 0.6);
-  --bg-hover: rgba(63, 63, 70, 0.8);
+  --bg-secondary: rgba(24, 24, 27, 0.6);
+  --bg-tertiary: rgba(39, 39, 42, 0.55);
+  --bg-hover: rgba(63, 63, 70, 0.78);
+  --sidebar-bg: rgba(15, 15, 24, 0.55);
   --accent: #6366f1;
-  --accent-hover: #4f46e5;
+  --accent-hover: #818cf8;
+  --accent-rgb: 99, 102, 241;
   --accent-glow: rgba(99, 102, 241, 0.4);
   --text-primary: #f8fafc;
   --text-secondary: #cbd5e1;
@@ -13,18 +45,22 @@
   --error: #ef4444;
   --warning: #f59e0b;
   --border: rgba(255, 255, 255, 0.08);
-  --radius: 12px;
-  --radius-sm: 8px;
-  --sidebar-width: 240px;
+
+  --header-bg: rgba(13, 13, 24, 0.66);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), rgba(24, 24, 27, 0.45));
+  --app-bg-image: url('themes/midnight.svg');
 }
 
+/* ---- Daybreak (light) ---- */
 [data-theme="light"] {
   --bg-primary: #f5f5f7;
-  --bg-secondary: #ffffff;
-  --bg-tertiary: #e8e8ed;
-  --bg-hover: #d8d8e0;
+  --bg-secondary: rgba(255, 255, 255, 0.82);
+  --bg-tertiary: rgba(232, 232, 237, 0.85);
+  --bg-hover: rgba(216, 216, 224, 0.9);
+  --sidebar-bg: rgba(255, 255, 255, 0.7);
   --accent: #6b63ff;
-  --accent-hover: #5a52e0;
+  --accent-hover: #8b84ff;
+  --accent-rgb: 107, 99, 255;
   --accent-glow: rgba(107, 99, 255, 0.25);
   --text-primary: #1a1a2e;
   --text-secondary: #4a4a5e;
@@ -32,8 +68,323 @@
   --success: #16a34a;
   --error: #dc2626;
   --warning: #d97706;
-  --border: #d0d0d8;
-  --sidebar-bg: #e0e0e8;
+  --border: rgba(26, 26, 46, 0.12);
+
+  --header-bg: rgba(255, 255, 255, 0.72);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.12), rgba(255, 255, 255, 0.5));
+  --app-bg-image: url('themes/daybreak.svg');
+}
+
+/* ---- Aurora (Nord) ---- */
+[data-theme="aurora"] {
+  --bg-primary: #1c2029;
+  --bg-secondary: rgba(46, 52, 64, 0.66);
+  --bg-tertiary: rgba(59, 66, 82, 0.6);
+  --bg-hover: rgba(76, 86, 106, 0.78);
+  --sidebar-bg: rgba(36, 41, 51, 0.6);
+  --accent: #88c0d0;
+  --accent-hover: #8fbcbb;
+  --accent-rgb: 136, 192, 208;
+  --accent-glow: rgba(136, 192, 208, 0.35);
+  --text-primary: #eceff4;
+  --text-secondary: #d8dee9;
+  --text-dim: #7b8494;
+  --success: #a3be8c;
+  --error: #bf616a;
+  --warning: #ebcb8b;
+  --border: rgba(216, 222, 233, 0.1);
+
+  --header-bg: rgba(36, 41, 51, 0.72);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), rgba(46, 52, 64, 0.5));
+  --app-bg-image: url('themes/aurora.svg');
+}
+
+/* ---- Nocturne (Dracula) ---- */
+[data-theme="nocturne"] {
+  --bg-primary: #15121f;
+  --bg-secondary: rgba(40, 34, 60, 0.62);
+  --bg-tertiary: rgba(68, 71, 90, 0.55);
+  --bg-hover: rgba(98, 102, 130, 0.7);
+  --sidebar-bg: rgba(28, 24, 42, 0.58);
+  --accent: #bd93f9;
+  --accent-hover: #ff79c6;
+  --accent-rgb: 189, 147, 249;
+  --accent-glow: rgba(189, 147, 249, 0.4);
+  --text-primary: #f8f8f2;
+  --text-secondary: #d6d4e8;
+  --text-dim: #7d7a96;
+  --success: #50fa7b;
+  --error: #ff5555;
+  --warning: #f1fa8c;
+  --border: rgba(248, 248, 242, 0.09);
+
+  --header-bg: rgba(24, 20, 36, 0.7);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.18), rgba(40, 34, 60, 0.5));
+  --app-bg-image: url('themes/nocturne.svg');
+}
+
+/* ---- Synthwave ---- */
+[data-theme="synthwave"] {
+  --bg-primary: #0d0420;
+  --bg-secondary: rgba(36, 16, 58, 0.6);
+  --bg-tertiary: rgba(58, 26, 86, 0.55);
+  --bg-hover: rgba(90, 40, 120, 0.72);
+  --sidebar-bg: rgba(24, 10, 42, 0.62);
+  --accent: #ff2fb9;
+  --accent-hover: #2de2e6;
+  --accent-rgb: 255, 47, 185;
+  --accent-glow: rgba(255, 47, 185, 0.45);
+  --text-primary: #ffeef9;
+  --text-secondary: #e7b9e0;
+  --text-dim: #9a6fae;
+  --success: #2de2e6;
+  --error: #ff5572;
+  --warning: #ffe66d;
+  --border: rgba(255, 110, 199, 0.18);
+
+  --header-bg: rgba(24, 10, 42, 0.72);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.18), rgba(45, 226, 230, 0.08));
+  --app-bg-image: url('themes/synthwave.svg');
+}
+
+/* ---- Abyss (deep ocean) ---- */
+[data-theme="abyss"] {
+  --bg-primary: #04141f;
+  --bg-secondary: rgba(10, 52, 69, 0.6);
+  --bg-tertiary: rgba(14, 74, 94, 0.55);
+  --bg-hover: rgba(30, 110, 135, 0.7);
+  --sidebar-bg: rgba(7, 38, 52, 0.6);
+  --accent: #34c5dd;
+  --accent-hover: #7fe7ff;
+  --accent-rgb: 52, 197, 221;
+  --accent-glow: rgba(52, 197, 221, 0.38);
+  --text-primary: #e6fbff;
+  --text-secondary: #b3dfe9;
+  --text-dim: #5f8b98;
+  --success: #3ad6a3;
+  --error: #ff6b6b;
+  --warning: #ffd166;
+  --border: rgba(174, 240, 255, 0.1);
+
+  --header-bg: rgba(6, 30, 42, 0.72);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), rgba(10, 52, 69, 0.5));
+  --app-bg-image: url('themes/abyss.svg');
+}
+
+/* ---- Old Growth (forest) ---- */
+[data-theme="oldgrowth"] {
+  --bg-primary: #081710;
+  --bg-secondary: rgba(16, 42, 26, 0.62);
+  --bg-tertiary: rgba(26, 58, 38, 0.56);
+  --bg-hover: rgba(48, 92, 60, 0.72);
+  --sidebar-bg: rgba(12, 32, 20, 0.6);
+  --accent: #6fcf86;
+  --accent-hover: #aee571;
+  --accent-rgb: 111, 207, 134;
+  --accent-glow: rgba(111, 207, 134, 0.32);
+  --text-primary: #eaf6ea;
+  --text-secondary: #c2d8c4;
+  --text-dim: #6f8a72;
+  --success: #6fcf86;
+  --error: #e06a5a;
+  --warning: #e0b15a;
+  --border: rgba(234, 246, 234, 0.09);
+
+  --header-bg: rgba(10, 28, 18, 0.72);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), rgba(16, 42, 26, 0.5));
+  --app-bg-image: url('themes/oldgrowth.svg');
+}
+
+/* ---- Golden Hour (sunset) ---- */
+[data-theme="goldenhour"] {
+  --bg-primary: #2a1530;
+  --bg-secondary: rgba(74, 38, 64, 0.6);
+  --bg-tertiary: rgba(102, 52, 76, 0.55);
+  --bg-hover: rgba(150, 80, 90, 0.72);
+  --sidebar-bg: rgba(52, 26, 50, 0.6);
+  --accent: #ff9d5c;
+  --accent-hover: #ffd27a;
+  --accent-rgb: 255, 157, 92;
+  --accent-glow: rgba(255, 157, 92, 0.4);
+  --text-primary: #fff3ea;
+  --text-secondary: #f3cdbb;
+  --text-dim: #b3849a;
+  --success: #ffcf6b;
+  --error: #ff6b6b;
+  --warning: #ffd166;
+  --border: rgba(255, 243, 234, 0.1);
+
+  --header-bg: rgba(42, 21, 48, 0.7);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(74, 38, 64, 0.5));
+  --app-bg-image: url('themes/goldenhour.svg');
+}
+
+/* ---- Rosé ---- */
+[data-theme="rose"] {
+  --bg-primary: #191320;
+  --bg-secondary: rgba(42, 33, 55, 0.62);
+  --bg-tertiary: rgba(57, 47, 73, 0.56);
+  --bg-hover: rgba(86, 70, 110, 0.72);
+  --sidebar-bg: rgba(30, 24, 40, 0.6);
+  --accent: #eb6f92;
+  --accent-hover: #c4a7e7;
+  --accent-rgb: 235, 111, 146;
+  --accent-glow: rgba(235, 111, 146, 0.36);
+  --text-primary: #f5ecf4;
+  --text-secondary: #d4c4d6;
+  --text-dim: #8a7d92;
+  --success: #9ccfd8;
+  --error: #eb6f92;
+  --warning: #f6c177;
+  --border: rgba(245, 236, 244, 0.1);
+
+  --header-bg: rgba(26, 20, 36, 0.7);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.18), rgba(196, 167, 231, 0.08));
+  --app-bg-image: url('themes/rose.svg');
+}
+
+/* ---- Ember ---- */
+[data-theme="ember"] {
+  --bg-primary: #0c0605;
+  --bg-secondary: rgba(51, 16, 14, 0.6);
+  --bg-tertiary: rgba(74, 24, 18, 0.55);
+  --bg-hover: rgba(120, 48, 30, 0.72);
+  --sidebar-bg: rgba(34, 12, 10, 0.62);
+  --accent: #ff7b29;
+  --accent-hover: #ffb347;
+  --accent-rgb: 255, 123, 41;
+  --accent-glow: rgba(255, 123, 41, 0.42);
+  --text-primary: #fdeede;
+  --text-secondary: #e6c2ab;
+  --text-dim: #9c6f5a;
+  --success: #ffb23e;
+  --error: #ff4d4d;
+  --warning: #ffd166;
+  --border: rgba(253, 238, 222, 0.1);
+
+  --header-bg: rgba(22, 8, 6, 0.72);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(51, 16, 14, 0.5));
+  --app-bg-image: url('themes/ember.svg');
+}
+
+/* ---- Graphite (minimal mono) ---- */
+[data-theme="graphite"] {
+  --bg-primary: #101012;
+  --bg-secondary: rgba(28, 28, 31, 0.66);
+  --bg-tertiary: rgba(42, 42, 46, 0.6);
+  --bg-hover: rgba(64, 64, 70, 0.78);
+  --sidebar-bg: rgba(22, 22, 25, 0.62);
+  --accent: #c4c4cc;
+  --accent-hover: #ffffff;
+  --accent-rgb: 196, 196, 204;
+  --accent-glow: rgba(196, 196, 204, 0.22);
+  --text-primary: #f2f2f5;
+  --text-secondary: #b8b8c0;
+  --text-dim: #72727a;
+  --success: #8fd19e;
+  --error: #e08a8a;
+  --warning: #e0c98a;
+  --border: rgba(255, 255, 255, 0.09);
+
+  --header-bg: rgba(18, 18, 20, 0.72);
+  --banner-grad: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(28, 28, 31, 0.5));
+  --app-bg-image: url('themes/graphite.svg');
+}
+
+/* ---- Cyberpunk ---- */
+[data-theme="cyberpunk"] {
+  --bg-primary: #0a0a0c;
+  --bg-secondary: rgba(20, 20, 25, 0.7);
+  --bg-tertiary: rgba(35, 35, 45, 0.6);
+  --bg-hover: rgba(50, 50, 65, 0.8);
+  --sidebar-bg: rgba(15, 15, 20, 0.65);
+  --accent: #fcee0a;
+  --accent-hover: #00f0ff;
+  --accent-rgb: 252, 238, 10;
+  --accent-glow: rgba(252, 238, 10, 0.45);
+  --text-primary: #ffffff;
+  --text-secondary: #00f0ff;
+  --text-dim: #777788;
+  --success: #00ff00;
+  --error: #ff003c;
+  --warning: #ff8c00;
+  --border: rgba(252, 238, 10, 0.2);
+
+  --header-bg: rgba(10, 10, 12, 0.8);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.25), rgba(0, 240, 255, 0.1));
+  --app-bg-image: url('themes/cyberpunk.svg');
+}
+
+/* ---- Lavender ---- */
+[data-theme="lavender"] {
+  --bg-primary: #fdfbfd;
+  --bg-secondary: rgba(255, 255, 255, 0.85);
+  --bg-tertiary: rgba(245, 240, 248, 0.9);
+  --bg-hover: rgba(235, 225, 240, 0.9);
+  --sidebar-bg: rgba(255, 255, 255, 0.75);
+  --accent: #9d7bba;
+  --accent-hover: #b695c0;
+  --accent-rgb: 157, 123, 186;
+  --accent-glow: rgba(157, 123, 186, 0.3);
+  --text-primary: #2d2438;
+  --text-secondary: #5e4f6e;
+  --text-dim: #887a94;
+  --success: #4ade80;
+  --error: #fb7185;
+  --warning: #fbbf24;
+  --border: rgba(157, 123, 186, 0.15);
+
+  --header-bg: rgba(255, 255, 255, 0.8);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.15), rgba(255, 255, 255, 0.5));
+  --app-bg-image: url('themes/lavender.svg');
+}
+
+/* ---- Ocean ---- */
+[data-theme="ocean"] {
+  --bg-primary: #051937;
+  --bg-secondary: rgba(0, 45, 90, 0.6);
+  --bg-tertiary: rgba(0, 60, 110, 0.55);
+  --bg-hover: rgba(0, 85, 140, 0.7);
+  --sidebar-bg: rgba(2, 25, 55, 0.65);
+  --accent: #00bf72;
+  --accent-hover: #00ff9d;
+  --accent-rgb: 0, 191, 114;
+  --accent-glow: rgba(0, 191, 114, 0.4);
+  --text-primary: #e6f7ff;
+  --text-secondary: #99d6ff;
+  --text-dim: #4da6ff;
+  --success: #00e676;
+  --error: #ff4d4f;
+  --warning: #ffc53d;
+  --border: rgba(0, 191, 114, 0.2);
+
+  --header-bg: rgba(2, 20, 45, 0.75);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(0, 45, 90, 0.5));
+  --app-bg-image: url('themes/ocean.svg');
+}
+
+/* ---- Crimson ---- */
+[data-theme="crimson"] {
+  --bg-primary: #0f0505;
+  --bg-secondary: rgba(35, 10, 10, 0.65);
+  --bg-tertiary: rgba(50, 15, 15, 0.6);
+  --bg-hover: rgba(75, 20, 20, 0.75);
+  --sidebar-bg: rgba(20, 5, 5, 0.7);
+  --accent: #ff1a1a;
+  --accent-hover: #ff4d4d;
+  --accent-rgb: 255, 26, 26;
+  --accent-glow: rgba(255, 26, 26, 0.4);
+  --text-primary: #fff0f0;
+  --text-secondary: #ffb3b3;
+  --text-dim: #cc6666;
+  --success: #33cc33;
+  --error: #ff3333;
+  --warning: #ff9933;
+  --border: rgba(255, 26, 26, 0.2);
+
+  --header-bg: rgba(15, 5, 5, 0.8);
+  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(35, 10, 10, 0.5));
+  --app-bg-image: url('themes/crimson.svg');
 }
 
 * {
@@ -44,7 +395,14 @@
 
 body {
   font-family: 'Inter', 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background: radial-gradient(circle at top left, #1a1a2e, #09090b 80%);
+  /* Per-theme artwork sits behind the translucent panels; the solid colour is
+     the fallback when a theme defines no art (e.g. the Classic schemes). */
+  background-color: var(--bg-primary);
+  background-image: var(--app-bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
   color: var(--text-primary);
   overflow: hidden;
   height: 100vh;
@@ -597,7 +955,7 @@ input[type="range"] {
   align-items: center;
   justify-content: space-between;
   padding: 14px 24px;
-  background: rgba(15, 15, 26, 0.85);
+  background: var(--header-bg);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -623,7 +981,7 @@ input[type="range"] {
   padding: 12px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(24, 24, 27, 0.6));
+  background: var(--banner-grad);
   backdrop-filter: blur(12px);
   color: var(--text-secondary);
   font-size: 13px;
@@ -642,7 +1000,7 @@ input[type="range"] {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 20px;
-  background: rgba(15, 15, 26, 0.85);
+  background: var(--header-bg);
   backdrop-filter: blur(20px);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -675,20 +1033,20 @@ input[type="range"] {
 
 .drop-zone:hover {
   border-color: var(--accent);
-  background: linear-gradient(to bottom, rgba(99, 102, 241, 0.05), rgba(99, 102, 241, 0.1));
+  background: linear-gradient(to bottom, rgba(var(--accent-rgb), 0.05), rgba(var(--accent-rgb), 0.12));
   box-shadow: 0 0 25px var(--accent-glow);
   transform: translateY(-2px);
 }
 
 .drop-zone.dragover {
   border-color: var(--accent);
-  background: rgba(123, 115, 255, 0.05);
-  box-shadow: inset 0 0 20px rgba(123, 115, 255, 0.1);
+  background: rgba(var(--accent-rgb), 0.06);
+  box-shadow: inset 0 0 20px rgba(var(--accent-rgb), 0.12);
 }
 
 @keyframes dropzone-pulse {
   0%, 100% { box-shadow: inset 0 0 0 1px var(--border); }
-  50% { box-shadow: inset 0 0 0 1px var(--accent), 0 0 15px rgba(123, 115, 255, 0.08); }
+  50% { box-shadow: inset 0 0 0 1px var(--accent), 0 0 15px rgba(var(--accent-rgb), 0.1); }
 }
 
 .drop-zone:not(.collapsed):not(.dragover) {
@@ -853,7 +1211,7 @@ input[type="range"] {
 
 .file-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), #9b93ff);
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
   border-radius: 3px;
   transition: width 0.3s ease;
   width: 0%;
@@ -974,8 +1332,8 @@ input[type="range"] {
   align-items: center;
   gap: 10px;
   padding: 8px 24px;
-  background: rgba(123, 115, 255, 0.1);
-  border-bottom: 1px solid rgba(123, 115, 255, 0.3);
+  background: rgba(var(--accent-rgb), 0.1);
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.3);
   color: var(--accent);
   font-size: 12px;
   flex-shrink: 0;
@@ -1275,7 +1633,7 @@ input[type="range"] {
 }
 
 .toast-action:hover {
-  color: #9b93ff;
+  color: var(--accent-hover);
 }
 
 /* ===== Keyboard shortcut hints ===== */
@@ -1648,6 +2006,28 @@ input[type="range"] {
   --w-title1: #161616; --w-title2: #343434; --w-title-text: #39e08a;
   --w-desktop: #0a0a0a;
   --w-success: #39e08a; --w-error: #ff5a5a; --w-warning: #ffcf4a;
+}
+
+/* ---- Scheme: Terminal (black + phosphor-green, the Matrix look) ---------- */
+[data-theme="retro-matrix"] {
+  --w-face: #0f1a0f; --w-light: #1f3a1f; --w-hi: #163016; --w-shadow: #050d05; --w-dark: #000000;
+  --w-text: #33ff66; --w-dim: #1f9a40;
+  --w-field: #020802; --w-field-text: #4dff7a;
+  --w-sel: #0d662b; --w-sel-text: #d6ffe2;
+  --w-title1: #03140a; --w-title2: #0a2614; --w-title-text: #4dff7a;
+  --w-desktop: #000000;
+  --w-success: #33ff66; --w-error: #ff5a5a; --w-warning: #d4ff4a;
+}
+
+/* ---- Scheme: Blue Screen (the BSOD / classic installer navy) ------------- */
+[data-theme="retro-bsod"] {
+  --w-face: #1a4fb0; --w-light: #5a86d6; --w-hi: #356cc4; --w-shadow: #0c3478; --w-dark: #041d4a;
+  --w-text: #eaf1ff; --w-dim: #aac2ee;
+  --w-field: #0c3478; --w-field-text: #eaf1ff;
+  --w-sel: #c9d8f5; --w-sel-text: #0c3478;
+  --w-title1: #c9d8f5; --w-title2: #aac2ee; --w-title-text: #0c3478;
+  --w-desktop: #0a2f73;
+  --w-success: #7ee0a0; --w-error: #ff9a9a; --w-warning: #ffe08a;
 }
 
 /* ===== Shared structure (applies to every retro scheme) ================== */

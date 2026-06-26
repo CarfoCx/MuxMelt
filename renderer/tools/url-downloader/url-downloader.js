@@ -208,6 +208,7 @@ function addRow(value) {
     state: 'pending',
     output: '',
     info: null,
+    thumbnailDataUrl: null,
     isFetchingInfo: false,
     isEditing: false
   };
@@ -235,6 +236,7 @@ function createEmptyRow() {
     state: 'pending',
     output: '',
     info: null,
+    thumbnailDataUrl: null,
     isFetchingInfo: false,
     isEditing: false
   };
@@ -276,6 +278,7 @@ async function fetchInfoForRow(row, url) {
   row.isFetchingInfo = true;
   row.status = 'Fetching video info...';
   row.info = null;
+  row.thumbnailDataUrl = null;
   renderRows();
 
   try {
@@ -289,6 +292,7 @@ async function fetchInfoForRow(row, url) {
       row.info = res.info;
       row.status = 'Ready';
       row.url = url;
+      loadThumbnailForRow(row);
     } else {
       row.info = null;
       row.status = 'Ready';
@@ -300,6 +304,34 @@ async function fetchInfoForRow(row, url) {
     row.isFetchingInfo = false;
     renderRows();
   }
+}
+
+// Thumbnails are remote https images, which the app's CSP (img-src 'self' data:
+// file:) blocks from loading directly in an <img>. The main process fetches the
+// bytes and returns a data: URL we can render inline.
+async function loadThumbnailForRow(row) {
+  const info = row.info;
+  if (!info) return;
+  let thumbUrl = info.thumbnail || '';
+  if (!thumbUrl && Array.isArray(info.thumbnails) && info.thumbnails.length) {
+    // thumbnails are ordered worst -> best; take the last valid one.
+    for (let i = info.thumbnails.length - 1; i >= 0; i--) {
+      if (info.thumbnails[i] && info.thumbnails[i].url) { thumbUrl = info.thumbnails[i].url; break; }
+    }
+  }
+  if (!thumbUrl) return;
+
+  try {
+    const res = await window.api.tools.urlDownloader.getThumbnail({
+      url: thumbUrl,
+      referer: info.webpage_url || row.url || undefined
+    });
+    // Guard against a stale response after the row's URL changed.
+    if (res && res.success && res.dataUrl && row.info === info) {
+      row.thumbnailDataUrl = res.dataUrl;
+      renderRows();
+    }
+  } catch {}
 }
 
 // `onlyRow` (optional) restricts the download to a single queue row — used by
@@ -608,16 +640,21 @@ function renderRows() {
     if (row.info && !row.isEditing) {
       // Info preview mode
       const durationStr = row.info.duration ? formatDuration(row.info.duration) : '';
-      const uploaderStr = row.info.uploader || row.info.channel || 'Unknown';
-      const thumbnailSrc = row.info.thumbnail || '';
-      
+      const titleStr = row.info.title || row.info.fulltitle || row.info.id || 'Untitled';
+      const uploaderStr = row.info.uploader || row.info.channel || row.info.uploader_id
+        || row.info.extractor_key || row.info.webpage_url_domain || 'Unknown';
+      // Only a data: URL (fetched by the main process) is renderable under the
+      // app CSP; remote https thumbnails are blocked, so skip the <img> until
+      // the data URL arrives rather than showing a broken-image icon.
+      const thumbnailSrc = row.thumbnailDataUrl || '';
+
       mainContentHtml = `
         <div class="url-main has-info">
           <div class="url-thumbnail-container">
-            ${thumbnailSrc ? `<img src="${thumbnailSrc}" class="url-thumbnail" referrerpolicy="no-referrer" onerror="this.parentElement.style.display='none'">` : ''}
+            ${thumbnailSrc ? `<img src="${thumbnailSrc}" class="url-thumbnail" alt="">` : ''}
           </div>
           <div class="url-info-details">
-            <span class="url-video-title" title="${window.escapeHtml(row.info.title)}">${window.escapeHtml(row.info.title)}</span>
+            <span class="url-video-title" title="${window.escapeHtml(titleStr)}">${window.escapeHtml(titleStr)}</span>
             <div class="url-video-meta">
               <span class="url-video-uploader">${window.escapeHtml(uploaderStr)}</span>
               ${durationStr ? `<span class="url-video-duration">${durationStr}</span>` : ''}
@@ -663,7 +700,8 @@ function renderRows() {
         row.status = 'Waiting for URL';
         row.progress = 0;
         row.info = null;
-        
+        row.thumbnailDataUrl = null;
+
         clearTimeout(row.fetchTimeout);
         if (isValidHttpUrl(row.url)) {
           row.fetchTimeout = setTimeout(() => {

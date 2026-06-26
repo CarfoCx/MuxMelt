@@ -13,10 +13,25 @@ llm = ChatLLM()
 router = APIRouter()
 
 DEFAULT_SYSTEM_PROMPT = (
-    'You are a concise, helpful assistant built into MuxMelt, a local media '
-    'toolkit. Answer clearly and briefly. Everything runs offline on the '
-    "user's own computer."
+    'You are a helpful, knowledgeable assistant built into MuxMelt, a local '
+    "media toolkit. Everything runs offline on the user's own computer.\n"
+    '- Give a direct, accurate answer first, then add detail only if useful.\n'
+    '- If you are not sure or do not know, say so plainly. Never invent facts, '
+    'names, numbers, dates, quotes, or citations to fill a gap.\n'
+    '- For math, logic, or code, work through the steps carefully before '
+    'committing to a final answer.\n'
+    '- Keep it focused; skip filler and repetition.'
 )
+
+# User-facing answer styles mapped to llama.cpp sampling settings. "Precise"
+# favours determinism/accuracy (low temperature, tight nucleus); "Creative"
+# loosens it for brainstorming. The default mirrors the old behaviour.
+STYLE_PRESETS = {
+    'precise':  {'temperature': 0.2, 'top_p': 0.90, 'top_k': 40, 'repeat_penalty': 1.1, 'min_p': 0.05},
+    'balanced': {'temperature': 0.6, 'top_p': 0.95, 'top_k': 40, 'repeat_penalty': 1.1, 'min_p': 0.05},
+    'creative': {'temperature': 0.9, 'top_p': 0.98, 'top_k': 80, 'repeat_penalty': 1.1, 'min_p': 0.02},
+}
+DEFAULT_STYLE = 'balanced'
 
 # Keep only the most recent turns so we never overflow the model context.
 MAX_HISTORY_MESSAGES = 12
@@ -120,10 +135,14 @@ async def _handle_chat(ws, data):
 
         token_q = thread_queue.Queue()
         max_tokens = int(data.get('max_tokens', 512))
-        temperature = float(data.get('temperature', 0.7))
+        # Resolve the answer style into sampling params; an explicit temperature
+        # in the payload still wins (back-compat with older callers).
+        preset = dict(STYLE_PRESETS.get(data.get('style'), STYLE_PRESETS[DEFAULT_STYLE]))
+        if data.get('temperature') is not None:
+            preset['temperature'] = float(data.get('temperature'))
         gen_task = loop.run_in_executor(
             None,
-            lambda: llm.chat_stream(messages, token_q.put_nowait, max_tokens, temperature),
+            lambda: llm.chat_stream(messages, token_q.put_nowait, max_tokens, **preset),
         )
 
         await ws.send_json({'type': 'start'})

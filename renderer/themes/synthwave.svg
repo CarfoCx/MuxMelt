@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0319"/>
+      <stop offset="40%" stop-color="#1b0a36"/>
+      <stop offset="70%" stop-color="#3c125a"/>
+      <stop offset="100%" stop-color="#0a0319"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffe66d"/>
+      <stop offset="45%" stop-color="#ff6ec7"/>
+      <stop offset="100%" stop-color="#a83fb8"/>
+    </linearGradient>
+    <radialGradient id="sunglow" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#ff6ec7" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#ff6ec7" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="sunclip"><circle cx="800" cy="450" r="220"/></clipPath>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#sky)"/>
+  <ellipse cx="800" cy="450" rx="600" ry="500" fill="url(#sunglow)"/>
+  <circle cx="800" cy="450" r="220" fill="url(#sun)"/>
+  <g clip-path="url(#sunclip)" fill="#0a0319">
+    <rect x="500" y="490" width="600" height="8"/>
+    <rect x="500" y="515" width="600" height="12"/>
+    <rect x="500" y="545" width="600" height="16"/>
+    <rect x="500" y="580" width="600" height="22"/>
+    <rect x="500" y="625" width="600" height="30"/>
+  </g>
+  <g stroke="#ff2fb9" stroke-width="3" opacity="0.8" fill="none" filter="drop-shadow(0 0 10px #ff2fb9)">
+    <line x1="0" y1="680" x2="1600" y2="680"/>
+    <line x1="-200" y1="760" x2="1800" y2="760"/>
+    <line x1="-400" y1="870" x2="2000" y2="870"/>
+    <line x1="-700" y1="1020" x2="2300" y2="1020"/>
+  </g>
+  <g stroke="#2de2e6" stroke-width="2" opacity="0.7" fill="none" filter="drop-shadow(0 0 8px #2de2e6)">
+    <line x1="800" y1="680" x2="800" y2="1200"/>
+    <line x1="800" y1="680" x2="520" y2="1200"/>
+    <line x1="800" y1="680" x2="240" y2="1200"/>
+    <line x1="800" y1="680" x2="-40" y2="1200"/>
+    <line x1="800" y1="680" x2="-320" y2="1200"/>
+    <line x1="800" y1="680" x2="-600" y2="1200"/>
+    <line x1="800" y1="680" x2="1080" y2="1200"/>
+    <line x1="800" y1="680" x2="1360" y2="1200"/>
+    <line x1="800" y1="680" x2="1640" y2="1200"/>
+    <line x1="800" y1="680" x2="1920" y2="1200"/>
+    <line x1="800" y1="680" x2="2200" y2="1200"/>
+  </g>
+</svg>

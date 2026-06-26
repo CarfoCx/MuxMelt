@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { validateOutputDir, formatToolError } = require('./path-utils');
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, net } = require('electron');
 
 // Promise wrapper around spawn so long-running Python/pip calls never block the
 // Electron main process (execFileSync freezes the entire UI for its timeout).
@@ -630,6 +630,75 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
   });
 }
 
+// Fetch a remote thumbnail in the main process and return it as a data: URL.
+// The renderer's strict CSP (img-src 'self' data: file:) blocks remote https
+// images, so we proxy the bytes here and hand back an inline data URL it can
+// render. Many CDNs also gate thumbnails on a browser UA / page Referer, which
+// the renderer's <img> can't set — we can.
+function fetchThumbnailDataUrl(thumbUrl, referer, timeoutMs = 12000) {
+  return new Promise((resolve, reject) => {
+    const MAX_BYTES = 8 * 1024 * 1024; // thumbnails are small; cap to be safe
+    let request;
+    try {
+      request = net.request({ url: thumbUrl, redirect: 'follow' });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    let settled = false;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(arg);
+    };
+    const timer = setTimeout(() => {
+      try { request.abort(); } catch {}
+      finish(reject, new Error('Thumbnail request timed out'));
+    }, timeoutMs);
+
+    request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+    request.setHeader('Accept', 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8');
+    if (referer) request.setHeader('Referer', referer);
+
+    request.on('response', (response) => {
+      const status = response.statusCode || 0;
+      if (status < 200 || status >= 300) {
+        response.on('data', () => {});
+        response.on('end', () => finish(reject, new Error(`Thumbnail request failed (HTTP ${status})`)));
+        response.on('error', () => finish(reject, new Error(`Thumbnail request failed (HTTP ${status})`)));
+        return;
+      }
+
+      let contentType = response.headers['content-type'] || 'image/jpeg';
+      if (Array.isArray(contentType)) contentType = contentType[0];
+      const mime = String(contentType).split(';')[0].trim() || 'image/jpeg';
+
+      const chunks = [];
+      let total = 0;
+      response.on('data', (chunk) => {
+        total += chunk.length;
+        if (total > MAX_BYTES) {
+          try { request.abort(); } catch {}
+          finish(reject, new Error('Thumbnail too large'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        if (!buf.length) { finish(reject, new Error('Empty thumbnail')); return; }
+        finish(resolve, `data:${mime};base64,${buf.toString('base64')}`);
+      });
+      response.on('error', (err) => finish(reject, err));
+    });
+
+    request.on('error', (err) => finish(reject, err));
+    request.end();
+  });
+}
+
 function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
   const activeProcessesByWindow = new Map();
 
@@ -826,7 +895,11 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, options));
       } catch (err) {
         const extractionFailure = isExtractionFailure(err);
-        if (!extractionFailure && !shouldRetryWithImpersonation(err)) throw err;
+        // Universal fallback: don't give up on the first error. Whatever the
+        // failure (403/blocked, 404 "not found", geo, or an unrecognised error),
+        // fall through to browser-impersonation retries and then the in-app
+        // stream sniffer below — if the page plays in a browser, we try to grab
+        // it. (A genuinely dead link just fails a bit later, after we've tried.)
         if (!extractionFailure && !(await hasPythonModule(pythonInfo, 'curl_cffi'))) {
           if (win) {
             win.webContents.send('tool-progress', {
@@ -898,10 +971,35 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             lastRetryErr = e;
           }
         }
+        // Before the (heavier) sniffer, try yt-dlp's GENERIC extractor on the
+        // original page with impersonation. This frequently rescues a video
+        // whose site-specific extractor returned 404/403 but whose page still
+        // exposes an m3u8/og:video — and it's much faster than the sniffer.
+        if (lastRetryErr) {
+          if (win) {
+            win.webContents.send('tool-progress', {
+              tool: 'url-downloader', url, type: 'start', progress: 0.02,
+              status: 'Site extractor failed — trying generic extractor...'
+            });
+          }
+          stdout = ''; stderr = ''; outputPath = '';
+          try {
+            const genericArgs = buildYtDlpArgs(pythonInfo, url, outDir, { ...baseConfig, impersonate: true });
+            const gi = genericArgs.lastIndexOf(url);
+            if (gi !== -1) genericArgs.splice(gi, 0, '--use-extractors', 'generic');
+            await runDownload(genericArgs, {
+              statusPrefix: 'Generic | ', modeLabel: 'Generic | ', minProgress: 0.02
+            });
+            lastRetryErr = null;
+          } catch (e) {
+            lastRetryErr = e;
+          }
+        }
+
         if (lastRetryErr) {
           let sniffedData = null;
           try {
-            sniffedData = await sniffVideoUrl(url, win, 15000);
+            sniffedData = await sniffVideoUrl(url, win, 30000);
           } catch (sniffErr) {
             throw lastRetryErr;
           }
@@ -931,27 +1029,66 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
               ...options,
               format,
               cookiesFile: tempCookieFile || cookiesFile || undefined,
-              referer: url,
-              userAgent: sniffedData.userAgent,
-              impersonate: false // The stream might reject impersonation if it's already authenticated
+              userAgent: sniffedData.userAgent
             };
-            
-            try {
-              const directStreamArgs = buildYtDlpArgs(pythonInfo, sniffedData.url, outDir, sniffConfig);
-              // Force generic extractor so it doesn't accidentally trigger a site-specific extractor that fails
-              const urlIndex = directStreamArgs.lastIndexOf(sniffedData.url);
-              if (urlIndex !== -1) {
-                // Insert --use-extractors generic before the URL
-                directStreamArgs.splice(urlIndex, 0, '--use-extractors', 'generic');
-              }
-              
-              await runDownload(directStreamArgs, {
-                statusPrefix: 'Universal | ',
-                modeLabel: 'Universal | ',
-                minProgress: 0.1
+
+            // Build args for the captured stream, forcing the generic extractor
+            // so a site-specific extractor can't re-trigger the original failure.
+            let pageOrigin = '';
+            try { pageOrigin = new URL(url).origin; } catch {}
+            // `sendReferer` toggles the page Referer/Origin headers. Most CDNs
+            // *require* them (hotlink protection), but some do the inverse and
+            // reject a cross-origin Referer (404/403) while serving fine with
+            // none — so we must try both ways, not assume one.
+            const buildSniffedArgs = ({ impersonate, sendReferer }) => {
+              const args = buildYtDlpArgs(pythonInfo, sniffedData.url, outDir, {
+                ...sniffConfig,
+                impersonate,
+                referer: sendReferer ? url : undefined
               });
-            } catch (fallbackErr) {
-              throw fallbackErr;
+              const insert = ['--use-extractors', 'generic'];
+              // Many HLS/DASH CDNs gate segments on Origin (not just Referer).
+              if (sendReferer && pageOrigin) insert.push('--add-header', `Origin:${pageOrigin}`);
+              const urlIndex = args.lastIndexOf(sniffedData.url);
+              if (urlIndex !== -1) args.splice(urlIndex, 0, ...insert);
+              return args;
+            };
+
+            // Try the realistic combinations in order of likelihood: page
+            // Referer first (hotlink-protected CDNs), then without it (CDNs that
+            // reject a cross-origin Referer); each both plain and impersonated.
+            // Plain first within a pair — best for already-authenticated streams
+            // via the captured cookies; impersonation second for CDNs that
+            // demand a browser TLS fingerprint.
+            const sniffAttempts = [
+              { impersonate: false, sendReferer: true,  label: 'Universal' },
+              { impersonate: true,  sendReferer: true,  label: 'Universal+' },
+              { impersonate: false, sendReferer: false, label: 'Universal (no-referer)' },
+              { impersonate: true,  sendReferer: false, label: 'Universal+ (no-referer)' }
+            ];
+            try {
+              let sniffErr = null;
+              let downloaded = false;
+              for (let i = 0; i < sniffAttempts.length; i++) {
+                const attempt = sniffAttempts[i];
+                if (i > 0 && win) {
+                  win.webContents.send('tool-progress', {
+                    tool: 'url-downloader', url, type: 'start', progress: 0.1,
+                    status: `Stream blocked the previous request — retrying (${attempt.label})...`
+                  });
+                }
+                stdout = ''; stderr = ''; outputPath = '';
+                try {
+                  await runDownload(buildSniffedArgs(attempt), {
+                    statusPrefix: `${attempt.label} | `, modeLabel: `${attempt.label} | `, minProgress: 0.1
+                  });
+                  downloaded = true;
+                  break;
+                } catch (e) {
+                  sniffErr = e;
+                }
+              }
+              if (!downloaded) throw sniffErr || lastRetryErr;
             } finally {
               if (tempCookieDir) {
                 try { fs.rmSync(tempCookieDir, { recursive: true, force: true }); } catch(e) {}
@@ -1112,6 +1249,20 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       }
 
       return { success: false, error: lastErr.message || 'Failed to fetch video info.' };
+    }
+  });
+
+  ipcMain.handle('url-downloader-thumbnail', async (event, options = {}) => {
+    const url = String(options.url || '').trim();
+    const referer = String(options.referer || '').trim();
+    if (!isHttpUrl(url)) {
+      return { success: false, error: 'Invalid thumbnail URL.' };
+    }
+    try {
+      const dataUrl = await fetchThumbnailDataUrl(url, referer);
+      return { success: true, dataUrl };
+    } catch (err) {
+      return { success: false, error: err && err.message ? err.message : String(err) };
     }
   });
 
