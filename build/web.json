@@ -17,6 +17,7 @@
     "setup-preload.js",
     "package.json",
     "build/icon.png",
+    "src/**/*",
     "renderer/**/*",
     "node-tools/**/*",
     "python/**/*",
