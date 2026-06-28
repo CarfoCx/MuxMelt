@@ -156,8 +156,13 @@ function startPythonServer(options, SHUTDOWN_TOKEN, getMainWindow) {
     console.error('Failed to start Python process:', err.message);
   });
 
-  pythonProcess.on('exit', (code) => {
+  // Capture this spawn's handle so the exit guard can tell an unexpected crash
+  // apart from a kill we initiated ourselves (restart/quit force-kills exit
+  // non-zero, which would otherwise raise a bogus "backend crashed" alert).
+  const spawnedProc = pythonProcess;
+  spawnedProc.on('exit', (code) => {
     console.log(`Python process exited with code ${code}`);
+    if (spawnedProc._intentionalKill) return;
     const mainWindow = getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed() && code !== 0 && code !== null) {
       mainWindow.webContents.send('python-crashed', code);
@@ -207,6 +212,8 @@ function killPython(SHUTDOWN_TOKEN, immediate = false) {
   if (pythonProcess) {
     const proc = pythonProcess;
     pythonProcess = null;
+    // We are killing this on purpose — suppress the exit handler's crash alert.
+    proc._intentionalKill = true;
 
     try {
       const req = http.get(`http://127.0.0.1:${PYTHON_PORT}/shutdown?token=${SHUTDOWN_TOKEN}`, () => {});

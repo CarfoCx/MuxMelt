@@ -5,14 +5,13 @@ const crypto = require('crypto');
 
 const { initAutoUpdater, registerUpdaterIpcHandlers } = require('./src/main/updater');
 const { registerIpcHandlers } = require('./src/main/ipc-handlers');
-const { 
-  createSplashWindow, 
-  updateSplash, 
-  playSplashFinish, 
-  closeSplash, 
-  createWindow, 
-  getMainWindow, 
-  delay 
+const {
+  createSplashWindow,
+  updateSplash,
+  closeSplash,
+  createWindow,
+  getMainWindow,
+  delay
 } = require('./src/main/window-manager');
 const {
   isPortAvailable,

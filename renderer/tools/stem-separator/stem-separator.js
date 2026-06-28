@@ -79,7 +79,12 @@ function connectWebSocket(port) {
     reconnectDelay = 1000; reconnectAttempts = 0;
     // Removed technical logs
   };
-  ws.onmessage = (event) => handleWSMessage(JSON.parse(event.data));
+  ws.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); }
+    catch { return; } // ignore malformed frames rather than throwing in the socket loop
+    handleWSMessage(data);
+  };
   ws.onclose = () => {
     if (!statusText) return;
     statusText.textContent = 'Disconnected - reconnecting...';

@@ -7,6 +7,7 @@ afterwards. llama_cpp is a heavy import, so — like rembg/demucs — it is prob
 with find_spec and only imported when a model is actually loaded.
 """
 
+import hashlib
 import os
 import threading
 import urllib.request
@@ -35,7 +36,10 @@ def _models_dir():
 # but need more RAM and run slower on CPU — the picker lets the user choose.
 # A higher-quality quant (Q5_K_M) keeps more of the model's precision than Q4 at
 # a small size/speed cost. To add a model, drop another entry here and it shows
-# up in the picker automatically.
+# up in the picker automatically. An optional 'sha256' (lowercase hex of the
+# GGUF) pins the download for integrity — when present it is verified before the
+# file is accepted; when absent, only the length is checked against the server's
+# Content-Length to reject truncated/interrupted downloads.
 MODELS = {
     'qwen2.5-1.5b-instruct-q4': {
         'name': 'Qwen2.5 1.5B — fastest (~1 GB)',
@@ -116,8 +120,10 @@ class ChatLLM:
             return dest
 
         tmp = dest + '.part'
+        expected_sha = (m.get('sha256') or '').lower() or None
         req = urllib.request.Request(m['url'], headers={'User-Agent': 'MuxMelt'})
         try:
+            hasher = hashlib.sha256() if expected_sha else None
             with urllib.request.urlopen(req, timeout=60) as resp:
                 total = int(resp.headers.get('Content-Length') or 0)
                 done = 0
@@ -130,9 +136,25 @@ class ChatLLM:
                         if not buf:
                             break
                         f.write(buf)
+                        if hasher:
+                            hasher.update(buf)
                         done += len(buf)
                         if progress_cb:
                             progress_cb(done / total if total else 0.0, done, total)
+
+            # Reject a truncated/interrupted download before it can be mistaken
+            # for a complete model (is_downloaded only checks size > 0).
+            if total and done != total:
+                raise RuntimeError(
+                    f'Download incomplete: got {done} of {total} bytes. '
+                    'Check your connection and try again.'
+                )
+            if expected_sha:
+                actual_sha = hasher.hexdigest()
+                if actual_sha != expected_sha:
+                    raise RuntimeError(
+                        'Downloaded model failed integrity check (SHA-256 mismatch).'
+                    )
             os.replace(tmp, dest)
             return dest
         except Exception:

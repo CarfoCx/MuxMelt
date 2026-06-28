@@ -96,7 +96,12 @@ function connectWebSocket(port) {
     // Request voice list
     ws.send(JSON.stringify({ action: 'list_voices' }));
   };
-  ws.onmessage = (event) => handleWSMessage(JSON.parse(event.data));
+  ws.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); }
+    catch { return; } // ignore malformed frames rather than throwing in the socket loop
+    handleWSMessage(data);
+  };
   ws.onclose = () => {
     if (!statusText) return;
     statusText.textContent = 'Disconnected - reconnecting...';

@@ -442,14 +442,19 @@ function connectWebSocket(port) {
     // Removed technical logs
     // Request initial data if needed
   };
-  ws.onmessage = (event) => handleWSMessage(JSON.parse(event.data));
+  ws.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); }
+    catch { return; } // ignore malformed frames rather than throwing in the socket loop
+    handleWSMessage(data);
+  };
   ws.onclose = () => {
     if (!statusText) return; // tool was unloaded
     statusText.textContent = 'Disconnected - reconnecting...';
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
     log(`WebSocket disconnected, reconnecting in ${(delay / 1000).toFixed(1)}s...`, 'warn');
-    if (reconnectAttempts === 5) {
+    if (reconnectAttempts > 0 && reconnectAttempts % 5 === 0) {
       // Only restart the backend if it's genuinely unreachable. If /health
       // still answers, the process is alive and the WebSocket is being refused
       // for some other reason (auth/origin) — restarting just churns the GPU
