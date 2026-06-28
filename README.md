@@ -19,6 +19,37 @@ MuxMelt is a desktop media utility for common file conversion, cleanup, and batc
 | QR Studio | Generates styled QR codes and scans QR codes from images |
 | Text to Speech | Converts text into speech files with voice and speed controls |
 
+## Installing on Windows
+
+Download the latest `MuxMelt-<version>-windows-x64-setup.exe` from the
+[Releases page](https://github.com/CarfoCx/MuxMelt/releases/latest) and run it.
+Python is installed automatically on first launch.
+
+### "Windows protected your PC" warning
+
+MuxMelt is a new app and is not yet code-signed, so Windows SmartScreen shows an
+"unknown publisher" warning on first run. **This is not a virus warning** — it
+appears for any unsigned installer downloaded from the internet. To continue:
+
+1. Click **More info** on the SmartScreen dialog.
+2. Click **Run anyway**.
+
+If the file is blocked instead, right-click the `.exe` → **Properties** → tick
+**Unblock** at the bottom → **OK**, then run it.
+
+The installer does **not** require administrator rights — it installs per-user.
+
+### Verifying the download (optional)
+
+Each release includes a `MuxMelt-<version>-windows-x64.sha256.txt` checksum.
+Confirm your download matches before running:
+
+```powershell
+Get-FileHash .\MuxMelt-1.2.9-windows-x64-setup.exe -Algorithm SHA256
+```
+
+Compare the printed hash against the value in the checksum file on the release.
+
 ## Requirements
 
 - Node.js 18+
