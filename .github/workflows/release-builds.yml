@@ -1,4 +1,18 @@
-name: Release Builds
+name: Release Build (Windows)
+
+# Windows-only release pipeline. Other platforms are paused until the app is
+# stabilised. When ready to port, add more jobs back (see git history for the
+# previous multi-OS matrix).
+#
+# Code signing is wired in but OPTIONAL: the build runs unsigned until the
+# SignPath credentials below are configured, then it signs automatically with
+# no further changes.
+#
+# Required to enable signing (set in repo Settings):
+#   Secret  SIGNPATH_API_TOKEN          - SignPath API user token
+#   Variable SIGNPATH_ORGANIZATION_ID   - your SignPath organization id (GUID)
+#   Variable SIGNPATH_PROJECT_SLUG       - SignPath project slug (default: muxmelt)
+#   Variable SIGNPATH_POLICY_SLUG        - signing policy slug (default: release-signing)
 
 on:
   push:
@@ -9,50 +23,14 @@ on:
       tag:
         description: Release tag to upload assets to
         required: true
-        default: v1.2.6
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows x64
-            slug: windows-x64
-            os: windows-2025
-            command: npm run build:web:win:x64
-            files: |
-              dist/nsis-web/*-web-setup.exe
-              dist/nsis-web/*.nsis.7z
-              dist/nsis-web/latest.yml
-          - name: macOS Intel
-            slug: macos-x64
-            os: macos-15-intel
-            command: npm run build:slim:mac:x64
-            files: |
-              dist/*-macos-x64.dmg
-              dist/*-macos-x64.dmg.blockmap
-          - name: macOS Apple Silicon
-            slug: macos-arm64
-            os: macos-15
-            command: npm run build:slim:mac:arm64
-            files: |
-              dist/*-macos-arm64.dmg
-              dist/*-macos-arm64.dmg.blockmap
-          - name: Linux x64
-            slug: linux-x86_64
-            os: ubuntu-24.04
-            command: npm run build:linux:x64
-            files: |
-              dist/*-linux-*.AppImage
-              dist/*-linux-*.AppImage.blockmap
-              dist/latest-linux.yml
-
+    name: Windows x64
+    runs-on: windows-2025
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -62,12 +40,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Linux packaging dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-tools rpm
-
       - name: Install dependencies
         run: npm install
 
@@ -75,10 +47,64 @@ jobs:
         shell: bash
         run: rm -rf dist build/bundle
 
-      - name: Build
+      - name: Build (slim Windows installer)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: ${{ matrix.command }}
+        run: npm run build:slim:win:x64
+
+      # Detect whether SignPath is configured. Secrets cannot be used directly
+      # in step `if:` conditions, so surface a boolean output instead.
+      - name: Detect signing configuration
+        id: signing
+        shell: bash
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          if [ -n "$SIGNPATH_API_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "SignPath signing: ENABLED"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "SignPath signing: disabled (no SIGNPATH_API_TOKEN) - shipping unsigned"
+          fi
+
+      - name: Upload unsigned installer for signing
+        id: unsigned
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: dist/MuxMelt-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+      - name: Submit to SignPath for signing
+        id: signpath
+        if: steps.signing.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'muxmelt' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/signed
+
+      - name: Swap in signed installer and refresh update feed
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          # SignPath returns the signed exe with its original name. Move it back
+          # over dist/, drop the now-stale blockmap, and rehash latest.yml so the
+          # auto-updater's integrity check matches the signed bytes.
+          signed=$(find dist/signed -name 'MuxMelt-*-windows-x64-setup.exe' | head -n1)
+          if [ -z "$signed" ]; then
+            echo "::error::SignPath did not return a signed installer"; exit 1
+          fi
+          mv -f "$signed" dist/
+          rm -f dist/*.blockmap
+          npm install js-yaml --no-save
+          node .github/scripts/patch-latest-yml.js dist/latest.yml dist
 
       - name: Create release if needed
         env:
@@ -90,77 +116,33 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --title "MuxMelt $RELEASE_TAG" \
-              --notes "Automated cross-platform MuxMelt builds."
+              --notes "Windows build."
 
-      - name: Create checksums
-        env:
-          FILES: ${{ matrix.files }}
+      - name: Create checksum
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
-          checksum_file="dist/MuxMelt-${version}-${{ matrix.slug }}.sha256.txt"
+          checksum_file="dist/MuxMelt-${version}-windows-x64.sha256.txt"
           echo "CHECKSUM_FILE=$checksum_file" >> "$GITHUB_ENV"
           : > "$checksum_file"
           hash_cmd="sha256sum"
           command -v shasum >/dev/null 2>&1 && hash_cmd="shasum -a 256"
-          while IFS= read -r pattern; do
-            [ -n "$pattern" ] || continue
-            for match in $pattern; do
-              [ -f "$match" ] && $hash_cmd "$match" >> "$checksum_file"
-            done
-          done <<< "$FILES"
+          for f in dist/MuxMelt-*-windows-x64-setup.exe; do
+            [ -f "$f" ] && $hash_cmd "$f" >> "$checksum_file"
+          done
 
       - name: Upload assets to release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-          FILES: ${{ matrix.files }}
         shell: bash
         run: |
-          while IFS= read -r pattern; do
-            [ -n "$pattern" ] || continue
-            for match in $pattern; do
-              [ -f "$match" ] && gh release upload "$RELEASE_TAG" "$match" --clobber
-            done
-          done <<< "$FILES"
-          gh release upload "$RELEASE_TAG" "$CHECKSUM_FILE" --clobber
-
-      # macOS builds run on per-arch runners (each bundles the runner-arch
-      # ffmpeg), so each produces a single-arch latest-mac.yml. Stash them as
-      # artifacts; the macos-update-feed job merges them into one feed.
-      - name: Stash macOS update feed
-        if: startsWith(matrix.slug, 'macos-')
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-feed-${{ matrix.slug }}
-          path: dist/latest-mac.yml
-          if-no-files-found: error
-
-  macos-update-feed:
-    name: macOS update feed
-    needs: build
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Download per-arch mac feeds
-        uses: actions/download-artifact@v4
-        with:
-          pattern: mac-feed-*
-          path: mac-feeds
-
-      - name: Merge into a single latest-mac.yml and upload
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-        shell: bash
-        run: |
-          npm install js-yaml --no-save
-          node .github/scripts/merge-mac-feed.js mac-feeds dist/latest-mac.yml
-          gh release upload "$RELEASE_TAG" dist/latest-mac.yml --clobber
+          # Upload the installer, update feed, checksum, and blockmap if present
+          # (the blockmap is removed when the artifact was re-signed).
+          for f in \
+            dist/MuxMelt-*-windows-x64-setup.exe \
+            dist/MuxMelt-*-windows-x64-setup.exe.blockmap \
+            dist/latest.yml \
+            "$CHECKSUM_FILE"; do
+            [ -f "$f" ] && gh release upload "$RELEASE_TAG" "$f" --clobber
+          done
