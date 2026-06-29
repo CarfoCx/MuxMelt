@@ -30,9 +30,23 @@ const toolStylesheet = document.getElementById('toolStylesheet');
 const logsByTool = {};
 const MAX_LOG_ENTRIES_PER_TOOL = 200;
 
-logToggle.addEventListener('click', () => {
-  logPanel.classList.toggle('collapsed');
+function setLogCollapsed(collapsed) {
+  logPanel.classList.toggle('collapsed', collapsed);
+  logToggle.setAttribute('aria-expanded', String(!collapsed));
+}
+
+function toggleLogPanel() {
+  setLogCollapsed(!logPanel.classList.contains('collapsed'));
   saveGlobalSettings();
+}
+
+logToggle.addEventListener('click', toggleLogPanel);
+// The log header is a div acting as a button, so make it keyboard-operable too.
+logToggle.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    toggleLogPanel();
+  }
 });
 
 function getLogToolId(toolId) {
@@ -514,6 +528,12 @@ function _scheduleVramPoll(delayMs) {
 }
 
 async function pollGpuStats() {
+  // No point hitting the backend for live GPU stats while the window is
+  // minimized/hidden — nobody can see them. Re-check less often until shown.
+  if (document.hidden) {
+    _scheduleVramPoll(5000);
+    return;
+  }
   try {
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 4000);
@@ -768,9 +788,7 @@ function setupWindowControls() {
 async function init() {
   setupWindowControls();
   const allSettings = await loadGlobalSettings();
-  if (allSettings.global?.logCollapsed) {
-    logPanel.classList.add('collapsed');
-  }
+  setLogCollapsed(!!allSettings.global?.logCollapsed);
 
   // Apply saved theme
   const theme = allSettings.global?.theme || 'dark';
@@ -956,8 +974,7 @@ document.addEventListener('keydown', (e) => {
   // Ctrl+L — toggle log panel
   if (e.ctrlKey && e.key === 'l') {
     e.preventDefault();
-    logPanel.classList.toggle('collapsed');
-    saveGlobalSettings();
+    toggleLogPanel();
   }
 
   // Enter — click the primary action button in the current tool

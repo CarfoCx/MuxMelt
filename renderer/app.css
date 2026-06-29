@@ -851,8 +851,10 @@ input:focus-visible {
 }
 
 .btn-primary.btn-cancel:hover:not(:disabled) {
-  background: #ef4444;
-  box-shadow: 0 0 15px rgba(248, 113, 113, 0.3);
+  background: var(--error);
+  filter: brightness(1.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  transform: translateY(-2px);
 }
 
 .btn-secondary {
@@ -1565,6 +1567,27 @@ input[type="range"] {
 }
 .skip-nav:focus {
   top: 0;
+}
+
+/* ===== Reduced motion =====
+   Respect the OS "reduce motion" preference: neutralise the decorative
+   animations (floating drop icon, drop-zone pulse, fades, toast/file entrances)
+   and shorten transitions to near-instant, while keeping the working spinner
+   spinning so it still reads as "in progress". */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .spinner {
+    animation-duration: 0.8s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 /* ===== Completion notification toast ===== */

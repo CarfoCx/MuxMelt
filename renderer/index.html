@@ -135,9 +135,9 @@
 
       <!-- Log panel (shared) -->
       <div class="log-panel" id="logPanel" role="log" aria-label="Application log">
-        <div class="log-header" id="logToggle">
+        <div class="log-header" id="logToggle" role="button" tabindex="0" aria-expanded="true" aria-controls="logBody" aria-label="Toggle log panel">
           <span>Log</span>
-          <span class="log-toggle-icon" id="logIcon">&#9650;</span>
+          <span class="log-toggle-icon" id="logIcon" aria-hidden="true">&#9650;</span>
         </div>
         <div class="log-body" id="logBody">
           <div class="log-entries" id="logEntries" aria-live="polite"></div>

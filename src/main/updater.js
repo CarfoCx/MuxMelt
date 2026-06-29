@@ -100,8 +100,10 @@ function checkForUpdates(sendUpdateEvent) {
           const isNewer = compareVersions(info.version, currentVersion) > 0;
           return Promise.resolve({
             upToDate: !isNewer,
+            updateAvailable: !!isNewer,
             currentVersion,
             latestVersion: info.version,
+            version: info.version,
             installerPath: path.join(updateFolder, info.installer),
             isLocal: true
           });
