@@ -9,8 +9,18 @@ let permissionHandlerInstalled = false;
 function installPermissionHandler() {
   if (permissionHandlerInstalled) return;
   permissionHandlerInstalled = true;
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.has(permission));
+  });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return ALLOWED_PERMISSIONS.has(permission);
+  });
+}
+
+function openExternalUrl(url) {
+  if (!/^https?:\/\//i.test(url)) return;
+  shell.openExternal(url).catch((err) => {
+    console.warn(`Failed to open external URL: ${err.message}`);
   });
 }
 
@@ -37,9 +47,14 @@ function createSplashWindow(appDir) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      navigateOnDragDrop: false
     }
   });
+
+  splashWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  splashWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  splashWindow.webContents.on('will-redirect', (event) => event.preventDefault());
 
   let resolved = false;
   const resolveWhenVisible = (resolve) => {
@@ -110,9 +125,9 @@ function closeSplash() {
   splashWindow = null;
 }
 
-function createWindow(appDir) {
+async function createWindow(appDir) {
   installPermissionHandler();
-  mainWindow = new BrowserWindow({
+  const createdWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 820,
@@ -125,52 +140,63 @@ function createWindow(appDir) {
       preload: path.join(appDir, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      navigateOnDragDrop: false
     },
     backgroundColor: '#0f0f1a',
     icon: path.join(appDir, 'build', 'icon.png'),
     show: false
   });
+  mainWindow = createdWindow;
 
   // Keep the renderer's maximize/restore button glyph in sync with real state
   // (the user can still maximize via Win+Up, snap, or a double-click).
   const sendMaxState = () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('window-maximized', mainWindow.isMaximized());
+    if (!createdWindow.isDestroyed()) {
+      createdWindow.webContents.send('window-maximized', createdWindow.isMaximized());
     }
   };
-  mainWindow.on('maximize', sendMaxState);
-  mainWindow.on('unmaximize', sendMaxState);
+  createdWindow.on('maximize', sendMaxState);
+  createdWindow.on('unmaximize', sendMaxState);
 
   // The app is a single local page that swaps tool HTML in-place via fetch; it
   // never legitimately navigates the top frame or opens new windows. Deny both
   // so injected markup or a stray link can't repoint the app or spawn a
   // node-less child window. External http(s) links open in the real browser.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  createdWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrl(url);
     return { action: 'deny' };
   });
-  const blockOffAppNavigation = (event, url) => {
-    if (!url.startsWith('file://')) {
-      event.preventDefault();
-      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
-    }
+  const blockRendererNavigation = (event, url) => {
+    // loadFile() does not emit will-navigate. Any renderer-initiated top-frame
+    // navigation is therefore unexpected, including navigation to another
+    // local file which would otherwise retain this window's privileged preload.
+    event.preventDefault();
+    openExternalUrl(url);
   };
-  mainWindow.webContents.on('will-navigate', blockOffAppNavigation);
-  mainWindow.webContents.on('will-redirect', blockOffAppNavigation);
+  createdWindow.webContents.on('will-navigate', blockRendererNavigation);
+  createdWindow.webContents.on('will-redirect', blockRendererNavigation);
 
-  mainWindow.loadFile(path.join(appDir, 'renderer', 'index.html'));
-  mainWindow.setMenuBarVisibility(false);
-  mainWindow.setTitle('MuxMelt');
-  mainWindow.once('ready-to-show', async () => {
+  createdWindow.setMenuBarVisibility(false);
+  createdWindow.setTitle('MuxMelt');
+  createdWindow.once('ready-to-show', async () => {
     updateSplash(100, 'Ready');
     await playSplashFinish();
     closeSplash();
-    mainWindow.show();
+    if (!createdWindow.isDestroyed()) createdWindow.show();
   });
-  mainWindow.on('closed', () => { mainWindow = null; });
-  
-  return mainWindow;
+  createdWindow.on('closed', () => {
+    if (mainWindow === createdWindow) mainWindow = null;
+  });
+
+  try {
+    await createdWindow.loadFile(path.join(appDir, 'renderer', 'index.html'));
+  } catch (err) {
+    if (!createdWindow.isDestroyed()) createdWindow.destroy();
+    throw new Error(`Failed to load the application window: ${err.message}`);
+  }
+
+  return createdWindow;
 }
 
 function getMainWindow() {

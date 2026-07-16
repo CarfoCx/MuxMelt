@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const ffmpeg = require('./ffmpeg-runner');
 const { validateOutputDir, formatToolError, autoIncrementPath } = require('./path-utils');
 
@@ -10,12 +11,59 @@ const VALID_PRESETS = [
   'ultrafast', 'superfast', 'veryfast', 'faster', 'fast',
   'medium', 'slow', 'slower', 'veryslow'
 ];
+const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov']);
+
+function isRegularFile(filePath) {
+  try { return typeof filePath === 'string' && fs.statSync(filePath).isFile(); } catch { return false; }
+}
+
+function publishTempFile(tempPath, desiredPath) {
+  let outputPath = desiredPath;
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    let published = false;
+    try {
+      // A hard link publishes the completed file atomically and, unlike rename
+      // on POSIX, never overwrites a file that appeared after autoIncrementPath.
+      fs.linkSync(tempPath, outputPath);
+      published = true;
+    } catch (err) {
+      if (err && err.code === 'EEXIST') {
+        outputPath = autoIncrementPath(desiredPath);
+        continue;
+      }
+      // Some filesystems disallow hard links. COPYFILE_EXCL keeps the same
+      // no-overwrite guarantee, at the cost of one additional copy.
+      try {
+        fs.copyFileSync(tempPath, outputPath, fs.constants.COPYFILE_EXCL);
+        published = true;
+      } catch (copyErr) {
+        if (copyErr && copyErr.code === 'EEXIST') {
+          outputPath = autoIncrementPath(desiredPath);
+          continue;
+        }
+        throw copyErr;
+      }
+    }
+    if (published) {
+      try { fs.unlinkSync(tempPath); } catch {}
+      return outputPath;
+    }
+  }
+  throw new Error('Could not reserve a unique output filename.');
+}
 
 function registerIPC(ipcMain, getMainWindow) {
   const activeCancels = new Map();
+  const activeWindows = new Set();
+  const cancelledWindows = new Set();
 
-  ipcMain.handle('video-compressor-compress', async (event, options) => {
+  const throwIfCancelled = (winId) => {
+    if (cancelledWindows.has(winId)) throw new Error('Video compression cancelled by user.');
+  };
+
+  ipcMain.handle('video-compressor-compress', async (event, options = {}) => {
     const winId = event.sender.id;
+    options = options && typeof options === 'object' ? options : {};
     const {
       inputPath,
       outputDir,
@@ -29,29 +77,54 @@ function registerIPC(ipcMain, getMainWindow) {
     } = options;
 
     let tempOutputPath = null;
+    let passlogfile = null;
+    let registeredActive = false;
 
     try {
+      if (activeWindows.has(winId)) {
+        return { success: false, error: 'A video compression is already running in this window.' };
+      }
       if (!ffmpeg.findFfmpeg()) {
         return { success: false, error: 'ffmpeg not found. Please install ffmpeg and add it to your PATH.' };
       }
+      if (!isRegularFile(inputPath)) return { success: false, error: 'Input video was not found.' };
 
-      const crfValue = Math.max(0, Math.min(51, crf != null ? crf : 23));
+      const requestedCrf = crf == null || crf === '' ? NaN : Number(crf);
+      const crfValue = Number.isFinite(requestedCrf) ? Math.max(18, Math.min(35, Math.round(requestedCrf))) : 23;
       const presetValue = VALID_PRESETS.includes(preset) ? preset : 'medium';
-      const audioBr = audioBitrate || '128k';
+      const codecValue = codec === 'h265' ? 'h265' : (codec === 'h264' ? 'h264' : null);
+      if (!codecValue) return { success: false, error: 'Unsupported video codec.' };
+      const audioBr = String(audioBitrate || '128k').trim().toLowerCase();
+      if (!/^\d{2,3}k$/.test(audioBr) || Number.parseInt(audioBr, 10) < 32 || Number.parseInt(audioBr, 10) > 512) {
+        return { success: false, error: 'Audio bitrate must be between 32k and 512k.' };
+      }
+      const resolutionValue = resolution == null || resolution === '' ? 'original' : String(resolution);
+      if (!['original', '1080p', '720p', '480p', 'custom'].includes(resolutionValue)) {
+        return { success: false, error: 'Unsupported output resolution.' };
+      }
+      const requestedCustomWidth = Number(customWidth);
+      if (resolutionValue === 'custom' && (!Number.isFinite(requestedCustomWidth) || requestedCustomWidth < 128 || requestedCustomWidth > 7680)) {
+        return { success: false, error: 'Custom width must be between 128 and 7680 pixels.' };
+      }
 
       const ext = path.extname(inputPath).toLowerCase();
-      // WebM cannot contain H.264/H.265 or AAC — re-muxing the compressed
-      // streams into .webm makes ffmpeg fail outright, so emit .mp4 instead.
-      const outExt = ext === '.webm' ? '.mp4' : ext;
+      if (!VIDEO_EXTS.has(ext)) return { success: false, error: `Unsupported video format: ${ext || '(none)'}` };
+      // H.264/H.265 + AAC cannot be muxed into WebM and has very poor
+      // interoperability in AVI. Preserve the selected modern codec by using
+      // the widely supported MP4 container for both source formats.
+      const outExt = (ext === '.webm' || ext === '.avi') ? '.mp4' : ext;
       const baseName = path.basename(inputPath, ext);
       const outDir = validateOutputDir(outputDir) || path.dirname(inputPath);
       let outputPath = path.join(outDir, baseName + '_compressed' + outExt);
       outputPath = autoIncrementPath(outputPath);
-      tempOutputPath = path.join(outDir, `${baseName}_compressed.${process.pid}.${Date.now()}.tmp${outExt}`);
-      // faststart is a mov/mp4 muxer option; it has no meaning for mkv/avi.
+      tempOutputPath = path.join(outDir, `${baseName}_compressed.${process.pid}.${crypto.randomUUID()}.tmp${outExt}`);
+      // faststart is a MOV/MP4 muxer option; it has no meaning for MKV.
       const faststartArgs = (outExt === '.mp4' || outExt === '.mov') ? ['-movflags', '+faststart'] : [];
 
       fs.mkdirSync(outDir, { recursive: true });
+      activeWindows.add(winId);
+      registeredActive = true;
+      cancelledWindows.delete(winId);
 
       // Get input file size for compression ratio
       let inputSize = 0;
@@ -59,6 +132,7 @@ function registerIPC(ipcMain, getMainWindow) {
 
       const videoInfo = await ffmpeg.probeVideoInfo(inputPath);
       const duration = videoInfo.duration || await ffmpeg.probeDuration(inputPath);
+      throwIfCancelled(winId);
 
       const win = getMainWindow();
       if (win) {
@@ -77,9 +151,9 @@ function registerIPC(ipcMain, getMainWindow) {
       const commonArgs = [];
 
       // Codec selection
-      const videoCodec = codec === 'h265' ? 'libx265' : 'libx264';
+      const videoCodec = codecValue === 'h265' ? 'libx265' : 'libx264';
       commonArgs.push('-c:v', videoCodec);
-      if (codec === 'h265') {
+      if (codecValue === 'h265' && (outExt === '.mp4' || outExt === '.mov')) {
         commonArgs.push('-tag:v', 'hvc1');
       }
 
@@ -92,14 +166,14 @@ function registerIPC(ipcMain, getMainWindow) {
         '720p': 'scale=-2:720',
         '480p': 'scale=-2:480',
       };
-      if (resolution && resolution !== 'original') {
-        if (resolutionMap[resolution]) {
-          const targetHeight = parseInt(resolution, 10);
+      if (resolutionValue !== 'original') {
+        if (resolutionMap[resolutionValue]) {
+          const targetHeight = parseInt(resolutionValue, 10);
           if (!videoInfo.height || targetHeight < videoInfo.height) {
-            commonArgs.push('-vf', resolutionMap[resolution]);
+            commonArgs.push('-vf', resolutionMap[resolutionValue]);
           }
-        } else if (resolution === 'custom' && customWidth) {
-          const w = Math.max(128, Math.min(7680, parseInt(customWidth) || 1280));
+        } else if (resolutionValue === 'custom') {
+          const w = Math.round(requestedCustomWidth / 2) * 2;
           if (!videoInfo.width || w < videoInfo.width) {
             commonArgs.push('-vf', `scale=${w}:-2`);
           }
@@ -145,11 +219,21 @@ function registerIPC(ipcMain, getMainWindow) {
         activeCancels.set(winId, cancel);
         await promise;
         activeCancels.delete(winId);
+        throwIfCancelled(winId);
       };
 
-      if (twoPass) {
+      const useTwoPass = !!twoPass && duration > 0 && inputSize > 0;
+      const twoPassCommonArgs = [...commonArgs];
+      const twoPassCrfIndex = twoPassCommonArgs.indexOf('-crf');
+      if (twoPassCrfIndex !== -1) twoPassCommonArgs.splice(twoPassCrfIndex, 2);
+      const sourceTotalKbps = useTwoPass ? (inputSize * 8 / duration / 1000) : 0;
+      const targetFactor = Math.max(0.2, Math.min(0.9, Math.pow(0.5, (crfValue - 18) / 6)));
+      const targetVideoKbps = Math.min(100000, Math.max(100, Math.floor(sourceTotalKbps * targetFactor - Number.parseInt(audioBr, 10))));
+      twoPassCommonArgs.push('-b:v', `${targetVideoKbps}k`);
+
+      if (useTwoPass) {
         // Two-pass encoding
-        const passlogfile = path.join(os.tmpdir(), `ffmpeg2pass_${Date.now()}`);
+        passlogfile = path.join(os.tmpdir(), `muxmelt-ffmpeg2pass-${process.pid}-${crypto.randomUUID()}`);
         const nullOutput = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
         // --- Pass 1: analysis ---
@@ -163,7 +247,7 @@ function registerIPC(ipcMain, getMainWindow) {
           });
         }
 
-        const pass1Args = ['-i', inputPath, ...commonArgs, '-pass', '1', '-passlogfile', passlogfile, '-an', '-f', 'null', nullOutput];
+        const pass1Args = ['-i', inputPath, ...twoPassCommonArgs, '-pass', '1', '-passlogfile', passlogfile, '-an', '-f', 'null', nullOutput];
 
         const onPass1Progress = (info) => {
           const w = getMainWindow();
@@ -186,6 +270,7 @@ function registerIPC(ipcMain, getMainWindow) {
         activeCancels.set(winId, pass1.cancel);
         await pass1.promise;
         activeCancels.delete(winId);
+        throwIfCancelled(winId);
 
         // --- Pass 2: encode ---
         if (win) {
@@ -198,7 +283,7 @@ function registerIPC(ipcMain, getMainWindow) {
           });
         }
 
-        const pass2Args = ['-i', inputPath, ...commonArgs, '-pass', '2', '-passlogfile', passlogfile, '-c:a', 'aac', '-b:a', audioBr, ...faststartArgs, tempOutputPath];
+        const pass2Args = ['-i', inputPath, ...twoPassCommonArgs, '-pass', '2', '-passlogfile', passlogfile, '-c:a', 'aac', '-b:a', audioBr, ...faststartArgs, tempOutputPath];
 
         const onPass2Progress = (info) => {
           const w = getMainWindow();
@@ -232,6 +317,7 @@ function registerIPC(ipcMain, getMainWindow) {
         activeCancels.set(winId, pass2.cancel);
         await pass2.promise;
         activeCancels.delete(winId);
+        throwIfCancelled(winId);
 
         if (win) {
           win.webContents.send('tool-progress', {
@@ -243,17 +329,6 @@ function registerIPC(ipcMain, getMainWindow) {
           });
         }
 
-        // Clean up passlog files
-        try {
-          const tmpDir = os.tmpdir();
-          const logPrefix = path.basename(passlogfile);
-          const tmpFiles = fs.readdirSync(tmpDir);
-          for (const f of tmpFiles) {
-            if (f.startsWith(logPrefix)) {
-              try { fs.unlinkSync(path.join(tmpDir, f)); } catch {}
-            }
-          }
-        } catch {}
       } else {
         await runSinglePassEncode(crfValue, 'Compressing');
 
@@ -273,7 +348,7 @@ function registerIPC(ipcMain, getMainWindow) {
       try { outputSize = fs.statSync(tempOutputPath).size; } catch (err) { console.warn('Could not read output size:', err.message); }
       const w = getMainWindow();
 
-      if (!twoPass && inputSize > 0 && outputSize >= inputSize) {
+      if (!useTwoPass && inputSize > 0 && outputSize >= inputSize) {
         const retryCrfs = getRetryCrfs(crfValue);
         for (const retryCrf of retryCrfs) {
           try { fs.unlinkSync(tempOutputPath); } catch {}
@@ -312,14 +387,15 @@ function registerIPC(ipcMain, getMainWindow) {
         };
       }
 
-      try { fs.rmSync(outputPath, { force: true }); } catch {}
-      fs.renameSync(tempOutputPath, outputPath);
+      throwIfCancelled(winId);
+      outputPath = publishTempFile(tempOutputPath, outputPath);
 
       if (w) {
         w.webContents.send('tool-progress', {
           tool: 'video-compressor',
           type: 'complete',
           file: inputPath,
+          output: outputPath,
           percent: 100,
           status: 'Done'
         });
@@ -335,37 +411,57 @@ function registerIPC(ipcMain, getMainWindow) {
         savedPercent: parseFloat(savedPercent)
       };
     } catch (err) {
-      activeCancels.delete(winId);
       if (tempOutputPath) {
         try { fs.unlinkSync(tempOutputPath); } catch {}
       }
       return { success: false, error: formatToolError(err, 'Video Compressor') };
     } finally {
-      activeCancels.delete(winId);
+      if (registeredActive) {
+        activeCancels.delete(winId);
+        cancelledWindows.delete(winId);
+        activeWindows.delete(winId);
+      }
+      if (tempOutputPath) {
+        try { fs.rmSync(tempOutputPath, { force: true }); } catch {}
+      }
+      if (passlogfile) {
+        try {
+          const prefix = path.basename(passlogfile);
+          for (const file of fs.readdirSync(os.tmpdir())) {
+            if (file.startsWith(prefix)) {
+              try { fs.unlinkSync(path.join(os.tmpdir(), file)); } catch {}
+            }
+          }
+        } catch {}
+      }
     }
   });
 
   ipcMain.handle('video-compressor-cancel', async (event) => {
     const winId = event.sender.id;
-    const cancel = activeCancels.get(winId);
-    if (cancel) {
-      cancel();
-      activeCancels.delete(winId);
-      return { success: true };
+    if (!activeWindows.has(winId)) {
+      return { success: false, error: 'No active compression to cancel' };
     }
-    return { success: false, error: 'No active compression to cancel' };
+    cancelledWindows.add(winId);
+    const cancel = activeCancels.get(winId);
+    if (cancel) cancel();
+    return { success: true };
   });
 
   ipcMain.handle('video-compressor-estimate', async (event, options) => {
     // Rough size estimate based on CRF and duration
     try {
+      options = options && typeof options === 'object' ? options : {};
+      if (!isRegularFile(options.inputPath)) return { success: false, error: 'Input video was not found.' };
       const duration = await ffmpeg.probeDuration(options.inputPath);
       let inputSize = 0;
       try { inputSize = fs.statSync(options.inputPath).size; } catch {}
 
       // Very rough estimate: CRF 23 roughly halves the file for most content
       // Each CRF +6 roughly halves the size
-      const crfDiff = (options.crf || 23) - 18;
+      const requestedCrf = options.crf == null || options.crf === '' ? NaN : Number(options.crf);
+      const estimateCrf = Number.isFinite(requestedCrf) ? Math.max(18, Math.min(35, requestedCrf)) : 23;
+      const crfDiff = estimateCrf - 18;
       const factor = Math.pow(0.5, crfDiff / 6);
       const estimatedSize = Math.round(inputSize * factor);
 
@@ -383,6 +479,7 @@ function registerIPC(ipcMain, getMainWindow) {
 
   ipcMain.handle('video-compressor-probe', async (event, filePath) => {
     try {
+      if (!isRegularFile(filePath)) return { success: false, error: 'Input video was not found.' };
       const info = await ffmpeg.probeVideoInfo(filePath);
       return { success: true, ...info };
     } catch (err) {

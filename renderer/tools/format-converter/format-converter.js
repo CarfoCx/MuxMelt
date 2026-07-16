@@ -37,6 +37,7 @@ const FORMAT_OPTIONS = {
 let files = [];
 let outputDir = '';
 let isProcessing = false;
+let cancelRequested = false;
 let log = null;
 let progressCleanup = null;
 let batchStartTime = 0;
@@ -49,7 +50,7 @@ let lastOutputDir = '';
 let preferredOutputFormat = 'png';
 let _pasteHandler = null;
 
-function init(ctx) {
+async function init(ctx) {
   log = ctx.log;
 
   dropZone = document.getElementById('dropZone');
@@ -69,11 +70,11 @@ function init(ctx) {
   qualityValue = document.getElementById('qualityValue');
   keepMetadata = document.getElementById('keepMetadata');
 
-  bindEvents();
-  _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
-  document.addEventListener('paste-files', _pasteHandler);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
-  loadToolSettings();
+  await loadToolSettings();
+  bindEvents();
+  _pasteHandler = (e) => { if (window.isToolActive('format-converter') && e.detail && e.detail.length > 0) addFiles(e.detail); };
+  document.addEventListener('paste-files', _pasteHandler);
   log('Format Converter initialized');
 }
 
@@ -98,7 +99,7 @@ function bindEvents() {
     const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
-      const parts = dir.replace(/\\\\/g, '/').split('/');
+      const parts = dir.replace(/\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : dir;
       outputDirBtn.textContent = display;
       outputDirBtn.title = dir;
@@ -111,6 +112,7 @@ function bindEvents() {
   dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover'); });
   dropZone.addEventListener('drop', async (e) => {
     e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover');
+    if (isProcessing) return;
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(window.api.system.getPathForFile(file));
     if (paths.length > 0) {
@@ -122,6 +124,7 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
+    if (isProcessing) return;
     const paths = await window.api.system.selectFiles();
     if (paths.length > 0) addFiles(paths);
   });
@@ -130,6 +133,7 @@ function bindEvents() {
   if (browseFolderBtn) {
     browseFolderBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
+      if (isProcessing) return;
       if (statusText) statusText.textContent = 'Scanning folder...';
       const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
@@ -139,6 +143,7 @@ function bindEvents() {
   }
 
   dropZone.addEventListener('click', async (e) => {
+    if (isProcessing) return;
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
     if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
     const paths = await window.api.system.selectFiles();
@@ -175,6 +180,7 @@ function bindEvents() {
 async function startConversion() {
   if (isProcessing) {
     // Cancel
+    cancelRequested = true;
     convertBtn.disabled = true;
     convertBtn.textContent = 'Cancelling...';
     try { await window.api.tools.formatConverter.cancelFormatConversion && window.api.tools.formatConverter.cancelFormatConversion(); } catch {}
@@ -187,6 +193,15 @@ async function startConversion() {
     return;
   }
 
+  const batchOptions = {
+    targetFormat: outputFormat.value,
+    quality: parseInt(qualitySlider.value, 10),
+    keepMetadata: !!keepMetadata.checked,
+    outputDir
+  };
+
+  cancelRequested = false;
+  const outputFiles = [];
   isProcessing = true;
   batchStartTime = Date.now();
   batchTotalFiles = pending.length;
@@ -198,7 +213,7 @@ async function startConversion() {
   processingIndicator.classList.add('active');
   statusText.textContent = `Converting ${pending.length} file(s)...`;
 
-  const targetFmt = outputFormat.value;
+  const targetFmt = batchOptions.targetFormat;
   const imageFormats = new Set(['png', 'jpg', 'webp', 'gif', 'ico', 'avif', 'tiff']);
   const videoFormats = new Set(['mp4', 'mkv', 'webm', 'avi', 'mov']);
   const audioFormats = new Set(['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac']);
@@ -206,9 +221,10 @@ async function startConversion() {
   const targetIsVideo = videoFormats.has(targetFmt);
   const targetIsAudio = audioFormats.has(targetFmt);
 
-  log(`Starting conversion: ${pending.length} file(s) to ${targetFmt.toUpperCase()}, quality ${qualitySlider.value}`);
+  log(`Starting conversion: ${pending.length} file(s) to ${targetFmt.toUpperCase()}, quality ${batchOptions.quality}`);
 
   for (const file of pending) {
+    if (cancelRequested) break;
     const fileExt = getFileExtension(file.path);
     const fileIsImage = IMAGE_EXTS.has(fileExt);
     const fileIsVideo = VIDEO_EXTS.has(fileExt);
@@ -235,29 +251,34 @@ async function startConversion() {
     try {
       const result = await window.api.tools.formatConverter.convertFormat({
         inputPath: file.path,
-        targetFormat: outputFormat.value,
-        quality: parseInt(qualitySlider.value),
-        keepMetadata: keepMetadata.checked,
-        outputDir: outputDir
+        ...batchOptions
       });
 
       if (result && result.success) {
         file.state = 'complete';
         file.progress = 1;
         file.status = 'Complete';
-        if (result.output) lastOutputDir = result.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        if (typeof result.output === 'string' && result.output) {
+          file.output = result.output;
+          outputFiles.push(result.output);
+          lastOutputDir = window.getParentDirectory(result.output);
+        }
         log(`Converted: ${file.name}`, 'success');
+      } else if (cancelRequested) {
+        file.state = 'pending';
+        file.status = 'Cancelled — ready to retry';
       } else {
         file.state = 'error';
         file.status = `Error: ${result ? result.error : 'unknown'}`;
         log(`Error [${file.name}]: ${result ? result.error : 'unknown'}`, 'error');
       }
     } catch (err) {
-      file.state = 'error';
-      file.status = `Error: ${err.message}`;
-      log(`Error [${file.name}]: ${err.message}`, 'error');
+      file.state = cancelRequested ? 'pending' : 'error';
+      file.status = cancelRequested ? 'Cancelled — ready to retry' : `Error: ${err.message}`;
+      if (!cancelRequested) log(`Error [${file.name}]: ${err.message}`, 'error');
     }
     renderFileItem(files.indexOf(file));
+    if (cancelRequested) break;
   }
 
   isProcessing = false;
@@ -265,27 +286,33 @@ async function startConversion() {
   if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   convertBtn.textContent = 'Convert';
   convertBtn.classList.remove('btn-cancel');
-  convertBtn.disabled = files.filter(f => f.state === 'pending' || f.state === 'error').length === 0;
+  updateButton();
   processingIndicator.classList.remove('active');
-  const completed = files.filter(f => f.state === 'complete').length;
-  const errors = files.filter(f => f.state === 'error').length;
-  statusText.textContent = `Done! ${completed} converted${errors > 0 ? `, ${errors} failed` : ''}`;
+  const completed = pending.filter(f => f.state === 'complete').length;
+  const errors = pending.filter(f => f.state === 'error').length;
+  const remaining = pending.filter(f => f.state === 'pending' || f.state === 'error').length;
+  statusText.textContent = cancelRequested
+    ? `Cancelled. ${completed} converted${remaining ? `, ${remaining} remaining` : ''}`
+    : `Done! ${completed} converted${errors > 0 ? `, ${errors} failed` : ''}`;
   if (completed > 0 && lastOutputDir) openOutputBtn.style.display = '';
   if (retryBtn) retryBtn.style.display = errors > 0 ? '' : 'none';
-  log(`Conversion finished: ${completed} completed, ${errors} failed`, errors > 0 ? 'warn' : 'success');
-  if (window.showCompletionToast) window.showCompletionToast(`Conversion complete: ${completed} converted${errors > 0 ? `, ${errors} failed` : ''}`, errors > 0);
-  if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+  log(cancelRequested ? 'Conversion cancelled' : `Conversion finished: ${completed} completed, ${errors} failed`, cancelRequested || errors > 0 ? 'warn' : 'success');
+  if (!cancelRequested && window.showCompletionToast) window.showCompletionToast(`Conversion complete: ${completed} converted${errors > 0 ? `, ${errors} failed` : ''}`, errors > 0, outputFiles);
+  outputFiles.forEach(filePath => { if (window.addRecentFile) window.addRecentFile(filePath); });
+  if (!cancelRequested && outputFiles.length > 0 && window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
 }
 
 function handleProgress(data) {
+  if (!isProcessing || !data || typeof data !== 'object') return;
   const idx = files.findIndex(f => f.path === data.file);
   if (idx === -1) return;
 
   if (data.type === 'progress') {
-    files[idx].progress = data.progress;
-    files[idx].status = data.status || 'Converting...';
+    const progress = normalizeProgress(data);
+    files[idx].progress = progress;
+    files[idx].status = typeof data.status === 'string' ? data.status : 'Converting...';
     files[idx].state = 'processing';
-    if (window.setTaskbarProgress) window.setTaskbarProgress(data.progress);
+    if (window.setTaskbarProgress) window.setTaskbarProgress(progress);
     if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files);
   } else if (data.type === 'complete') {
     files[idx].progress = 1;
@@ -295,12 +322,23 @@ function handleProgress(data) {
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   } else if (data.type === 'error') {
     files[idx].progress = 0;
-    files[idx].status = `Error: ${data.error}`;
+    const error = typeof data.error === 'string' ? data.error : 'Conversion failed';
+    files[idx].status = `Error: ${error}`;
     files[idx].state = 'error';
-    log(`Error [${files[idx].name}]: ${data.error}`, 'error');
+    log(`Error [${files[idx].name}]: ${error}`, 'error');
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   }
   renderFileItem(idx);
+}
+
+function normalizeProgress(data) {
+  if (Number.isFinite(data.progress)) {
+    return Math.max(0, Math.min(1, data.progress));
+  }
+  if (Number.isFinite(data.percent)) {
+    return Math.max(0, Math.min(1, data.percent / 100));
+  }
+  return 0;
 }
 
 // ---- File management ----
@@ -356,14 +394,21 @@ function updateFormatOptions() {
 }
 
 async function addFiles(paths) {
+  if (isProcessing || !Array.isArray(paths)) return;
   let added = 0;
   for (const p of paths) {
+    if (typeof p !== 'string') continue;
     const ext = getFileExtension(p);
     if (!IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext) && !AUDIO_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
-    const size = await window.api.system.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for File', state: 'pending' });
-    added++;
+    try {
+      const size = await window.api.system.getFileSize(p);
+      if (isProcessing) break;
+      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for File', state: 'pending' });
+      added++;
+    } catch (err) {
+      log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
+    }
   }
   if (added > 0) log(`Added ${added} file(s)`);
   updateFormatOptions();
@@ -386,12 +431,14 @@ function clearFiles() {
   updateButton();
   statusText.textContent = 'Waiting for File';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
+  if (window.updateQueueSummary) window.updateQueueSummary([], 'format-converter');
 }
 
 function updateButton() {
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
-  convertBtn.disabled = pending.length === 0 || isProcessing || !outputFormat.value || getQueueMediaType() === 'mixed';
+  convertBtn.disabled = isProcessing
+    ? cancelRequested
+    : pending.length === 0 || !outputFormat.value || getQueueMediaType() === 'mixed';
 }
 
 // ---- Rendering ----
@@ -402,11 +449,11 @@ function renderFileList() {
   }
   fileList.innerHTML = '';
   files.forEach((f, i) => fileList.appendChild(createFileElement(f, i)));
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'format-converter');
 }
 
 function renderFileItem(index) {
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'format-converter');
   const existing = fileList.children[index];
   if (!existing) return;
   // Update in place rather than rebuilding the row, which would re-fetch the
@@ -490,10 +537,9 @@ let _saveTimer = null;
 function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    window.loadAllSettings().then(all => {
+    window.updateSettings(all => {
       all['format-converter'] = { outputFormat: preferredOutputFormat, quality: qualitySlider.value, keepMetadata: keepMetadata.checked, outputDir };
-      window.saveAllSettings(all);
-    });
+    }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }
 

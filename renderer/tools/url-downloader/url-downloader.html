@@ -1,3 +1,23 @@
+<!-- Control bar pinned to the top of the tool (status/queue verbosity on the
+     left, actions on the right). Keeps the tool-footer-left/right class names
+     so the app shell can still inject the queue-summary pills here. -->
+<div class="tool-footer url-topbar">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText">Waiting for URL</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Processing...</span>
+    </div>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear All</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Folder</button>
+    <button class="btn btn-primary" id="downloadBtn">Download All</button>
+  </div>
+</div>
+
 <div class="tool-body">
   <div class="module-banner">
     <strong>Online Video Downloader.</strong> Download videos and audio from virtually any website. Supports automated cookie extraction, playlists, and post-processing.
@@ -102,7 +122,13 @@
 
           <div class="adv-setting-item">
             <label>Concurrent Fragments:</label>
-            <input type="number" id="concurrentFragmentsInput" class="adv-text-input" min="1" placeholder="Auto" title="Number of fragments to download concurrently">
+            <input type="number" id="concurrentFragmentsInput" class="adv-text-input" min="1" placeholder="Auto" title="Number of fragments to download concurrently within a single video">
+          </div>
+
+          <div class="adv-setting-item">
+            <label>Simultaneous Downloads:</label>
+            <input type="number" id="simultaneousDownloadsInput" class="adv-text-input" min="1" max="10" placeholder="3" title="How many videos from the queue to download at the same time (1-10, default 3)">
+            <p class="setting-desc">How many queued videos download at once. Higher is faster but may get you rate-limited.</p>
           </div>
         </div>
 
@@ -247,22 +273,5 @@
       </svg>
       <span>Add Video URL</span>
     </button>
-  </div>
-</div>
-
-<div class="tool-footer">
-  <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Waiting for URL</span>
-    <span class="eta-text" id="etaText"></span>
-    <div class="processing-indicator" id="processingIndicator">
-      <div class="spinner"></div>
-      <span>Processing...</span>
-    </div>
-  </div>
-  <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
-    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Folder</button>
-    <button class="btn btn-primary" id="downloadBtn">Download All</button>
   </div>
 </div>

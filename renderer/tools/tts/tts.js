@@ -14,6 +14,7 @@ let log = null;
 let reconnectDelay = 1000;
 let reconnectAttempts = 0;
 let reconnectTimerId = null;
+let cancelWatchdog = null;
 const MAX_RECONNECT_DELAY = 30000;
 
 let ttsText, languageSelect, voiceSelect, speedSlider, speedValue, pitchSlider, pitchValue, outputFormat;
@@ -24,6 +25,11 @@ let resultArea, charCount, openOutputBtn;
 let allVoices = [];
 let isPreviewing = false;
 let _ttsAudio = null; // active result/preview audio, stopped on cleanup
+let _previewOutputPath = '';
+const PREVIEW_MAX_CHARS = 300;
+let savedLanguage = '';
+let savedVoice = '';
+let _saveTimer = null;
 
 const ENGLISH_VOICE_PRESETS = [
   { id: 'en-US-AvaNeural', label: 'Soothing - Ava', detail: 'US female, calm and polished', group: 'Soft and warm' },
@@ -51,7 +57,7 @@ const ENGLISH_VOICE_PRESETS = [
   { id: 'en-ZA-LeahNeural', label: 'Smooth - Leah', detail: 'ZA female, even and pleasant', group: 'Regional English' }
 ];
 
-function init(ctx) {
+async function init(ctx) {
   pythonPort = ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
@@ -75,14 +81,18 @@ function init(ctx) {
   charCount = document.getElementById('charCount');
   openOutputBtn = document.getElementById('openOutputBtn');
 
+  await loadToolSettings();
   bindEvents();
   connectWebSocket(pythonPort);
   // log('Text-to-Speech initialized'); // Removed as per request to clean logs
 }
 
 function cleanup() {
-  if (_ttsAudio) { _ttsAudio.pause(); _ttsAudio = null; }
+  releasePreviewFile();
+  stopTtsPlayback();
+  _ttsAudio = null;
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
 
@@ -91,6 +101,8 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/tts/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
+    reconnectTimerId = null;
+    if (!isProcessing && statusText) statusText.textContent = ttsText.value.trim() ? 'Text Entered' : 'Waiting for Text';
     // if (statusText) statusText.textContent = 'Connected to backend';
     // log('WebSocket connected', 'success'); // Removed technical log
     // Request voice list
@@ -105,6 +117,7 @@ function connectWebSocket(port) {
   ws.onclose = () => {
     if (!statusText) return;
     statusText.textContent = 'Disconnected - reconnecting...';
+    if (isProcessing) resetProcessingState('Synthesis interrupted by backend disconnect');
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
     // log(`WebSocket disconnected...`, 'warn'); // Simplified log
@@ -114,14 +127,17 @@ function connectWebSocket(port) {
 }
 
 function handleWSMessage(data) {
+  if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
   switch (data.type) {
     case 'voices':
-      allVoices = data.voices || [];
+      allVoices = Array.isArray(data.voices)
+        ? data.voices.filter(voice => voice && typeof voice.id === 'string' && typeof voice.locale === 'string')
+        : [];
       populateLanguages();
       break;
     case 'log':
       // Filter out technical logs from backend
-      if (!data.message.toLowerCase().includes('websocket') && !data.message.toLowerCase().includes('connected')) {
+      if (typeof data.message === 'string' && !data.message.toLowerCase().includes('websocket') && !data.message.toLowerCase().includes('connected')) {
         log(data.message, data.level || 'info');
       }
       break;
@@ -132,22 +148,49 @@ function handleWSMessage(data) {
       handleComplete(data);
       break;
     case 'error':
-      isProcessing = false;
-      isPreviewing = false;
-      generateBtn.disabled = false;
-      previewBtn.disabled = false;
-      generateBtn.textContent = 'Generate';
-      generateBtn.classList.remove('btn-cancel');
-      processingIndicator.classList.remove('active');
-      statusText.textContent = `Error: ${data.error}`;
-      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }]);
-      log(`TTS error: ${data.error}`, 'error');
-      resultArea.innerHTML = `<div class="empty-state" style="color: var(--error);">Error: ${window.escapeHtml(data.error)}</div>`;
+      resetProcessingState(typeof data.error === 'string' ? data.error : 'Text-to-speech failed');
       break;
   }
 }
 
+function stopTtsPlayback() {
+  if (_ttsAudio) {
+    try {
+      _ttsAudio.pause();
+      _ttsAudio.currentTime = 0;
+    } catch {}
+  }
+  const playBtn = document.getElementById('ttsPlayBtn');
+  if (playBtn) {
+    playBtn.innerHTML = '&#9654;';
+    playBtn.classList.remove('playing');
+  }
+}
+
+function resetProcessingState(errorMessage = '') {
+  if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
+  isProcessing = false;
+  isPreviewing = false;
+  generateBtn.disabled = false;
+  previewBtn.disabled = false;
+  generateBtn.textContent = 'Generate';
+  generateBtn.classList.remove('btn-cancel');
+  processingIndicator.classList.remove('active');
+  if (errorMessage) {
+    statusText.textContent = `Error: ${errorMessage}`;
+    if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }], 'tts');
+    log(`TTS error: ${errorMessage}`, 'error');
+    resultArea.innerHTML = `<div class="empty-state" style="color: var(--error);">Error: ${window.escapeHtml(errorMessage)}</div>`;
+  }
+}
+
 function handleComplete(data) {
+  if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
+  const output = data && typeof data.output === 'string' ? data.output : '';
+  if (!output) {
+    resetProcessingState('The backend did not return an audio file');
+    return;
+  }
   isProcessing = false;
   const isActuallyPreview = isPreviewing;
   isPreviewing = false;
@@ -159,19 +202,36 @@ function handleComplete(data) {
   processingIndicator.classList.remove('active');
   
   statusText.textContent = isActuallyPreview ? 'Preview Generated' : 'Audio generated!';
-  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }]);
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }], 'tts');
   
-  if (!isActuallyPreview && data.output) {
-    const dir = data.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+  if (!isActuallyPreview) {
+    const dir = window.getParentDirectory(output);
     if (!outputDir) outputDir = dir;
     openOutputBtn.style.display = '';
-    log(`Audio saved: ${data.output}`, 'success');
-    if (window.showCompletionToast) window.showCompletionToast(`Audio saved: ${data.output.split(/[\\/]/).pop()}`, false, [data.output]);
-    if (window.addRecentFile) window.addRecentFile(data.output);
+    log(`Audio saved: ${output}`, 'success');
+    if (window.showCompletionToast) window.showCompletionToast(`Audio saved: ${output.split(/[\\/]/).pop()}`, false, [output]);
+    if (window.addRecentFile) window.addRecentFile(output);
     if (window.autoOpenOutputIfEnabled && outputDir) window.autoOpenOutputIfEnabled(outputDir);
   }
+  if (isActuallyPreview) _previewOutputPath = output;
   
-  showAudioResult(data.output, isActuallyPreview);
+  showAudioResult(output, isActuallyPreview);
+}
+
+function releasePreviewFile() {
+  if (_ttsAudio) {
+    try { _ttsAudio.pause(); } catch {}
+    if (_previewOutputPath) {
+      try {
+        _ttsAudio.removeAttribute('src');
+        _ttsAudio.load();
+      } catch {}
+    }
+  }
+  if (_previewOutputPath && ws && ws.readyState === WebSocket.OPEN) {
+    try { ws.send(JSON.stringify({ action: 'cleanup_preview', path: _previewOutputPath })); } catch {}
+  }
+  _previewOutputPath = '';
 }
 
 function populateLanguages() {
@@ -210,14 +270,15 @@ function populateLanguages() {
   });
 
   // Default to English if available
-  if (languages.has('en')) languageSelect.value = 'en';
+  if (savedLanguage && languages.has(savedLanguage)) languageSelect.value = savedLanguage;
+  else if (languages.has('en')) languageSelect.value = 'en';
   
   populateVoices();
 }
 
 function populateVoices() {
   const lang = languageSelect.value;
-  const filtered = allVoices.filter(v => v.locale.startsWith(lang));
+  const filtered = allVoices.filter(v => v && typeof v.locale === 'string' && v.locale.startsWith(lang));
 
   voiceSelect.innerHTML = '';
 
@@ -254,22 +315,24 @@ function populateVoices() {
       remaining.forEach(v => {
         const opt = document.createElement('option');
         opt.value = v.id;
-        opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${v.gender.toLowerCase()})`;
+        opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${String(v.gender || 'unknown').toLowerCase()})`;
         group.appendChild(opt);
       });
       voiceSelect.appendChild(group);
     }
 
-    if (byId.has('en-US-AvaNeural')) voiceSelect.value = 'en-US-AvaNeural';
+    if (savedVoice && byId.has(savedVoice)) voiceSelect.value = savedVoice;
+    else if (byId.has('en-US-AvaNeural')) voiceSelect.value = 'en-US-AvaNeural';
     return;
   }
 
   filtered.forEach(v => {
     const opt = document.createElement('option');
     opt.value = v.id;
-    opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${v.gender.toLowerCase()})`;
+    opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${String(v.gender || 'unknown').toLowerCase()})`;
     voiceSelect.appendChild(opt);
   });
+  if (savedVoice && filtered.some(v => v.id === savedVoice)) voiceSelect.value = savedVoice;
 }
 
 function cleanVoiceName(voice) {
@@ -284,14 +347,15 @@ function cleanVoiceName(voice) {
 function updateProgress(progress, status) {
   const progressFill = document.getElementById('ttsProgress');
   if (progressFill) {
-    progressFill.style.width = `${Math.round(progress * 100)}%`;
+    const normalized = Math.max(0, Math.min(1, Number(progress) || 0));
+    progressFill.style.width = `${Math.round(normalized * 100)}%`;
   }
-  if (status) statusText.textContent = status;
+  if (typeof status === 'string' && status) statusText.textContent = status;
 }
 
 function showAudioResult(outputPath, isPreview) {
   if (outputPath) {
-    const fileUrl = 'file://' + outputPath.replace(/\\/g, '/');
+    const fileUrl = window.localPathToFileUrl(outputPath);
     resultArea.innerHTML = `
       <div class="tts-audio-player">
         <div class="audio-preview">
@@ -351,19 +415,33 @@ function bindEvents() {
       const hadFocus = document.activeElement === ttsText;
       ttsText.blur();
       if (spellcheckToggle.checked || hadFocus) ttsText.focus();
+      saveToolSettings();
     });
   }
 
-  languageSelect.addEventListener('change', populateVoices);
+  languageSelect.addEventListener('change', () => {
+    savedLanguage = languageSelect.value;
+    savedVoice = '';
+    populateVoices();
+    savedVoice = voiceSelect.value;
+    saveToolSettings();
+  });
+  voiceSelect.addEventListener('change', () => {
+    savedVoice = voiceSelect.value;
+    saveToolSettings();
+  });
 
   speedSlider.addEventListener('input', () => {
     speedValue.textContent = `${parseFloat(speedSlider.value).toFixed(1)}x`;
+    saveToolSettings();
   });
 
   pitchSlider.addEventListener('input', () => {
     const pitch = parseInt(pitchSlider.value, 10);
     pitchValue.textContent = `${pitch > 0 ? '+' : ''}${pitch}Hz`;
+    saveToolSettings();
   });
+  outputFormat.addEventListener('change', saveToolSettings);
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
@@ -373,6 +451,7 @@ function bindEvents() {
       const display = dir.length > 35 ? '...' + dir.slice(-32) : dir;
       outputDirBtn.textContent = display;
       outputDirBtn.title = dir;
+      saveToolSettings();
     }
   });
 
@@ -381,24 +460,38 @@ function bindEvents() {
   });
 
   clearBtn.addEventListener('click', () => {
+    if (isProcessing) {
+      log('Wait for synthesis to finish or cancel it before clearing', 'warn');
+      return;
+    }
+    releasePreviewFile();
+    if (_ttsAudio) { _ttsAudio.pause(); _ttsAudio = null; }
     ttsText.value = '';
     charCount.textContent = '0';
     resultArea.innerHTML = '<div class="empty-state">Enter text and click Preview or Generate.</div>';
     statusText.textContent = 'Waiting for Text';
     openOutputBtn.style.display = 'none';
-    if (window.updateQueueSummary) window.updateQueueSummary([]);
+    if (window.updateQueueSummary) window.updateQueueSummary([], 'tts');
     window.clearLog();
   });
 
   previewBtn.addEventListener('click', () => startSynthesis(true));
   generateBtn.addEventListener('click', () => {
-    if (isProcessing && !isPreviewing) {
+    if (isProcessing) {
       // Cancel logic
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: 'cancel' }));
+        try { ws.send(JSON.stringify({ action: 'cancel' })); }
+        catch (err) {
+          log(`Could not request cancellation: ${err.message}`, 'error');
+          return;
+        }
         generateBtn.disabled = true;
         generateBtn.textContent = 'Cancelling...';
-        setTimeout(() => { if (isProcessing) { generateBtn.disabled = false; generateBtn.textContent = 'Cancel'; } }, 5000);
+        if (cancelWatchdog) clearTimeout(cancelWatchdog);
+        cancelWatchdog = setTimeout(() => {
+          cancelWatchdog = null;
+          if (isProcessing) { generateBtn.disabled = false; generateBtn.textContent = 'Cancel'; }
+        }, 5000);
       }
       return;
     }
@@ -407,9 +500,15 @@ function bindEvents() {
 }
 
 function startSynthesis(isPreview) {
+  if (isProcessing) return;
+  if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   const text = ttsText.value.trim();
   if (!text) {
     log('Please enter text to convert to speech', 'warn');
+    return;
+  }
+  if (text.length > 50000) {
+    log('Text is too long. The maximum is 50,000 characters.', 'warn');
     return;
   }
 
@@ -418,17 +517,18 @@ function startSynthesis(isPreview) {
     return;
   }
 
+  releasePreviewFile();
+
   isProcessing = true;
   isPreviewing = isPreview;
   
-  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }]);
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }], 'tts');
   
-  generateBtn.disabled = !isPreview;
+  // Keep the primary button available as Cancel for both previews and full jobs.
+  generateBtn.disabled = false;
   previewBtn.disabled = true;
-  if (!isPreview) {
-    generateBtn.textContent = 'Cancel';
-    generateBtn.classList.add('btn-cancel');
-  }
+  generateBtn.textContent = 'Cancel';
+  generateBtn.classList.add('btn-cancel');
   
   processingIndicator.classList.add('active');
   statusText.textContent = isPreview ? 'Preparing preview...' : 'Generating audio...';
@@ -439,6 +539,7 @@ function startSynthesis(isPreview) {
       <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">${isPreview ? 'Preparing preview...' : 'Generating...'}</div>
     </div>`;
 
+  const synthesisText = isPreview ? text.slice(0, PREVIEW_MAX_CHARS) : text;
   const voice = voiceSelect.value;
   const speed = parseFloat(speedSlider.value);
   const pitchHz = parseInt(pitchSlider.value, 10);
@@ -452,18 +553,69 @@ function startSynthesis(isPreview) {
     log(`Generating TTS: ${text.length} chars, voice=${voice}, speed=${speed}x`);
   }
 
-  ws.send(JSON.stringify({
-    action: 'synthesize',
-    text: text,
-    voice: voice,
-    rate: rate,
-    pitch: pitch,
-    output_format: format,
-    output_dir: isPreview ? 'TEMP' : outputDir,
-    is_preview: isPreview
-  }));
+  try {
+    ws.send(JSON.stringify({
+      action: 'synthesize',
+      text: synthesisText,
+      voice: voice,
+      rate: rate,
+      pitch: pitch,
+      output_format: format,
+      output_dir: isPreview ? 'TEMP' : outputDir,
+      is_preview: isPreview
+    }));
+  } catch (err) {
+    resetProcessingState(`Could not start synthesis: ${err.message}`);
+  }
 }
 
-window.registerTool('tts', { init, cleanup });
+async function loadToolSettings() {
+  try {
+    const all = await window.loadAllSettings();
+    const settings = all.tts || {};
+    outputDir = typeof settings.outputDir === 'string' ? settings.outputDir : '';
+    if (!outputDir && window.getDefaultOutputDir) outputDir = window.getDefaultOutputDir();
+    if (outputDir) {
+      const parts = outputDir.replace(/\\/g, '/').split('/');
+      outputDirBtn.textContent = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : outputDir;
+      outputDirBtn.title = outputDir;
+    }
+
+    const speed = Number(settings.speed);
+    if (Number.isFinite(speed) && speed >= 0.5 && speed <= 2) speedSlider.value = String(speed);
+    speedValue.textContent = `${Number(speedSlider.value).toFixed(1)}x`;
+
+    const pitch = Number(settings.pitch);
+    if (Number.isFinite(pitch) && pitch >= -12 && pitch <= 12) pitchSlider.value = String(pitch);
+    const pitchValueNumber = Number(pitchSlider.value);
+    pitchValue.textContent = `${pitchValueNumber > 0 ? '+' : ''}${pitchValueNumber}Hz`;
+
+    if (settings.outputFormat === 'mp3' || settings.outputFormat === 'wav') outputFormat.value = settings.outputFormat;
+    if (typeof settings.spellcheck === 'boolean') spellcheckToggle.checked = settings.spellcheck;
+    savedLanguage = typeof settings.language === 'string' ? settings.language : '';
+    savedVoice = typeof settings.voice === 'string' ? settings.voice : '';
+  } catch (err) {
+    log(`Could not load TTS settings: ${err.message}`, 'warn');
+  }
+}
+
+function saveToolSettings() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    window.updateSettings(all => {
+      all.tts = {
+        outputDir,
+        language: languageSelect.value || savedLanguage,
+        voice: voiceSelect.value || savedVoice,
+        speed: Number(speedSlider.value),
+        pitch: Number(pitchSlider.value),
+        outputFormat: outputFormat.value,
+        spellcheck: !!spellcheckToggle.checked
+      };
+    }).catch(err => log(`Could not save TTS settings: ${err.message}`, 'warn'));
+  }, 250);
+}
+
+window.registerTool('tts', { init, cleanup, deactivate: stopTtsPlayback });
 
 })();

@@ -8,8 +8,15 @@ REM Check for Python
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python is not installed or not in PATH.
-    echo Please install Python 3.10-3.13 from https://www.python.org/downloads/
-    echo NOTE: Python 3.14 is NOT compatible with PyTorch yet.
+    echo Please install Python 3.11-3.13 from https://www.python.org/downloads/
+    pause
+    exit /b 1
+)
+
+python -c "import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] MuxMelt requires Python 3.11 through 3.13.
+    echo Python 3.10 and 3.14+ are not supported by the current media dependencies.
     pause
     exit /b 1
 )
@@ -43,22 +50,34 @@ if errorlevel 1 (
     echo.
 )
 
-REM Install Python dependencies (CUDA version of PyTorch for GPU acceleration)
+REM Install Python dependencies. Use CUDA only when an NVIDIA driver is present.
 echo Installing Python dependencies...
 echo This may take several minutes (PyTorch dependencies are large).
 echo.
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-pip install -r python\requirements.txt
+nvidia-smi >nul 2>&1
 if errorlevel 1 (
-    echo.
-    echo [ERROR] Failed to install Python dependencies.
-    echo If using Python 3.13+, try installing Python 3.11 or 3.12 instead.
-    pause
-    exit /b 1
+    echo No NVIDIA GPU detected, installing CPU-only PyTorch...
+    python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+) else (
+    echo NVIDIA GPU detected, installing PyTorch with CUDA...
+    python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 )
+if errorlevel 1 goto :python_install_failed
+
+python -m pip install -r python\requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --prefer-binary
+if errorlevel 1 goto :python_install_failed
 echo.
 echo [OK] Python dependencies installed
 echo.
+goto :python_install_complete
+
+:python_install_failed
+echo.
+echo [ERROR] Failed to install Python dependencies.
+pause
+exit /b 1
+
+:python_install_complete
 
 REM Install Node.js dependencies
 echo Installing Node.js dependencies...

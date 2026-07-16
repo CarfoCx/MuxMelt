@@ -11,8 +11,10 @@ const MAX_GIF_DURATION = 60;
 let videoFile = null;
 let outputDir = '';
 let isProcessing = false;
+let cancelRequested = false;
 let log = null;
 let progressCleanup = null;
+let _pasteHandler = null;
 
 let dropZone, browseBtn, createBtn, clearBtn, openOutputBtn;
 let outputDirBtn, statusText, processingIndicator;
@@ -23,7 +25,7 @@ let videoInfo, videoName, removeVideoBtn, previewArea;
 let lastOutputDir = '';
 let syncingTimeFields = false;
 
-function init(ctx) {
+async function init(ctx) {
   log = ctx.log;
 
   dropZone = document.getElementById('dropZone');
@@ -52,13 +54,18 @@ function init(ctx) {
   previewArea = document.getElementById('previewArea');
   openOutputBtn = document.getElementById('openOutputBtn');
 
-  bindEvents();
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
-  loadToolSettings();
+  await loadToolSettings();
+  bindEvents();
+  _pasteHandler = (event) => {
+    if (window.isToolActive('gif-maker')) setVideoFromPaths(event.detail);
+  };
+  document.addEventListener('paste-files', _pasteHandler);
   log('GIF Maker initialized');
 }
 
 function cleanup() {
+  if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
   if (progressCleanup) { progressCleanup(); progressCleanup = null; }
 }
 
@@ -95,7 +102,7 @@ function bindEvents() {
     const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
-      const parts = dir.replace(/\\\\/g, '/').split('/');
+      const parts = dir.replace(/\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : dir;
       outputDirBtn.textContent = display;
       outputDirBtn.title = dir;
@@ -111,8 +118,7 @@ function bindEvents() {
     for (const file of e.dataTransfer.files) paths.push(window.api.system.getPathForFile(file));
     if (paths.length > 0) {
       const resolved = await window.api.system.resolveDroppedPaths(paths);
-      if (resolved.length > 0) setVideo(resolved[0]);
-      else log('No supported video file found', 'warn');
+      setVideoFromPaths(resolved);
     }
   });
 
@@ -148,7 +154,17 @@ function bindEvents() {
   });
 }
 
+function setVideoFromPaths(paths) {
+  if (isProcessing || !Array.isArray(paths)) return;
+  const supportedPath = paths.find(path => (
+    typeof path === 'string' && VIDEO_EXTS.has(getFileExtension(path))
+  ));
+  if (supportedPath) setVideo(supportedPath);
+  else if (paths.length > 0) log('No supported video file found', 'warn');
+}
+
 function setVideo(path) {
+  if (isProcessing || typeof path !== 'string') return;
   const ext = getFileExtension(path);
   if (!VIDEO_EXTS.has(ext)) {
     log('Not a supported video file', 'warn');
@@ -160,13 +176,15 @@ function setVideo(path) {
   videoInfo.style.display = 'flex';
   previewArea.innerHTML = '<div class="empty-state">Set parameters and create GIF. Adjust settings and click Create.</div>';
   createBtn.disabled = false;
-  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'pending' }]);
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'pending' }], 'gif-maker');
   log(`Selected: ${getFileName(path)}`);
   updateEndFromDuration();
 }
 
 async function startCreation() {
   if (isProcessing) {
+    if (cancelRequested) return;
+    cancelRequested = true;
     createBtn.disabled = true;
     createBtn.textContent = 'Cancelling...';
     try { await window.api.tools.gifMaker.cancelGifMaker(); } catch {}
@@ -176,7 +194,8 @@ async function startCreation() {
   updateDurationFromEnd();
 
   isProcessing = true;
-  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }]);
+  cancelRequested = false;
+  if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'processing' }], 'gif-maker');
   createBtn.disabled = false;
   createBtn.textContent = 'Cancel';
   createBtn.classList.add('btn-cancel');
@@ -203,25 +222,42 @@ async function startCreation() {
       reverse: reverseCheck.checked,
       outputDir: outputDir
     });
+    const output = result && typeof result.output === 'string' ? result.output : '';
     if (result && result.success) {
-      log(`GIF created: ${result.output || 'done'}`, 'success');
-      if (result.output) { lastOutputDir = result.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/'); openOutputBtn.style.display = ''; }
+      log(`GIF created: ${output || 'done'}`, 'success');
+      if (output) { lastOutputDir = window.getParentDirectory(output); openOutputBtn.style.display = ''; }
       statusText.textContent = 'GIF created!';
-      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }]);
-      if (window.showCompletionToast) window.showCompletionToast('GIF created successfully!');
-      if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }], 'gif-maker');
+      if (window.showCompletionToast) window.showCompletionToast('GIF created successfully!', false, output ? [output] : []);
+      if (output && window.addRecentFile) window.addRecentFile(output);
+      if (output && window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+    } else if (cancelRequested || (result && /cancel/i.test(result.error || ''))) {
+      log('GIF creation cancelled', 'warn');
+      statusText.textContent = 'GIF creation cancelled';
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'cancelled' }], 'gif-maker');
     } else if (result && result.error) {
       log(`GIF error: ${result.error}`, 'error');
       statusText.textContent = 'Error creating GIF';
-      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }]);
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }], 'gif-maker');
+    } else {
+      log('GIF creation did not return an output file', 'error');
+      statusText.textContent = 'GIF creation failed';
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }], 'gif-maker');
     }
   } catch (err) {
-    log(`GIF creation error: ${err.message}`, 'error');
-    statusText.textContent = 'Error creating GIF';
-    if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }]);
+    if (cancelRequested || /cancel/i.test(err.message || '')) {
+      log('GIF creation cancelled', 'warn');
+      statusText.textContent = 'GIF creation cancelled';
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'cancelled' }], 'gif-maker');
+    } else {
+      log(`GIF creation error: ${err.message}`, 'error');
+      statusText.textContent = 'Error creating GIF';
+      if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'error' }], 'gif-maker');
+    }
   }
 
   isProcessing = false;
+  cancelRequested = false;
   createBtn.textContent = 'Create GIF';
   createBtn.classList.remove('btn-cancel');
   createBtn.disabled = !videoFile;
@@ -230,13 +266,14 @@ async function startCreation() {
 }
 
 function handleProgress(data) {
+  if (!isProcessing || !data || typeof data !== 'object') return;
   const progressFill = document.getElementById('gifProgress');
 
   if (data.type === 'progress' || typeof data.percent === 'number' || typeof data.progress === 'number') {
     const progress = normalizeProgress(data);
     if (progressFill) progressFill.style.width = `${Math.round(progress * 100)}%`;
     setFooterProgress(progress, true);
-    statusText.textContent = data.status || 'Creating GIF...';
+    statusText.textContent = typeof data.status === 'string' ? data.status : 'Creating GIF...';
   } else if (data.type === 'complete') {
     setFooterProgress(1, true);
     if (progressFill) {
@@ -244,20 +281,25 @@ function handleProgress(data) {
       progressFill.classList.add('complete');
     }
     statusText.textContent = 'GIF created successfully!';
-    log(`GIF created: ${data.output || 'done'}`, 'success');
+    log(`GIF created: ${typeof data.output === 'string' ? data.output : 'done'}`, 'success');
     previewArea.innerHTML = '<div class="empty-state" style="color: var(--success);">GIF created successfully!</div>';
   } else if (data.type === 'error') {
     setFooterProgress(0, false);
     if (progressFill) progressFill.classList.add('error');
-    statusText.textContent = `Error: ${data.error}`;
-    log(`Error: ${data.error}`, 'error');
+    const error = typeof data.error === 'string' ? data.error : 'GIF creation failed';
+    statusText.textContent = `Error: ${error}`;
+    log(`Error: ${error}`, 'error');
   }
 }
 
 function normalizeProgress(data) {
-  const raw = typeof data.progress === 'number' ? data.progress : data.percent;
-  if (typeof raw !== 'number' || Number.isNaN(raw)) return 0;
-  return Math.max(0, Math.min(1, raw > 1 ? raw / 100 : raw));
+  if (Number.isFinite(data.progress)) {
+    return Math.max(0, Math.min(1, data.progress));
+  }
+  if (Number.isFinite(data.percent)) {
+    return Math.max(0, Math.min(1, data.percent / 100));
+  }
+  return 0;
 }
 
 function setFooterProgress(progress, visible = true) {
@@ -336,7 +378,7 @@ function clearAll() {
   createBtn.disabled = true;
   statusText.textContent = 'Waiting for Video';
   setFooterProgress(0, false);
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
+  if (window.updateQueueSummary) window.updateQueueSummary([], 'gif-maker');
 }
 
 function getFileExtension(fp) {
@@ -374,10 +416,9 @@ let _saveTimer = null;
 function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    window.loadAllSettings().then(all => {
+    window.updateSettings(all => {
       all['gif-maker'] = { fps: fpsSlider.value, width: widthInput.value, startTime: startTime.value, endTime: endTime.value, duration: duration.value, dither: ditherSelect.value, maxColors: maxColorsSlider.value, reverse: reverseCheck.checked, outputDir };
-      window.saveAllSettings(all);
-    });
+    }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }
 

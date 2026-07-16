@@ -7,22 +7,106 @@ const { spawn } = require('child_process');
 const { validateOutputDir, formatToolError } = require('./path-utils');
 const { BrowserWindow, net } = require('electron');
 
+function sendToolProgress(win, payload) {
+  try {
+    if (!win || (typeof win.isDestroyed === 'function' && win.isDestroyed())) return;
+    if (!win.webContents || (typeof win.webContents.isDestroyed === 'function' && win.webContents.isDestroyed())) return;
+    win.webContents.send('tool-progress', payload);
+  } catch {}
+}
+
+function cancelledError() {
+  const err = new Error('Download cancelled by user.');
+  err.code = 'CANCELLED';
+  return err;
+}
+
+// On POSIX, detached children lead a new process group. yt-dlp and pip can
+// launch their own ffmpeg/helper descendants, so cancellation must target the
+// whole group rather than only the Python leader. Windows uses taskkill /T
+// below and therefore keeps its existing spawn behavior.
+function spawnProcessTree(cmd, args, options = {}) {
+  return spawn(cmd, args, process.platform === 'win32'
+    ? options
+    : { ...options, detached: true });
+}
+
+function terminateProcessTree(proc) {
+  if (!proc || !Number.isSafeInteger(proc.pid) || proc.pid <= 0) return;
+  if (process.platform === 'win32') {
+    if (proc.exitCode !== null) return;
+    try {
+      const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true
+      });
+      killer.once('error', () => { try { proc.kill('SIGKILL'); } catch {} });
+      killer.once('close', (code) => { if (code !== 0) { try { proc.kill('SIGKILL'); } catch {} } });
+    } catch {
+      try { proc.kill('SIGKILL'); } catch {}
+    }
+    return;
+  }
+
+  const processGroupId = -proc.pid;
+  try { process.kill(processGroupId, 'SIGTERM'); } catch {}
+  // Always escalate against the group ID. The Python leader can exit on TERM
+  // while an ffmpeg descendant remains alive in the same process group.
+  const timer = setTimeout(() => {
+    try { process.kill(processGroupId, 'SIGKILL'); } catch {}
+  }, 3000);
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
 // Promise wrapper around spawn so long-running Python/pip calls never block the
 // Electron main process (execFileSync freezes the entire UI for its timeout).
-function execFileAsync(cmd, args, { timeout = 0 } = {}) {
+function execFileAsync(cmd, args, { timeout = 0, operation = null } = {}) {
   return new Promise((resolve, reject) => {
+    if (operation && operation.cancelled) { reject(cancelledError()); return; }
     let stdout = '';
     let stderr = '';
     let timer = null;
-    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let settled = false;
+    const MAX_OUTPUT = 16 * 1024 * 1024;
+    const proc = spawnProcessTree(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    if (operation) operation.processes.add(proc);
     if (timeout > 0) {
-      timer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, timeout);
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        terminateProcessTree(proc);
+        if (operation) operation.processes.delete(proc);
+        reject(new Error(`Process timed out after ${Math.round(timeout / 1000)} seconds.`));
+      }, timeout);
+      if (typeof timer.unref === 'function') timer.unref();
     }
-    proc.stdout.on('data', (c) => { stdout += c.toString(); });
-    proc.stderr.on('data', (c) => { stderr += c.toString(); });
-    proc.on('error', (err) => { if (timer) clearTimeout(timer); reject(err); });
-    proc.on('close', (code) => {
+    const append = (current, chunk) => {
+      const next = current + chunk.toString();
+      if (next.length <= MAX_OUTPUT) return next;
+      if (!settled) {
+        settled = true;
+        if (timer) clearTimeout(timer);
+        terminateProcessTree(proc);
+        if (operation) operation.processes.delete(proc);
+        reject(new Error('Process output exceeded the safety limit.'));
+      }
+      return current;
+    };
+    proc.stdout.on('data', (c) => { stdout = append(stdout, c); });
+    proc.stderr.on('data', (c) => { stderr = append(stderr, c); });
+    proc.once('error', (err) => {
+      if (settled) return;
+      settled = true;
       if (timer) clearTimeout(timer);
+      if (operation) operation.processes.delete(proc);
+      reject(operation && operation.cancelled ? cancelledError() : err);
+    });
+    proc.once('close', (code) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (operation) operation.processes.delete(proc);
+      if (operation && operation.cancelled) { reject(cancelledError()); return; }
       if (code === 0) resolve({ stdout, stderr });
       else {
         const err = new Error(stderr.trim() || stdout.trim() || `Process exited with code ${code}`);
@@ -45,6 +129,15 @@ const RESOLUTION_FORMATS = {
 
 function defaultOutputDir() {
   return path.join(os.homedir(), 'Downloads', 'MuxMelt Downloads');
+}
+
+function resolveOutputFile(candidate, outDir) {
+  if (typeof candidate !== 'string' || !candidate.trim()) return '';
+  const cleaned = candidate.trim().replace(/^"+|"+$/g, '');
+  const resolved = path.resolve(path.isAbsolute(cleaned) ? cleaned : path.join(outDir, cleaned));
+  const relative = path.relative(outDir, resolved);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return '';
+  try { return fs.statSync(resolved).isFile() ? resolved : ''; } catch { return ''; }
 }
 
 function isHttpUrl(value) {
@@ -85,9 +178,13 @@ function buildRequestHeaders(url, options = {}) {
   const motherless = isMotherlessUrl(parsed);
   const headers = [];
 
+  const userAgent = typeof options.userAgent === 'string' && options.userAgent.trim() && !/[\r\n]/.test(options.userAgent)
+    ? options.userAgent.slice(0, 1000)
+    : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
+
   if (!options.impersonate) {
     headers.push(
-      ['--user-agent', options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'],
+      ['--user-agent', userAgent],
       ['--add-header', 'Accept-Language:en-US,en;q=0.9'],
     );
   }
@@ -103,7 +200,7 @@ function buildRequestHeaders(url, options = {}) {
     );
   }
 
-  if (options.referer) {
+  if (typeof options.referer === 'string' && isHttpUrl(options.referer) && !/[\r\n]/.test(options.referer)) {
     headers.push(['--referer', options.referer]);
   }
 
@@ -198,7 +295,7 @@ const MAX_BROWSER_COOKIE_ATTEMPTS = 3;
  * - Otherwise: impersonation without cookies first, then the user-selected
  *   browser, then a bounded set of other browsers.
  */
-function orderedImpersonationAttempts(options, cap = MAX_BROWSER_COOKIE_ATTEMPTS) {
+function orderedImpersonationAttempts(options = {}, cap = MAX_BROWSER_COOKIE_ATTEMPTS) {
   const cookiesFile = options.cookiesFile && typeof options.cookiesFile === 'string'
     ? options.cookiesFile.trim()
     : '';
@@ -219,29 +316,59 @@ function orderedImpersonationAttempts(options, cap = MAX_BROWSER_COOKIE_ATTEMPTS
   return attempts;
 }
 
-async function hasPythonModule(pythonInfo, moduleName) {
+async function hasPythonModule(pythonInfo, moduleName, operation = null) {
   try {
     await execFileAsync(pythonInfo.cmd, [
       ...(pythonInfo.args || []),
       '-c',
       `import ${moduleName}`
-    ], { timeout: 10000 });
+    ], { timeout: 10000, operation });
     return true;
   } catch {
     return false;
   }
 }
 
-async function installYtDlpImpersonationDeps(pythonInfo) {
-  await execFileAsync(pythonInfo.cmd, [
-    ...(pythonInfo.args || []),
-    '-m',
-    'pip',
-    'install',
-    '--upgrade',
-    'yt-dlp[default,curl-cffi]',
-    '--no-warn-script-location'
-  ], { timeout: 300000 });
+let ytDlpInstallPromise = null;
+
+function waitForOperation(task, operation) {
+  if (!operation) return task;
+  if (operation.cancelled) return Promise.reject(cancelledError());
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      operation.cancelWaiters.delete(cancelWaiter);
+      callback(value);
+    };
+    const cancelWaiter = () => finish(reject, cancelledError());
+    operation.cancelWaiters.add(cancelWaiter);
+    task.then(
+      value => finish(resolve, value),
+      err => finish(reject, err)
+    );
+  });
+}
+
+async function installYtDlpImpersonationDeps(pythonInfo, operation = null) {
+  if (!ytDlpInstallPromise) {
+    const task = execFileAsync(pythonInfo.cmd, [
+      ...(pythonInfo.args || []),
+      '-m',
+      'pip',
+      'install',
+      '--upgrade',
+      'yt-dlp[default,curl-cffi]',
+      '--no-warn-script-location'
+    ], { timeout: 300000 });
+    ytDlpInstallPromise = task;
+    const clear = () => {
+      if (ytDlpInstallPromise === task) ytDlpInstallPromise = null;
+    };
+    task.then(clear, clear);
+  }
+  return waitForOperation(ytDlpInstallPromise, operation);
 }
 
 function formatDownloadError(err, url) {
@@ -276,15 +403,22 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
     '-m', 'yt_dlp',
     '--newline',
     '--no-color',
+    '--progress',
     '--paths', outDir,
-    '--exec', 'echo {}',
+    // Ask yt-dlp to print the final path directly. --exec shells out and is an
+    // unnecessary command-execution surface when filenames come from a site.
+    '--print', 'after_move:filepath',
   ];
+  if (typeof options.tempDir === 'string' && path.isAbsolute(options.tempDir)) {
+    args.push('--paths', `temp:${options.tempDir}`);
+  }
 
   // Playlist options
   if (options.playlist) {
     args.push('--yes-playlist');
-    if (options.maxDownloads && Number(options.maxDownloads) > 0) {
-      args.push('--max-downloads', String(options.maxDownloads));
+    const maxDownloads = Number(options.maxDownloads);
+    if (Number.isFinite(maxDownloads) && maxDownloads > 0) {
+      args.push('--max-downloads', String(Math.min(1000, Math.floor(maxDownloads))));
     }
   } else {
     args.push('--no-playlist');
@@ -308,7 +442,10 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
   const format = options.format || 'best';
   const maxHeight = RESOLUTION_FORMATS[format];
   if (format === 'audioonly') {
-    const aFormat = options.audioFormat || 'mp3';
+    const requestedAudioFormat = String(options.audioFormat || 'mp3').toLowerCase();
+    const aFormat = ['best', 'mp3', 'm4a', 'opus', 'vorbis', 'wav', 'flac', 'aac', 'alac'].includes(requestedAudioFormat)
+      ? requestedAudioFormat
+      : 'mp3';
     args.push('-x', '--audio-format', aFormat, '--audio-quality', '0');
   } else if (maxHeight) {
     args.push(
@@ -317,8 +454,8 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
       '--merge-output-format', 'mp4'
     );
   } else if (format === 'custom') {
-    if (options.customFormat) {
-      args.push('-f', options.customFormat);
+    if (typeof options.customFormat === 'string' && options.customFormat.trim() && options.customFormat.length <= 1000 && !/[\r\n\0]/.test(options.customFormat)) {
+      args.push('-f', options.customFormat.trim());
     } else {
       args.push('--merge-output-format', 'mp4');
     }
@@ -333,8 +470,8 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
     args.push('--write-subs');
   }
   if (options.subtitles && options.subtitles !== 'none') {
-    if (options.subLangs) {
-      args.push('--sub-langs', options.subLangs);
+    if (typeof options.subLangs === 'string' && options.subLangs.trim() && options.subLangs.length <= 500 && !/[\r\n\0]/.test(options.subLangs)) {
+      args.push('--sub-langs', options.subLangs.trim());
     } else {
       args.push('--sub-langs', 'all');
     }
@@ -354,8 +491,10 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
   }
 
   // Speed Limit
-  if (options.limitRate && options.limitRate.trim()) {
-    args.push('--limit-rate', options.limitRate.trim());
+  if (typeof options.limitRate === 'string' && options.limitRate.trim()) {
+    const limitRate = options.limitRate.trim();
+    if (!/^\d+(?:\.\d+)?[kKmMgG]?$/.test(limitRate)) throw new Error('Invalid download speed limit.');
+    args.push('--limit-rate', limitRate);
   }
 
   // Split Chapters
@@ -372,28 +511,34 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
   }
 
   // Auth & Network
-  if (options.proxy && options.proxy.trim()) {
-    args.push('--proxy', options.proxy.trim());
+  if (typeof options.proxy === 'string' && options.proxy.trim()) {
+    const proxy = options.proxy.trim();
+    if (/[\r\n\0]/.test(proxy) || proxy.length > 2000) throw new Error('Invalid proxy URL.');
+    args.push('--proxy', proxy);
   }
-  if (options.username && options.username.trim()) {
-    args.push('--username', options.username.trim());
-  }
-  if (options.password && options.password.trim()) {
-    args.push('--password', options.password.trim());
-  }
-  if (options.videoPassword && options.videoPassword.trim()) {
-    args.push('--video-password', options.videoPassword.trim());
+  const credentials = [
+    ['--username', options.username],
+    ['--password', options.password],
+    ['--video-password', options.videoPassword]
+  ];
+  for (const [flag, value] of credentials) {
+    if (typeof value !== 'string' || !value.trim()) continue;
+    if (value.length > 2000 || /[\r\n\0]/.test(value)) throw new Error('Invalid authentication value.');
+    args.push(flag, value.trim());
   }
   if (options.geoBypass) {
     args.push('--geo-bypass');
   }
 
   // Performance & Processing
-  if (options.concurrentFragments && Number(options.concurrentFragments) > 0) {
-    args.push('--concurrent-fragments', String(options.concurrentFragments));
+  const concurrentFragments = Number(options.concurrentFragments);
+  if (Number.isFinite(concurrentFragments) && concurrentFragments > 0) {
+    args.push('--concurrent-fragments', String(Math.min(16, Math.floor(concurrentFragments))));
   }
-  if (options.timeRange && options.timeRange.trim()) {
-    args.push('--download-sections', `*${options.timeRange.trim()}`);
+  if (typeof options.timeRange === 'string' && options.timeRange.trim()) {
+    const timeRange = options.timeRange.trim();
+    if (!/^[0-9:.+-]+$/.test(timeRange) || timeRange.length > 100) throw new Error('Invalid time range.');
+    args.push('--download-sections', `*${timeRange}`);
   }
   if (options.writeAutoSubs) {
     args.push('--write-auto-subs');
@@ -405,12 +550,12 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
     args.push('--extractor-args', 'generic:impersonate');
   }
 
-  if (options.cookieBrowser) {
+  if (IMPERSONATION_BROWSERS.includes(options.cookieBrowser)) {
     args.push('--cookies-from-browser', options.cookieBrowser);
   }
 
-  if (options.cookiesFile) {
-    args.push('--cookies', options.cookiesFile);
+  if (typeof options.cookiesFile === 'string' && options.cookiesFile.trim()) {
+    args.push('--cookies', options.cookiesFile.trim());
   }
 
   args.push(...buildRequestHeaders(url, options));
@@ -451,9 +596,9 @@ function isManifestUrl(u) {
   return ext === 'm3u8' || ext === 'mpd';
 }
 
-async function sniffVideoUrl(url, win, timeoutMs = 15000) {
+async function sniffVideoUrl(url, win, timeoutMs = 15000, operation = null) {
   if (win) {
-    win.webContents.send('tool-progress', {
+    sendToolProgress(win, {
       tool: 'url-downloader',
       url,
       type: 'start',
@@ -463,8 +608,16 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
   }
 
   return new Promise((resolve, reject) => {
+    if (operation && operation.cancelled) { reject(cancelledError()); return; }
     const candidates = [];
+    const candidateUrls = new Set();
+    const addCandidate = (candidateUrl, size = 0) => {
+      if (!candidateUrl || candidateUrls.has(candidateUrl) || candidates.length >= 500) return;
+      candidateUrls.add(candidateUrl);
+      candidates.push({ url: candidateUrl, size });
+    };
     let isDone = false;
+    const finishTimers = new Set();
 
     // Isolated, non-persistent session so the request listener and captured
     // cookies never touch the app's default session or other concurrent sniffs.
@@ -485,6 +638,21 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
     });
     const snifferSession = snifferWin.webContents.session;
 
+    // The fallback loads untrusted pages only to observe media requests. It
+    // never needs device/location/notification access and must not save files
+    // as a side effect of the automated consent/play clicks below.
+    const denyPermissionRequest = (_webContents, _permission, callback) => callback(false);
+    const denyPermissionCheck = () => false;
+    const denyDevicePermission = () => false;
+    const blockDownload = (event, item) => {
+      event.preventDefault();
+      try { item.cancel(); } catch {}
+    };
+    try { snifferSession.setPermissionRequestHandler(denyPermissionRequest); } catch {}
+    try { snifferSession.setPermissionCheckHandler(denyPermissionCheck); } catch {}
+    try { snifferSession.setDevicePermissionHandler(denyDevicePermission); } catch {}
+    try { snifferSession.on('will-download', blockDownload); } catch {}
+
     snifferWin.webContents.setWindowOpenHandler(() => {
       return { action: 'deny' };
     });
@@ -503,13 +671,29 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
     snifferWin.webContents.setUserAgent(standardUa);
 
     const teardown = () => {
+      for (const timer of finishTimers) clearTimeout(timer);
+      finishTimers.clear();
+      try { snifferSession.removeListener('will-download', blockDownload); } catch {}
+      try { snifferSession.setPermissionRequestHandler(null); } catch {}
+      try { snifferSession.setPermissionCheckHandler(null); } catch {}
+      try { snifferSession.setDevicePermissionHandler(null); } catch {}
       try { snifferSession.webRequest.onHeadersReceived(null); } catch {}
       if (!snifferWin.isDestroyed()) snifferWin.destroy();
     };
 
+    const abort = () => {
+      if (isDone) return;
+      isDone = true;
+      if (operation && operation.abortSniffer === abort) operation.abortSniffer = null;
+      teardown();
+      reject(cancelledError());
+    };
+    if (operation) operation.abortSniffer = abort;
+
     const done = async () => {
       if (isDone) return;
       isDone = true;
+      if (operation && operation.abortSniffer === abort) operation.abortSniffer = null;
 
       // Final DOM scrape: catch plain progressive players whose <video>/<source>
       // src or og:video tag never surfaced as a sniffable network response.
@@ -529,9 +713,7 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
             })();
           `).catch(() => []);
           for (const u of (domUrls || [])) {
-            if (u && /^https?:/i.test(u) && !candidates.some(c => c.url === u)) {
-              candidates.push({ url: u, size: 0 });
-            }
+            if (u && /^https?:/i.test(u)) addCandidate(u);
           }
         }
       } catch {}
@@ -569,11 +751,21 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
       resolve({ url: candidates[0].url, cookiesText, userAgent });
     };
 
+    const scheduleDone = (delay) => {
+      const timer = setTimeout(() => {
+        finishTimers.delete(timer);
+        done();
+      }, delay);
+      if (typeof timer.unref === 'function') timer.unref();
+      finishTimers.add(timer);
+    };
+
     snifferSession.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, callback) => {
       callback({ cancel: false });
 
-      const type = (details.responseHeaders['content-type'] || details.responseHeaders['Content-Type'] || [])[0] || '';
-      const sizeStr = (details.responseHeaders['content-length'] || details.responseHeaders['Content-Length'] || [])[0] || '0';
+      const responseHeaders = details.responseHeaders || {};
+      const type = (responseHeaders['content-type'] || responseHeaders['Content-Type'] || [])[0] || '';
+      const sizeStr = (responseHeaders['content-length'] || responseHeaders['Content-Length'] || [])[0] || '0';
       const size = parseInt(sizeStr, 10) || 0;
       const ext = urlPathExt(details.url);
 
@@ -586,10 +778,10 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
       // Skip obvious page/script/style assets that can share a video-ish MIME.
       if ((isVideoType || isVideoUrl) && !['js', 'mjs', 'html', 'css'].includes(ext)) {
         if (isManifest || size > 100000 || size === 0) {
-          candidates.push({ url: details.url, size });
+          addCandidate(details.url, size);
           // A manifest is the ideal target — give late variants a brief window, then finish.
           if (isManifest || candidates.length >= 5) {
-            setTimeout(done, 1500);
+            scheduleDone(1500);
           }
         }
       }
@@ -626,7 +818,7 @@ async function sniffVideoUrl(url, win, timeoutMs = 15000) {
       `).catch(() => {});
     });
 
-    setTimeout(done, timeoutMs);
+    scheduleDone(timeoutMs);
   });
 }
 
@@ -658,9 +850,15 @@ function fetchThumbnailDataUrl(thumbUrl, referer, timeoutMs = 12000) {
       finish(reject, new Error('Thumbnail request timed out'));
     }, timeoutMs);
 
-    request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
-    request.setHeader('Accept', 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8');
-    if (referer) request.setHeader('Referer', referer);
+    try {
+      request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+      request.setHeader('Accept', 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8');
+      if (referer && isHttpUrl(referer) && !/[\r\n]/.test(referer)) request.setHeader('Referer', referer);
+    } catch (err) {
+      try { request.abort(); } catch {}
+      finish(reject, err);
+      return;
+    }
 
     request.on('response', (response) => {
       const status = response.statusCode || 0;
@@ -671,13 +869,17 @@ function fetchThumbnailDataUrl(thumbUrl, referer, timeoutMs = 12000) {
         return;
       }
 
-      let contentType = response.headers['content-type'] || 'image/jpeg';
-      if (Array.isArray(contentType)) contentType = contentType[0];
-      const mime = String(contentType).split(';')[0].trim() || 'image/jpeg';
+      const declaredLength = Number(response.headers['content-length']);
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_BYTES) {
+        try { request.abort(); } catch {}
+        finish(reject, new Error('Thumbnail too large'));
+        return;
+      }
 
       const chunks = [];
       let total = 0;
       response.on('data', (chunk) => {
+        if (settled) return;
         total += chunk.length;
         if (total > MAX_BYTES) {
           try { request.abort(); } catch {}
@@ -687,9 +889,20 @@ function fetchThumbnailDataUrl(thumbUrl, referer, timeoutMs = 12000) {
         chunks.push(chunk);
       });
       response.on('end', () => {
+        if (settled) return;
         const buf = Buffer.concat(chunks);
         if (!buf.length) { finish(reject, new Error('Empty thumbnail')); return; }
-        finish(resolve, `data:${mime};base64,${buf.toString('base64')}`);
+        const isJpeg = buf.length >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
+        const isPng = buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
+        const isGif = buf.length >= 6 && /^GIF8[79]a$/.test(buf.subarray(0, 6).toString('ascii'));
+        const isWebp = buf.length >= 12 && buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP';
+        const isAvif = buf.length >= 12 && buf.subarray(4, 8).toString('ascii') === 'ftyp' && ['avif', 'avis'].includes(buf.subarray(8, 12).toString('ascii'));
+        if (!isJpeg && !isPng && !isGif && !isWebp && !isAvif) {
+          finish(reject, new Error('Thumbnail content is not a recognized image'));
+          return;
+        }
+        const detectedMime = isJpeg ? 'image/jpeg' : isPng ? 'image/png' : isGif ? 'image/gif' : isWebp ? 'image/webp' : 'image/avif';
+        finish(resolve, `data:${detectedMime};base64,${buf.toString('base64')}`);
       });
       response.on('error', (err) => finish(reject, err));
     });
@@ -700,16 +913,26 @@ function fetchThumbnailDataUrl(thumbUrl, referer, timeoutMs = 12000) {
 }
 
 function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
-  const activeProcessesByWindow = new Map();
+  const activeDownloadsByWindow = new Map();
+  const activeInfoByWindow = new Map();
+  const MAX_CONCURRENT_INFO_REQUESTS = 3;
 
   ipcMain.handle('url-downloader-download', async (event, options = {}) => {
     const winId = event.sender.id;
+    options = options && typeof options === 'object' ? options : {};
     const url = String(options.url || '').trim();
+    const operation = { cancelled: false, processes: new Set(), abortSniffer: null, cancelWaiters: new Set() };
 
     try {
       if (!isHttpUrl(url)) {
         return { success: false, error: 'Enter a valid http or https URL.' };
       }
+      let windowOperations = activeDownloadsByWindow.get(winId);
+      if (!windowOperations) {
+        windowOperations = new Set();
+        activeDownloadsByWindow.set(winId, windowOperations);
+      }
+      windowOperations.add(operation);
 
       const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
       if (!pythonInfo || !pythonInfo.cmd) {
@@ -718,10 +941,17 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       const outDir = validateOutputDir(options.outputDir) || defaultOutputDir();
       fs.mkdirSync(outDir, { recursive: true });
+      operation.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'muxmelt-ytdlp-'));
+      options = { ...options, tempDir: operation.tempDir };
+      const downloadStartedAt = Date.now();
+      const filesBeforeDownload = new Set();
+      try {
+        for (const name of fs.readdirSync(outDir)) filesBeforeDownload.add(path.resolve(outDir, name));
+      } catch {}
 
       const win = getMainWindow();
       if (win) {
-        win.webContents.send('tool-progress', {
+        sendToolProgress(win, {
           tool: 'url-downloader',
           url,
           type: 'start',
@@ -734,6 +964,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       let outputPath = '';
 
       const runDownload = (args, runOptions = {}) => new Promise((resolve, reject) => {
+        if (operation.cancelled) { reject(cancelledError()); return; }
         const statusPrefix = runOptions.statusPrefix || '';
         const modeLabel = runOptions.modeLabel ? `${runOptions.modeLabel} | ` : '';
         let lastStageStatus = '';
@@ -744,8 +975,11 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         let lastRawPercent = 0;
         let smoothedEtaSeconds = -1;
         let lastSpeed = '';
+        let stdoutRemainder = '';
+        let stderrRemainder = '';
+        let processSettled = false;
 
-        const proc = spawn(pythonInfo.cmd, args, {
+        const proc = spawnProcessTree(pythonInfo.cmd, args, {
           stdio: ['ignore', 'pipe', 'pipe'],
           env: {
             ...process.env,
@@ -754,10 +988,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           windowsHide: true
         });
 
-        if (!activeProcessesByWindow.has(winId)) {
-          activeProcessesByWindow.set(winId, new Set());
-        }
-        activeProcessesByWindow.get(winId).add(proc);
+        operation.processes.add(proc);
 
         const parseEtaToSeconds = (etaStr) => {
           if (!etaStr) return 0;
@@ -786,7 +1017,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           const stageStatus = describeYtDlpStage(trimmed, modeLabel);
           if (stageStatus && stageStatus !== lastStageStatus && win) {
             lastStageStatus = stageStatus;
-            win.webContents.send('tool-progress', {
+            sendToolProgress(win, {
               tool: 'url-downloader',
               url,
               type: 'start',
@@ -828,7 +1059,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             
             if (progress.speed) lastSpeed = progress.speed;
 
-            win.webContents.send('tool-progress', {
+            sendToolProgress(win, {
               tool: 'url-downloader',
               url,
               type: 'progress',
@@ -843,32 +1074,47 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           }
         };
 
+        // Cap the retained buffers. Progress parsing happens per-line above, so
+        // only the tail is needed afterwards (for error extraction / the output
+        // path fallback). Without this, a long playlist or a very chatty
+        // extractor grows these strings unbounded in the main process.
+        const capBuffer = (s) => (s.length > 65536 ? s.slice(-32768) : s);
+        const handleChunkLines = (text, stream) => {
+          const combined = (stream === 'stdout' ? stdoutRemainder : stderrRemainder) + text;
+          const lines = combined.split(/\r\n|\n|\r/);
+          const remainder = (lines.pop() || '').slice(-65536);
+          if (stream === 'stdout') stdoutRemainder = remainder;
+          else stderrRemainder = remainder;
+          lines.forEach(line => handleLine(line.length > 65536 ? line.slice(-65536) : line));
+        };
+
         proc.stdout.on('data', (chunk) => {
           const text = chunk.toString();
           stdout += text;
-          text.split(/\r?\n|\r/).forEach(handleLine);
+          stdout = capBuffer(stdout);
+          handleChunkLines(text, 'stdout');
         });
 
         proc.stderr.on('data', (chunk) => {
           const text = chunk.toString();
           stderr += text;
-          text.split(/\r?\n|\r/).forEach(handleLine);
+          stderr = capBuffer(stderr);
+          handleChunkLines(text, 'stderr');
         });
 
-        proc.on('error', (err) => {
-          const procs = activeProcessesByWindow.get(winId);
-          if (procs) {
-            procs.delete(proc);
-            if (procs.size === 0) activeProcessesByWindow.delete(winId);
-          }
-          reject(err);
+        proc.once('error', (err) => {
+          if (processSettled) return;
+          processSettled = true;
+          operation.processes.delete(proc);
+          reject(operation.cancelled ? cancelledError() : err);
         });
-        proc.on('close', (code) => {
-          const procs = activeProcessesByWindow.get(winId);
-          if (procs) {
-            procs.delete(proc);
-            if (procs.size === 0) activeProcessesByWindow.delete(winId);
-          }
+        proc.once('close', (code) => {
+          if (processSettled) return;
+          processSettled = true;
+          operation.processes.delete(proc);
+          if (stdoutRemainder) handleLine(stdoutRemainder);
+          if (stderrRemainder) handleLine(stderrRemainder);
+          if (operation.cancelled) { reject(cancelledError()); return; }
           if (code === 0) resolve();
           else {
             const combined = `${stderr}\n${stdout}`.trim();
@@ -890,19 +1136,24 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       const format = String(options.format || 'best');
       const cookiesFile = options.cookiesFile && typeof options.cookiesFile === 'string' ? options.cookiesFile.trim() : '';
-      
+
+      // Build once before entering the network-retry block so malformed user
+      // options fail immediately instead of triggering installs and sniffer work.
+      const initialArgs = buildYtDlpArgs(pythonInfo, url, outDir, options);
       try {
-        await runDownload(buildYtDlpArgs(pythonInfo, url, outDir, options));
+        await runDownload(initialArgs);
       } catch (err) {
+        if (operation.cancelled) throw cancelledError();
         const extractionFailure = isExtractionFailure(err);
         // Universal fallback: don't give up on the first error. Whatever the
         // failure (403/blocked, 404 "not found", geo, or an unrecognised error),
         // fall through to browser-impersonation retries and then the in-app
         // stream sniffer below — if the page plays in a browser, we try to grab
         // it. (A genuinely dead link just fails a bit later, after we've tried.)
-        if (!extractionFailure && !(await hasPythonModule(pythonInfo, 'curl_cffi'))) {
+        if (!extractionFailure && !(await hasPythonModule(pythonInfo, 'curl_cffi', operation))) {
+          if (operation.cancelled) throw cancelledError();
           if (win) {
-            win.webContents.send('tool-progress', {
+            sendToolProgress(win, {
               tool: 'url-downloader',
               url,
               type: 'start',
@@ -910,12 +1161,13 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             });
           }
           try {
-            await installYtDlpImpersonationDeps(pythonInfo);
+            await installYtDlpImpersonationDeps(pythonInfo, operation);
           } catch (installErr) {
+            if (operation.cancelled) throw cancelledError();
             // No network or a read-only install — don't abort. Impersonation may
             // already be available, or the retries will surface a clear error.
             if (win) {
-              win.webContents.send('tool-progress', {
+              sendToolProgress(win, {
                 tool: 'url-downloader',
                 url,
                 type: 'start',
@@ -948,7 +1200,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         let lastRetryErr = err;
         for (const config of retryConfigs) {
           if (win) {
-            win.webContents.send('tool-progress', {
+            sendToolProgress(win, {
               tool: 'url-downloader',
               url,
               type: 'start',
@@ -968,6 +1220,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             lastRetryErr = null;
             break;
           } catch (e) {
+            if (operation.cancelled) throw cancelledError();
             lastRetryErr = e;
           }
         }
@@ -977,7 +1230,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         // exposes an m3u8/og:video — and it's much faster than the sniffer.
         if (lastRetryErr) {
           if (win) {
-            win.webContents.send('tool-progress', {
+            sendToolProgress(win, {
               tool: 'url-downloader', url, type: 'start', progress: 0.02,
               status: 'Site extractor failed — trying generic extractor...'
             });
@@ -992,6 +1245,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             });
             lastRetryErr = null;
           } catch (e) {
+            if (operation.cancelled) throw cancelledError();
             lastRetryErr = e;
           }
         }
@@ -999,14 +1253,15 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         if (lastRetryErr) {
           let sniffedData = null;
           try {
-            sniffedData = await sniffVideoUrl(url, win, 30000);
+            sniffedData = await sniffVideoUrl(url, win, 30000, operation);
           } catch (sniffErr) {
+            if (operation.cancelled) throw cancelledError();
             throw lastRetryErr;
           }
           
           if (sniffedData && sniffedData.url) {
             if (win) {
-              win.webContents.send('tool-progress', {
+              sendToolProgress(win, {
                 tool: 'url-downloader', url, type: 'start', progress: 0.1,
                 status: 'Stream found! Downloading...'
               });
@@ -1072,7 +1327,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
               for (let i = 0; i < sniffAttempts.length; i++) {
                 const attempt = sniffAttempts[i];
                 if (i > 0 && win) {
-                  win.webContents.send('tool-progress', {
+                  sendToolProgress(win, {
                     tool: 'url-downloader', url, type: 'start', progress: 0.1,
                     status: `Stream blocked the previous request — retrying (${attempt.label})...`
                   });
@@ -1085,6 +1340,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
                   downloaded = true;
                   break;
                 } catch (e) {
+                  if (operation.cancelled) throw cancelledError();
                   sniffErr = e;
                 }
               }
@@ -1100,18 +1356,25 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         }
       }
 
-      if (!outputPath) {
+      outputPath = resolveOutputFile(outputPath, outDir);
+      const concurrentOperations = activeDownloadsByWindow.get(winId);
+      if (!outputPath && (!concurrentOperations || concurrentOperations.size <= 1)) {
         const candidates = fs.readdirSync(outDir)
-          .map(name => path.join(outDir, name))
-          .filter(file => {
-            try { return fs.statSync(file).isFile(); } catch { return false; }
+          .map(name => {
+            const file = path.resolve(outDir, name);
+            try { return { file, stat: fs.statSync(file) }; } catch { return null; }
           })
-          .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-        outputPath = candidates[0] || '';
+          .filter(file => {
+            if (!file || !file.stat.isFile() || /\.(part|ytdl|tmp)$/i.test(file.file)) return false;
+            return !filesBeforeDownload.has(file.file) || file.stat.mtimeMs >= downloadStartedAt - 2000;
+          })
+          .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+        outputPath = candidates[0] ? candidates[0].file : '';
       }
+      if (!outputPath) throw new Error('Download finished, but the output file could not be located.');
 
       if (win) {
-        win.webContents.send('tool-progress', {
+        sendToolProgress(win, {
           tool: 'url-downloader',
           url,
           type: 'complete',
@@ -1123,6 +1386,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       return { success: true, output: outputPath, outputDir: outDir };
     } catch (err) {
+      if (operation.cancelled || (err && err.code === 'CANCELLED')) {
+        return { success: false, cancelled: true, error: 'Download cancelled by user.' };
+      }
       if ((err.message || '').toLowerCase().includes('no module named')) {
         return { success: false, error: 'yt-dlp is not installed in Python. Run setup again or install Python dependencies from python/requirements.txt.' };
       }
@@ -1130,37 +1396,80 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         return { success: false, error: 'This site blocks standard downloads. Install the bundled Python dependencies again so yt-dlp can use browser impersonation (curl_cffi).' };
       }
       return { success: false, error: formatDownloadError(err, url) };
+    } finally {
+      operation.cancelWaiters.clear();
+      if (operation.tempDir) {
+        try { fs.rmSync(operation.tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+      }
+      const windowOperations = activeDownloadsByWindow.get(winId);
+      if (windowOperations) {
+        windowOperations.delete(operation);
+        if (windowOperations.size === 0) activeDownloadsByWindow.delete(winId);
+      }
     }
   });
 
   ipcMain.handle('url-downloader-cancel', async (event) => {
     const winId = event.sender.id;
-    const procs = activeProcessesByWindow.get(winId);
-    if (procs && procs.size > 0) {
-      for (const proc of procs) {
-        try { proc.kill('SIGTERM'); } catch {}
+    const operations = activeDownloadsByWindow.get(winId);
+    if (operations && operations.size > 0) {
+      for (const operation of operations) {
+        operation.cancelled = true;
+        if (typeof operation.abortSniffer === 'function') operation.abortSniffer();
+        for (const cancelWaiter of [...operation.cancelWaiters]) cancelWaiter();
+        for (const proc of operation.processes) terminateProcessTree(proc);
       }
-      activeProcessesByWindow.delete(winId);
-      return { success: true };
+      return { success: true, cancelled: operations.size };
     }
     return { success: false, error: 'No active URL download to cancel' };
   });
 
   ipcMain.handle('url-downloader-info', async (event, options = {}) => {
+    const winId = event.sender.id;
+    options = options && typeof options === 'object' ? options : {};
     const url = String(options.url || '').trim();
+    const suppliedRequestId = typeof options.requestId === 'string' ? options.requestId.trim() : '';
+    if (suppliedRequestId && (!/^[A-Za-z0-9._:-]+$/.test(suppliedRequestId) || suppliedRequestId.length > 200)) {
+      return { success: false, error: 'Invalid video information request ID.' };
+    }
+    const requestId = suppliedRequestId || `legacy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const cancelledInfoResponse = () => ({
+      success: false,
+      cancelled: true,
+      requestId,
+      error: 'Video information request cancelled.'
+    });
     if (!isHttpUrl(url)) {
-      return { success: false, error: 'Enter a valid http or https URL.' };
+      return { success: false, requestId, error: 'Enter a valid http or https URL.' };
     }
 
     const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
     if (!pythonInfo || !pythonInfo.cmd) {
-      return { success: false, error: 'Python environment not found.' };
+      return { success: false, requestId, error: 'Python environment not found.' };
     }
 
+    let windowRequests = activeInfoByWindow.get(winId);
+    if (!windowRequests) {
+      windowRequests = new Map();
+      activeInfoByWindow.set(winId, windowRequests);
+    }
+    if (windowRequests.has(requestId)) {
+      return { success: false, requestId, error: 'This video information request is already running.' };
+    }
+    if (windowRequests.size >= MAX_CONCURRENT_INFO_REQUESTS) {
+      return { success: false, requestId, error: 'Too many video information requests are running.' };
+    }
+    const operation = { cancelled: false, processes: new Set(), cancelWaiters: new Set() };
+    windowRequests.set(requestId, operation);
+
+    try {
     const runInfo = (args) => new Promise((resolve, reject) => {
+      if (operation.cancelled) { reject(cancelledError()); return; }
+      const MAX_INFO_OUTPUT = 16 * 1024 * 1024;
       let stdout = '';
       let stderr = '';
-      const proc = spawn(pythonInfo.cmd, args, {
+      let settled = false;
+      const proc = spawnProcessTree(pythonInfo.cmd, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
@@ -1168,17 +1477,52 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         },
         windowsHide: true
       });
+      operation.processes.add(proc);
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        terminateProcessTree(proc);
+        operation.processes.delete(proc);
+        reject(new Error('Timed out while fetching video information.'));
+      }, 60000);
+      if (typeof timer.unref === 'function') timer.unref();
+
+      const append = (current, chunk) => {
+        const next = current + chunk.toString();
+        if (next.length > MAX_INFO_OUTPUT) {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            terminateProcessTree(proc);
+            operation.processes.delete(proc);
+            reject(new Error('Video information response was too large.'));
+          }
+          return current;
+        }
+        return next;
+      };
 
       proc.stdout.on('data', (chunk) => {
-        stdout += chunk.toString();
+        stdout = append(stdout, chunk);
       });
 
       proc.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
+        stderr = append(stderr, chunk);
       });
 
-      proc.on('error', (err) => reject(err));
-      proc.on('close', (code) => {
+      proc.once('error', (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        operation.processes.delete(proc);
+        reject(operation.cancelled ? cancelledError() : err);
+      });
+      proc.once('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        operation.processes.delete(proc);
+        if (operation.cancelled) { reject(cancelledError()); return; }
         if (code === 0) {
           resolve(stdout);
         } else {
@@ -1201,10 +1545,10 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         args.push('--impersonate', 'chrome', '--extractor-args', 'generic:impersonate');
       }
       if (config.cookieBrowser) {
-        args.push('--cookies-from-browser', config.cookieBrowser);
+        if (IMPERSONATION_BROWSERS.includes(config.cookieBrowser)) args.push('--cookies-from-browser', config.cookieBrowser);
       }
-      if (config.cookiesFile) {
-        args.push('--cookies', config.cookiesFile);
+      if (typeof config.cookiesFile === 'string' && config.cookiesFile.trim()) {
+        args.push('--cookies', config.cookiesFile.trim());
       }
       args.push(...buildRequestHeaders(url, config));
       args.push(url);
@@ -1221,16 +1565,23 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     try {
       const stdout = await runInfo(buildInfoArgs({ cookiesFile: options.cookiesFile, cookieBrowser: options.cookieBrowser }));
       const info = parseJsonFromStdout(stdout);
-      return { success: true, info };
+      return { success: true, requestId, info };
     } catch (err) {
+      if (operation.cancelled || (err && err.code === 'CANCELLED')) {
+        return cancelledInfoResponse();
+      }
       if (!shouldRetryWithImpersonation(err)) {
-        return { success: false, error: err.message || 'Failed to fetch video info.' };
+        return { success: false, requestId, error: err.message || 'Failed to fetch video info.' };
       }
 
-      if (!(await hasPythonModule(pythonInfo, 'curl_cffi'))) {
+      if (!(await hasPythonModule(pythonInfo, 'curl_cffi', operation))) {
+        if (operation.cancelled) return cancelledInfoResponse();
         try {
-          await installYtDlpImpersonationDeps(pythonInfo);
+          await installYtDlpImpersonationDeps(pythonInfo, operation);
         } catch (e) {
+          if (operation.cancelled || (e && e.code === 'CANCELLED')) {
+            return cancelledInfoResponse();
+          }
           console.error('Failed to install impersonation dependencies during info fetch:', e);
         }
       }
@@ -1239,20 +1590,50 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       let lastErr = err;
       for (const config of retryConfigs) {
+        if (operation.cancelled) return cancelledInfoResponse();
         try {
           const stdout = await runInfo(buildInfoArgs(config));
           const info = parseJsonFromStdout(stdout);
-          return { success: true, info };
+          return { success: true, requestId, info };
         } catch (e) {
+          if (operation.cancelled || (e && e.code === 'CANCELLED')) {
+            return cancelledInfoResponse();
+          }
           lastErr = e;
         }
       }
 
-      return { success: false, error: lastErr.message || 'Failed to fetch video info.' };
+      return { success: false, requestId, error: lastErr.message || 'Failed to fetch video info.' };
+    }
+    } catch (err) {
+      if (operation.cancelled || (err && err.code === 'CANCELLED')) {
+        return cancelledInfoResponse();
+      }
+      return { success: false, requestId, error: err.message || 'Failed to fetch video info.' };
+    } finally {
+      operation.cancelWaiters.clear();
+      const requests = activeInfoByWindow.get(winId);
+      if (requests) {
+        requests.delete(requestId);
+        if (requests.size === 0) activeInfoByWindow.delete(winId);
+      }
     }
   });
 
+  ipcMain.handle('url-downloader-info-cancel', async (event, requestId) => {
+    const id = typeof requestId === 'string' ? requestId.trim() : '';
+    if (!id) return { success: false, error: 'A video information request ID is required.' };
+    const requests = activeInfoByWindow.get(event.sender.id);
+    const operation = requests && requests.get(id);
+    if (!operation) return { success: false, error: 'Video information request is not active.' };
+    operation.cancelled = true;
+    for (const cancelWaiter of [...operation.cancelWaiters]) cancelWaiter();
+    for (const proc of operation.processes) terminateProcessTree(proc);
+    return { success: true, requestId: id };
+  });
+
   ipcMain.handle('url-downloader-thumbnail', async (event, options = {}) => {
+    options = options && typeof options === 'object' ? options : {};
     const url = String(options.url || '').trim();
     const referer = String(options.referer || '').trim();
     if (!isHttpUrl(url)) {
@@ -1273,17 +1654,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     }
 
     try {
-      const args = [
-        ...(pythonInfo.args || []),
-        '-m',
-        'pip',
-        'install',
-        '--upgrade',
-        'yt-dlp[default,curl-cffi]',
-        '--no-warn-script-location'
-      ];
-
-      const { stdout } = await execFileAsync(pythonInfo.cmd, args, { timeout: 300000 });
+      const { stdout } = await installYtDlpImpersonationDeps(pythonInfo);
       return { success: true, message: stdout.trim() };
     } catch (err) {
       return { success: false, error: err.message || String(err) };

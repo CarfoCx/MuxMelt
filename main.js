@@ -30,12 +30,17 @@ const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 const IS_PACKAGED = app.isPackaged;
 const RESOURCES_PATH = IS_PACKAGED ? path.join(process.resourcesPath) : null;
 const IS_WIN = process.platform === 'win32';
-const APP_DIR = IS_PACKAGED ? __dirname.replace('app.asar', 'app.asar.unpacked') : __dirname;
+// Electron can load renderer/preload files from app.asar, but an external
+// Python interpreter needs the unpacked Python tree.
+const APP_DIR = __dirname;
+const PYTHON_APP_DIR = IS_PACKAGED
+  ? path.join(process.resourcesPath, 'app.asar.unpacked')
+  : __dirname;
 
 if (IS_WIN) {
   let disableHardwareAcceleration = false;
   try {
-    const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
+    const settings = loadSettings();
     if (settings && settings.global && settings.global.disableHardwareAcceleration) {
       disableHardwareAcceleration = true;
     }
@@ -80,28 +85,46 @@ const SLIM_PYTHON_DIR = path.join(app.getPath('userData'), 'python-env');
 const SLIM_PYTHON_EXE = IS_WIN
   ? path.join(SLIM_PYTHON_DIR, 'python.exe')
   : path.join(SLIM_PYTHON_DIR, 'bin', 'python3');
+const SLIM_SETUP_MARKER = path.join(SLIM_PYTHON_DIR, '.setup-complete');
 
 const FFMPEG_PATH = BUNDLED_FFMPEG && fs.existsSync(BUNDLED_FFMPEG)
   ? BUNDLED_FFMPEG
   : (DEV_FFMPEG && fs.existsSync(DEV_FFMPEG) ? DEV_FFMPEG : null);
 if (FFMPEG_PATH) {
-  process.env.PATH = FFMPEG_PATH + path.delimiter + process.env.PATH;
+  process.env.PATH = [FFMPEG_PATH, process.env.PATH].filter(Boolean).join(path.delimiter);
 }
 
 function loadSettings() {
-  try { return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8')); } catch { return {}; }
+  try {
+    if (fs.statSync(SETTINGS_PATH).size > 5 * 1024 * 1024) return {};
+    const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
+    return settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
+  } catch {
+    return {};
+  }
 }
 
 function saveSettings(settings) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    console.warn('Refusing to save invalid settings payload.');
+    return false;
+  }
+
   // Write-then-rename so a crash mid-write can't truncate settings.json —
   // it is read before app.whenReady() to decide GPU configuration.
   const tmpPath = SETTINGS_PATH + '.tmp';
   try {
-    fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2));
+    const serialized = JSON.stringify(settings, null, 2);
+    if (Buffer.byteLength(serialized, 'utf8') > 5 * 1024 * 1024) {
+      throw new Error('Settings payload exceeds the 5 MB limit');
+    }
+    fs.writeFileSync(tmpPath, serialized, { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmpPath, SETTINGS_PATH);
+    return true;
   } catch (err) {
     console.error('Failed to save settings:', err.message);
     try { fs.rmSync(tmpPath, { force: true }); } catch {}
+    return false;
   }
 }
 
@@ -137,8 +160,11 @@ async function restartPythonCallback() {
     for (let i = 0; i < 20 && !(await isPortAvailable(getPythonPort())); i++) {
       await new Promise(r => setTimeout(r, 250));
     }
+    if (!(await isPortAvailable(getPythonPort()))) {
+      throw new Error(`Backend port ${getPythonPort()} is still in use after stopping the old process`);
+    }
     await startPythonServer({
-      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: APP_DIR, userDataDir: app.getPath('userData')
+      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: PYTHON_APP_DIR, userDataDir: app.getPath('userData')
     }, SHUTDOWN_TOKEN, getMainWindow);
     return { success: true };
   } catch (err) {
@@ -210,10 +236,16 @@ app.whenReady().then(async () => {
       clearChromiumGpuCaches();
     }
 
-    if (needsSlimSetup(IS_SLIM, SLIM_PYTHON_EXE)) {
+    if (needsSlimSetup(IS_SLIM, SLIM_PYTHON_EXE, SLIM_SETUP_MARKER)) {
       updateSplash(15, 'Preparing first-time setup');
       await runSlimSetup({
-        appDir: APP_DIR, SLIM_PYTHON_DIR, SLIM_PYTHON_EXE, IS_WIN, IS_PACKAGED
+        appDir: APP_DIR,
+        pythonAppDir: PYTHON_APP_DIR,
+        SLIM_PYTHON_DIR,
+        SLIM_PYTHON_EXE,
+        SLIM_SETUP_MARKER,
+        IS_WIN,
+        IS_PACKAGED
       });
     }
 
@@ -223,32 +255,38 @@ app.whenReady().then(async () => {
     
     updateSplash(55, 'Starting media backend', `Port ${port}`);
     await startPythonServer({ 
-      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: APP_DIR, userDataDir: app.getPath('userData')
+      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: PYTHON_APP_DIR, userDataDir: app.getPath('userData')
     }, SHUTDOWN_TOKEN, getMainWindow);
 
+    // Register updater IPC before loading renderer code. The renderer checks
+    // for updates during its own initialization and can invoke immediately.
+    if (app.isPackaged) {
+      initAutoUpdater(sendUpdateEvent);
+    } else {
+      console.log('Skipping auto-updater in development mode.');
+    }
+    registerUpdaterIpcHandlers(sendUpdateEvent);
+
     updateSplash(82, 'Loading workspace');
-    createWindow(__dirname);
+    await createWindow(APP_DIR);
 
     // Warm the ffmpeg lookup off the UI thread so the first convert/probe
     // doesn't block on a synchronous PATH probe when the user clicks.
     require('./node-tools/ffmpeg-runner').findFfmpegAsync().catch(() => {});
 
-    if (app.isPackaged) {
-      updateSplash(92, 'Checking for updates');
-      initAutoUpdater(sendUpdateEvent);
-      registerUpdaterIpcHandlers(sendUpdateEvent);
-    } else {
-      console.log('Skipping auto-updater in development mode.');
-      // Register them anyway so dev tools don't throw errors when UI calls it
-      registerUpdaterIpcHandlers(sendUpdateEvent);
-    }
   } catch (err) {
+    if (err && err.code === 'SETUP_CANCELLED') {
+      closeSplash();
+      killPython(SHUTDOWN_TOKEN, true);
+      app.quit();
+      return;
+    }
     console.error('Startup failed:', err.message);
     closeSplash();
     killPython(SHUTDOWN_TOKEN, true);
     dialog.showErrorBox(
       'Startup Error',
-      'Failed to start the Python backend.\n\n' +
+      'MuxMelt could not finish starting.\n\n' +
       'This may happen if the app bundle is damaged or was\n' +
       'moved while running. Try re-downloading and reinstalling.\n\n' +
       `Error: ${err.message}`

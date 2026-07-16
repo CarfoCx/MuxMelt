@@ -9,6 +9,7 @@ const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
 let files = [];
 let outputDir = '';
 let isProcessing = false;
+let cancelRequested = false;
 let log = null;
 let progressCleanup = null;
 let batchStartTime = 0;
@@ -21,7 +22,7 @@ let audioFormat, bitrate, sampleRate, normalizeCheck, fadeInInput, fadeOutInput;
 let lastOutputDir = '';
 let _pasteHandler = null;
 
-function init(ctx) {
+async function init(ctx) {
   log = ctx.log;
 
   dropZone = document.getElementById('dropZone');
@@ -45,11 +46,11 @@ function init(ctx) {
   fadeOutInput = document.getElementById('fadeOut');
   openOutputBtn = document.getElementById('openOutputBtn');
 
-  bindEvents();
-  _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
-  document.addEventListener('paste-files', _pasteHandler);
   if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
-  loadToolSettings();
+  await loadToolSettings();
+  bindEvents();
+  _pasteHandler = (e) => { if (window.isToolActive('audio-extractor') && e.detail && e.detail.length > 0) addFiles(e.detail); };
+  document.addEventListener('paste-files', _pasteHandler);
   log('Audio Extractor initialized');
 }
 
@@ -71,7 +72,7 @@ function bindEvents() {
     const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
-      const parts = dir.replace(/\\\\/g, '/').split('/');
+      const parts = dir.replace(/\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : dir;
       outputDirBtn.textContent = display;
       outputDirBtn.title = dir;
@@ -83,6 +84,7 @@ function bindEvents() {
   dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover'); });
   dropZone.addEventListener('drop', async (e) => {
     e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover');
+    if (isProcessing) return;
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(window.api.system.getPathForFile(file));
     if (paths.length > 0) {
@@ -94,6 +96,7 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
+    if (isProcessing) return;
     const paths = await window.api.system.selectFiles({ title: 'Select Videos', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
     if (paths.length > 0) addFiles(paths);
   });
@@ -102,6 +105,7 @@ function bindEvents() {
   if (browseFolderBtn) {
     browseFolderBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
+      if (isProcessing) return;
       if (statusText) statusText.textContent = 'Scanning folder...';
       const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
@@ -111,6 +115,7 @@ function bindEvents() {
   }
 
   dropZone.addEventListener('click', async (e) => {
+    if (isProcessing) return;
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
     if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
     const paths = await window.api.system.selectFiles({ title: 'Select Videos', filters: [{ name: 'Video Files', extensions: ['mp4', 'avi', 'mkv', 'mov', 'webm'] }] });
@@ -145,14 +150,27 @@ function bindEvents() {
 
 async function startExtraction() {
   if (isProcessing) {
-    window.api.tools.audioExtractor.cancelAudioExtraction();
+    cancelRequested = true;
     extractBtn.textContent = 'Cancelling...';
     extractBtn.disabled = true;
+    try { await window.api.tools.audioExtractor.cancelAudioExtraction(); } catch {}
     return;
   }
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
   if (pending.length === 0) return;
 
+  const batchOptions = {
+    format: audioFormat.value,
+    bitrate: bitrate.value,
+    sampleRate: sampleRate.value || null,
+    normalize: !!normalizeCheck.checked,
+    fadeIn: parseFloat(fadeInInput.value) || 0,
+    fadeOut: parseFloat(fadeOutInput.value) || 0,
+    outputDir
+  };
+
+  cancelRequested = false;
+  const outputFiles = [];
   isProcessing = true;
   batchStartTime = Date.now();
   batchTotalFiles = pending.length;
@@ -165,10 +183,11 @@ async function startExtraction() {
   statusText.textContent = `Extracting audio from ${pending.length} file(s)...`;
   setFooterProgress(0, true);
 
-  const srLabel = sampleRate.value ? sampleRate.value + ' Hz' : 'original';
-  log(`Starting extraction: ${pending.length} file(s) to ${audioFormat.value.toUpperCase()}, ${bitrate.value}, ${srLabel}${normalizeCheck.checked ? ', normalized' : ''}`);
+  const srLabel = batchOptions.sampleRate ? batchOptions.sampleRate + ' Hz' : 'original';
+  log(`Starting extraction: ${pending.length} file(s) to ${batchOptions.format.toUpperCase()}, ${batchOptions.bitrate}, ${srLabel}${batchOptions.normalize ? ', normalized' : ''}`);
 
   for (const file of pending) {
+    if (cancelRequested) break;
     file.state = 'processing';
     file.progress = 0;
     file.status = 'Extracting...';
@@ -177,13 +196,7 @@ async function startExtraction() {
     try {
       const result = await window.api.tools.audioExtractor.extractAudio({
         inputPath: file.path,
-        format: audioFormat.value,
-        bitrate: bitrate.value,
-        sampleRate: sampleRate.value || null,
-        normalize: normalizeCheck.checked,
-        fadeIn: parseFloat(fadeInInput.value) || 0,
-        fadeOut: parseFloat(fadeOutInput.value) || 0,
-        outputDir: outputDir
+        ...batchOptions
       });
 
       if (result && result.success) {
@@ -191,18 +204,26 @@ async function startExtraction() {
         file.progress = 1;
         file.status = 'Complete';
         log(`Extracted: ${file.name}`, 'success');
-        if (result.output) lastOutputDir = result.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        if (typeof result.output === 'string' && result.output) {
+          file.output = result.output;
+          outputFiles.push(result.output);
+          lastOutputDir = window.getParentDirectory(result.output);
+        }
+      } else if (cancelRequested) {
+        file.state = 'pending';
+        file.status = 'Cancelled — ready to retry';
       } else {
         file.state = 'error';
         file.status = `Error: ${result ? result.error : 'unknown'}`;
         log(`Error [${file.name}]: ${result ? result.error : 'unknown'}`, 'error');
       }
     } catch (err) {
-      file.state = 'error';
-      file.status = `Error: ${err.message}`;
-      log(`Error [${file.name}]: ${err.message}`, 'error');
+      file.state = cancelRequested ? 'pending' : 'error';
+      file.status = cancelRequested ? 'Cancelled — ready to retry' : `Error: ${err.message}`;
+      if (!cancelRequested) log(`Error [${file.name}]: ${err.message}`, 'error');
     }
     renderFileItem(files.indexOf(file));
+    if (cancelRequested) break;
   }
 
   isProcessing = false;
@@ -211,26 +232,31 @@ async function startExtraction() {
   setFooterProgress(0, false);
   extractBtn.textContent = 'Extract Audio';
   extractBtn.classList.remove('btn-cancel');
-  extractBtn.disabled = files.filter(f => f.state === 'pending' || f.state === 'error').length === 0;
+  updateButton();
   processingIndicator.classList.remove('active');
-  const completed = files.filter(f => f.state === 'complete').length;
-  const errors = files.filter(f => f.state === 'error').length;
-  statusText.textContent = `Done! ${completed} extracted${errors > 0 ? `, ${errors} failed` : ''}`;
+  const completed = pending.filter(f => f.state === 'complete').length;
+  const errors = pending.filter(f => f.state === 'error').length;
+  const remaining = pending.filter(f => f.state === 'pending' || f.state === 'error').length;
+  statusText.textContent = cancelRequested
+    ? `Cancelled. ${completed} extracted${remaining ? `, ${remaining} remaining` : ''}`
+    : `Done! ${completed} extracted${errors > 0 ? `, ${errors} failed` : ''}`;
   if (completed > 0 && lastOutputDir) openOutputBtn.style.display = '';
   if (retryBtn) retryBtn.style.display = errors > 0 ? '' : 'none';
-  log(`Extraction finished: ${completed} completed, ${errors} failed`, errors > 0 ? 'warn' : 'success');
-  if (window.showCompletionToast) window.showCompletionToast('Audio extraction complete: ' + completed + ' extracted' + (errors > 0 ? ', ' + errors + ' failed' : ''), errors > 0);
-  if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+  log(cancelRequested ? 'Audio extraction cancelled' : `Extraction finished: ${completed} completed, ${errors} failed`, cancelRequested || errors > 0 ? 'warn' : 'success');
+  if (!cancelRequested && window.showCompletionToast) window.showCompletionToast('Audio extraction complete: ' + completed + ' extracted' + (errors > 0 ? ', ' + errors + ' failed' : ''), errors > 0, outputFiles);
+  outputFiles.forEach(filePath => { if (window.addRecentFile) window.addRecentFile(filePath); });
+  if (!cancelRequested && outputFiles.length > 0 && window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
 }
 
 function handleProgress(data) {
+  if (!isProcessing || !data || typeof data !== 'object') return;
   const idx = files.findIndex(f => f.path === data.file);
   if (idx === -1) return;
 
   if (data.type === 'progress') {
     const progress = normalizeProgress(data);
     files[idx].progress = progress;
-    files[idx].status = data.status || 'Extracting...';
+    files[idx].status = typeof data.status === 'string' ? data.status : 'Extracting...';
     files[idx].state = 'processing';
     statusText.textContent = `${files[idx].name}: ${files[idx].status}`;
     setFooterProgress(progress, true);
@@ -245,19 +271,24 @@ function handleProgress(data) {
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   } else if (data.type === 'error') {
     files[idx].progress = 0;
-    files[idx].status = `Error: ${data.error}`;
+    const error = typeof data.error === 'string' ? data.error : 'Extraction failed';
+    files[idx].status = `Error: ${error}`;
     files[idx].state = 'error';
     setFooterProgress(0, false);
-    log(`Error [${files[idx].name}]: ${data.error}`, 'error');
+    log(`Error [${files[idx].name}]: ${error}`, 'error');
     if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   }
   renderFileItem(idx);
 }
 
 function normalizeProgress(data) {
-  const raw = typeof data.progress === 'number' ? data.progress : data.percent;
-  if (typeof raw !== 'number' || Number.isNaN(raw)) return 0;
-  return Math.max(0, Math.min(1, raw > 1 ? raw / 100 : raw));
+  if (Number.isFinite(data.progress)) {
+    return Math.max(0, Math.min(1, data.progress));
+  }
+  if (Number.isFinite(data.percent)) {
+    return Math.max(0, Math.min(1, data.percent / 100));
+  }
+  return 0;
 }
 
 function setFooterProgress(progress, visible = true) {
@@ -280,14 +311,21 @@ function getFileExtension(fp) {
 function getFileName(fp) { return fp.replace(/\\/g, '/').split('/').pop(); }
 
 async function addFiles(paths) {
+  if (isProcessing || !Array.isArray(paths)) return;
   let added = 0;
   for (const p of paths) {
+    if (typeof p !== 'string') continue;
     const ext = getFileExtension(p);
     if (!VIDEO_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) continue;
-    const size = await window.api.system.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Video', state: 'pending' });
-    added++;
+    try {
+      const size = await window.api.system.getFileSize(p);
+      if (isProcessing) break;
+      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Video', state: 'pending' });
+      added++;
+    } catch (err) {
+      log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
+    }
   }
   if (added > 0) log(`Added ${added} video file(s)`);
   renderFileList();
@@ -305,12 +343,12 @@ function clearFiles() {
   setFooterProgress(0, false);
   if (etaText) etaText.textContent = '';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
+  if (window.updateQueueSummary) window.updateQueueSummary([], 'audio-extractor');
 }
 
 function updateButton() {
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
-  extractBtn.disabled = pending.length === 0 || isProcessing;
+  extractBtn.disabled = isProcessing ? cancelRequested : pending.length === 0;
 }
 
 // ---- Rendering ----
@@ -321,11 +359,11 @@ function renderFileList() {
   }
   fileList.innerHTML = '';
   files.forEach((f, i) => fileList.appendChild(createFileElement(f, i)));
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'audio-extractor');
 }
 
 function renderFileItem(index) {
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'audio-extractor');
   const existing = fileList.children[index];
   if (!existing) return;
   // Update in place rather than rebuilding the row (and rebinding listeners)
@@ -399,10 +437,9 @@ let _saveTimer = null;
 function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    window.loadAllSettings().then(all => {
+    window.updateSettings(all => {
       all['audio-extractor'] = { audioFormat: audioFormat.value, bitrate: bitrate.value, sampleRate: sampleRate.value, normalize: normalizeCheck.checked, fadeIn: parseFloat(fadeInInput.value) || 0, fadeOut: parseFloat(fadeOutInput.value) || 0, outputDir };
-      window.saveAllSettings(all);
-    });
+    }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }
 

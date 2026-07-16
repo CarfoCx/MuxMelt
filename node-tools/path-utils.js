@@ -8,16 +8,22 @@ const path = require('path');
  * Throws on invalid/unsafe paths.
  */
 function validateOutputDir(outputDir) {
-  if (!outputDir) return null;
+  if (outputDir == null || outputDir === '') return null;
+  if (typeof outputDir !== 'string') {
+    throw new Error('Output directory must be a path string');
+  }
+  if (/\0|[\x01-\x1f]/.test(outputDir)) {
+    throw new Error('Invalid output directory: control characters are not allowed');
+  }
+  if (!path.isAbsolute(outputDir)) {
+    throw new Error('Output directory must be an absolute path');
+  }
   // Check for path traversal in the raw input BEFORE resolving
   const segments = outputDir.split(/[/\\]/);
   if (segments.includes('..')) {
     throw new Error('Invalid output directory: path traversal not allowed');
   }
   const normalized = path.resolve(outputDir);
-  if (!path.isAbsolute(normalized)) {
-    throw new Error('Output directory must be an absolute path');
-  }
   return normalized;
 }
 
@@ -26,10 +32,28 @@ function validateOutputDir(outputDir) {
  * Returns the sanitized basename (no directory components).
  */
 function validateOutputName(outputName) {
-  if (!outputName) return null;
+  if (outputName == null || outputName === '') return null;
+  if (typeof outputName !== 'string') {
+    throw new Error('Output filename must be a string');
+  }
+  if (/\0|[\x01-\x1f]/.test(outputName)) {
+    throw new Error('Invalid output filename: control characters are not allowed');
+  }
   const basename = path.basename(outputName);
-  if (basename !== outputName || basename.includes('..')) {
+  if (basename !== outputName || /[/\\]/.test(outputName) || outputName === '.' || outputName === '..') {
     throw new Error('Invalid output filename: must not contain directory separators');
+  }
+  // These names are invalid on Windows and are best avoided on every platform
+  // so projects remain portable when an output folder is moved or synced.
+  if (/[. ]$/.test(basename) || /[<>:"|?*]/.test(basename)) {
+    throw new Error('Invalid output filename: contains characters unsupported by the operating system');
+  }
+  const stem = basename.split('.')[0];
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem)) {
+    throw new Error('Invalid output filename: reserved device name');
+  }
+  if (Buffer.byteLength(basename, 'utf8') > 240) {
+    throw new Error('Invalid output filename: name is too long');
   }
   return basename;
 }
@@ -47,7 +71,8 @@ const PDF_EXTS = new Set(['.pdf']);
  * Returns the lowercase extension if valid, throws on invalid.
  */
 function validateFileType(filePath, allowedExts, toolName) {
-  if (!filePath) throw new Error('No file path provided');
+  if (typeof filePath !== 'string' || !filePath) throw new Error('No file path provided');
+  if (!(allowedExts instanceof Set)) throw new Error('Allowed file types must be provided as a Set');
   const ext = path.extname(filePath).toLowerCase();
   if (!allowedExts.has(ext)) {
     const allowed = [...allowedExts].join(', ');
@@ -100,6 +125,7 @@ const MAGIC_BYTES = {
   '.tiff': [[0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A]],
   '.tif':  [[0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A]],
   '.webp': null, // RIFF header checked specially
+  '.avif': null, // ISO BMFF ftyp checked specially
   '.svg':  null, // XML text checked specially
   '.heic': null, // ISO BMFF ftyp checked specially
   '.heif': null, // ISO BMFF ftyp checked specially
@@ -122,24 +148,30 @@ const MAGIC_BYTES = {
  */
 function validateMagicBytes(filePath) {
   const fs = require('fs');
+  if (typeof filePath !== 'string' || !filePath) return false;
   const ext = path.extname(filePath).toLowerCase();
   const sigs = MAGIC_BYTES[ext];
 
   if (sigs === undefined) return true; // Unknown extension, skip check
 
   let header;
+  let bytesRead = 0;
+  let fd;
   try {
-    const fd = fs.openSync(filePath, 'r');
+    fd = fs.openSync(filePath, 'r');
     header = Buffer.alloc(12);
-    fs.readSync(fd, header, 0, 12, 0);
-    fs.closeSync(fd);
+    bytesRead = fs.readSync(fd, header, 0, 12, 0);
   } catch {
     return true; // Can't read file, let the tool handle the error
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
   }
 
   // Special checks
   if (ext === '.webp') {
-    return header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
+    return bytesRead >= 12 && header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
            header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50;
   }
   if (ext === '.svg') {
@@ -151,19 +183,36 @@ function validateMagicBytes(filePath) {
     }
   }
   if (ext === '.heic' || ext === '.heif') {
+    if (bytesRead < 12) return false;
     const brand = header.slice(8, 12).toString('ascii');
     return ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'].includes(brand);
   }
   if (ext === '.mp4' || ext === '.mov') {
     // ftyp box at offset 4
-    return header[4] === 0x66 && header[5] === 0x74 && header[6] === 0x79 && header[7] === 0x70;
+    return bytesRead >= 12 && header[4] === 0x66 && header[5] === 0x74 && header[6] === 0x79 && header[7] === 0x70;
+  }
+  if (ext === '.avif') {
+    if (bytesRead < 12 || header.slice(4, 8).toString('ascii') !== 'ftyp') return false;
+    return ['avif', 'avis', 'mif1'].includes(header.slice(8, 12).toString('ascii'));
+  }
+  if (ext === '.avi') {
+    return bytesRead >= 12 && header.slice(0, 4).toString('ascii') === 'RIFF' &&
+      header.slice(8, 12).toString('ascii') === 'AVI ';
+  }
+  if (ext === '.wav') {
+    return bytesRead >= 12 && header.slice(0, 4).toString('ascii') === 'RIFF' &&
+      header.slice(8, 12).toString('ascii') === 'WAVE';
+  }
+  if (ext === '.mp3') {
+    if (bytesRead >= 3 && header.slice(0, 3).toString('ascii') === 'ID3') return true;
+    return bytesRead >= 2 && header[0] === 0xFF && (header[1] & 0xE0) === 0xE0;
   }
 
   if (sigs === null) return true;
 
   // sigs can be a single array or array of arrays
   const sigList = Array.isArray(sigs[0]) ? sigs : [sigs];
-  return sigList.some(sig => sig.every((byte, i) => header[i] === byte));
+  return sigList.some(sig => bytesRead >= sig.length && sig.every((byte, i) => header[i] === byte));
 }
 
 /**
@@ -173,16 +222,21 @@ function validateMagicBytes(filePath) {
  */
 function generateOutputName(inputPath, operation, pattern) {
   if (!pattern) return null; // fall back to tool default
+  if (typeof inputPath !== 'string' || typeof pattern !== 'string') {
+    throw new Error('Input path and filename pattern must be strings');
+  }
   const name = path.basename(inputPath, path.extname(inputPath));
   const ext = path.extname(inputPath);
   const date = new Date();
   const dateStr = date.toISOString().slice(0, 10); // YYYY-MM-DD
   const timeStr = date.toTimeString().slice(0, 8).replace(/:/g, '-'); // HH-MM-SS
-  return pattern
-    .replace('{name}', name)
-    .replace('{operation}', operation || 'output')
-    .replace('{date}', dateStr)
-    .replace('{time}', timeStr);
+  let rendered = pattern
+    .replaceAll('{name}', name)
+    .replaceAll('{operation}', operation || 'output')
+    .replaceAll('{date}', dateStr)
+    .replaceAll('{time}', timeStr);
+  if (!path.extname(rendered) && ext) rendered += ext;
+  return validateOutputName(rendered);
 }
 
 /**
@@ -191,6 +245,9 @@ function generateOutputName(inputPath, operation, pattern) {
  */
 function autoIncrementPath(desiredPath) {
   const fs = require('fs');
+  if (typeof desiredPath !== 'string' || !desiredPath) {
+    throw new Error('A destination path is required');
+  }
   if (!fs.existsSync(desiredPath)) return desiredPath;
 
   const dir = path.dirname(desiredPath);

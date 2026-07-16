@@ -1,6 +1,6 @@
 {
   "name": "muxmelt",
-  "version": "1.2.10",
+  "version": "1.2.11",
   "description": "All-in-one media toolkit",
   "main": "main.js",
   "author": "Carfo Industries",
@@ -11,7 +11,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node test/smoke.js",
+    "test": "node test/static-smoke.js && node test/smoke.js",
     "build:full:win": "node build/prepare-python.js full && electron-builder --win --publish never",
     "build:full:mac": "node build/prepare-python.js full && electron-builder --mac --publish never",
     "build:slim:win": "node build/prepare-python.js slim && electron-builder --win --config build/slim.json --publish never",

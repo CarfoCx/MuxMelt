@@ -12,11 +12,6 @@ if ! command -v node &>/dev/null; then
   exit 1
 fi
 
-if ! command -v python3 &>/dev/null; then
-  echo "[ERROR] Python 3.10+ not found. Install from https://python.org/downloads"
-  exit 1
-fi
-
 npm run build:full:mac
 echo ""
 echo "=== Build complete! Check dist/ for the DMG. ==="

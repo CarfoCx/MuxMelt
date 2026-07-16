@@ -29,6 +29,8 @@ let outputDir = persistedState.outputDir || '';
 let modelProfile = persistedState.modelProfile || 'general';
 let ws = null;
 let isProcessing = !!persistedState.isProcessing;
+let isPreparing = false;
+let cancelRequested = false;
 let pythonPort = null;
 let pythonToken = null;
 let log = null;
@@ -37,11 +39,13 @@ let log = null;
 let batchStartTime = 0;
 let batchTotalFiles = 0;
 let batchMegapixels = 0;
+let batchFilePaths = new Set();
 
 // Reconnection
 let reconnectDelay = 1000;
 let reconnectAttempts = 0;
 let reconnectTimerId = null;
+let cancelWatchdog = null;
 const MAX_RECONNECT_DELAY = 30000;
 
 // DOM refs (set during init)
@@ -59,7 +63,7 @@ let _mouseUpHandler = null;
 let _keyDownHandler = null;
 let _resizeHandler = null;
 
-function init(ctx) {
+async function init(ctx) {
   pythonPort = ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
@@ -99,12 +103,12 @@ function init(ctx) {
 
   retryBtn = document.getElementById('retryBtn');
 
-  loadSettings();
+  await loadSettings();
   bindEvents();
   restoreViewState();
   connectWebSocket(pythonPort);
 
-  _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
+  _pasteHandler = (e) => { if (window.isToolActive('upscaler') && e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
 
   if (!persistedState.initialized) {
@@ -116,6 +120,7 @@ function init(ctx) {
 function cleanup() {
   persistRuntimeState();
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
   if (_mouseMoveHandler) document.removeEventListener('mousemove', _mouseMoveHandler);
@@ -147,6 +152,7 @@ function restoreViewState() {
     upscaleBtn.classList.toggle('btn-cancel', isProcessing);
   }
   renderFileList();
+  setBusyControls(isProcessing || isPreparing);
   updateUpscaleButton();
   if (retryBtn) {
     const retryable = files.some(f => f.state === 'error' || f.state === 'cancelled');
@@ -205,26 +211,31 @@ let _saveSettingsTimer = null;
 function saveSettings() {
   clearTimeout(_saveSettingsTimer);
   _saveSettingsTimer = setTimeout(() => {
-    window.loadAllSettings().then(all => {
+    window.updateSettings(all => {
       all.upscaler = { scale, outputFormat: outputFormat.value, modelProfile, outputDir };
-      window.saveAllSettings(all);
-    });
+    }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }
 
 // ---- ffmpeg check ----
-function checkFfmpeg() {
-  fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`)
-    .then(r => r.json())
-    .then(data => {
-      if (!data.ffmpeg) {
-        ffmpegWarning.style.display = 'flex';
-        log('ffmpeg not found - video upscaling disabled', 'warn');
-      } else {
-        ffmpegWarning.style.display = 'none';
-      }
-    })
-    .catch(() => {});
+async function checkFfmpeg() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+  try {
+    const response = await fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal });
+    if (!response.ok) throw new Error(`Health request failed (${response.status})`);
+    const data = await response.json();
+    if (!data.ffmpeg) {
+      ffmpegWarning.style.display = 'flex';
+      log('ffmpeg not found - video upscaling disabled', 'warn');
+    } else {
+      ffmpegWarning.style.display = 'none';
+    }
+  } catch {
+    // Connection state is handled by the WebSocket/reconnect UI.
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ---- Event binding ----
@@ -232,7 +243,7 @@ function bindEvents() {
   // Scale buttons
   document.querySelectorAll('.scale-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (isProcessing) return;
+      if (isProcessing || isPreparing) return;
       document.querySelectorAll('.scale-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       scale = parseInt(btn.dataset.scale);
@@ -246,7 +257,7 @@ function bindEvents() {
   });
 
   modelProfileSelect.addEventListener('change', () => {
-    if (isProcessing) return;
+    if (isProcessing || isPreparing) return;
     modelProfile = modelProfileSelect.value;
     persistedState.modelProfile = modelProfile;
     if (modelProfile === 'anime' && scale === 2) {
@@ -257,13 +268,15 @@ function bindEvents() {
   });
 
   outputFormat.addEventListener('change', () => {
+    if (isProcessing || isPreparing) return;
     persistedState.outputFormat = outputFormat.value;
     saveSettings();
   });
 
   outputDirBtn.addEventListener('click', async () => {
-    if (isProcessing) return;
+    if (isProcessing || isPreparing) return;
     const dir = await window.api.system.selectOutputDir();
+    if (isProcessing || isPreparing) return;
     if (dir) {
       outputDir = dir;
       persistedState.outputDir = outputDir;
@@ -280,6 +293,7 @@ function bindEvents() {
   dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover'); });
   dropZone.addEventListener('drop', async (e) => {
     e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover');
+    if (isProcessing || isPreparing) return;
     const paths = [];
     for (const file of e.dataTransfer.files) paths.push(window.api.system.getPathForFile(file));
     if (paths.length > 0) {
@@ -291,20 +305,24 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
+    if (isProcessing || isPreparing) return;
     const paths = await window.api.system.selectFiles();
     if (paths.length > 0) addFiles(paths);
   });
 
   browseFolderBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
+    if (isProcessing || isPreparing) return;
     if (statusText) statusText.textContent = 'Scanning folder...';
     const paths = await window.api.system.selectFolder();
+    if (isProcessing || isPreparing) return;
     if (paths.length > 0) addFiles(paths);
     else log('No supported files found in folder', 'warn');
     if (statusText) statusText.textContent = 'Waiting for File';
   });
 
   dropZone.addEventListener('click', async (e) => {
+    if (isProcessing || isPreparing) return;
     if (dropZone.classList.contains('collapsed')) { dropZone.classList.remove('collapsed'); return; }
     if (e.target.id === 'browseBtn' || e.target.id === 'browseFolderBtn') return;
     const paths = await window.api.system.selectFiles();
@@ -312,16 +330,16 @@ function bindEvents() {
   });
 
   clearBtn.addEventListener('click', () => {
-    if (!isProcessing) { clearFiles(); window.clearLog(); }
+    if (!isProcessing && !isPreparing) { clearFiles(); window.clearLog(); }
   });
 
   openOutputBtn.addEventListener('click', () => {
     if (outputDir) { window.api.system.openFolder(outputDir); }
     else if (files.length > 0 && files[0].output) {
-      const dir = files[0].output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+      const dir = window.getParentDirectory(files[0].output);
       window.api.system.openFolder(dir);
     } else if (files.length > 0) {
-      const dir = files[0].path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+      const dir = window.getParentDirectory(files[0].path);
       window.api.system.openFolder(dir);
     }
   });
@@ -329,11 +347,19 @@ function bindEvents() {
   upscaleBtn.addEventListener('click', async () => {
     if (isProcessing) {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: 'cancel' }));
+        cancelRequested = true;
+        try { ws.send(JSON.stringify({ action: 'cancel' })); }
+        catch (err) {
+          cancelRequested = false;
+          log(`Could not request cancellation: ${err.message}`, 'error');
+          return;
+        }
         upscaleBtn.disabled = true;
         upscaleBtn.textContent = 'Cancelling...';
         log('Cancelling...', 'warn');
-        setTimeout(() => {
+        if (cancelWatchdog) clearTimeout(cancelWatchdog);
+        cancelWatchdog = setTimeout(() => {
+          cancelWatchdog = null;
           if (isProcessing) {
             upscaleBtn.disabled = false;
             upscaleBtn.textContent = 'Cancel';
@@ -343,13 +369,22 @@ function bindEvents() {
       }
       return;
     }
+    if (isPreparing) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    isPreparing = true;
+    setBusyControls(true);
+    const batchConfig = {
+      scale,
+      outputFormat: outputFormat.value,
+      outputDir,
+      profile: modelProfile
+    };
     const pendingFiles = files.filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled');
     const filesToProcess = [];
     for (const file of pendingFiles) {
-      const targetPath = getOutputPath(file.path);
-      const overwrite = await confirmOverwrite(targetPath);
-      if (!overwrite || !overwrite.proceed) {
+      const targetPath = getOutputPath(file.path, batchConfig);
+      const conflictChoice = await confirmExistingOutput(targetPath);
+      if (!conflictChoice || !conflictChoice.proceed) {
         file.state = 'cancelled';
         file.progress = 0;
         file.status = 'Skipped: output exists';
@@ -362,13 +397,31 @@ function bindEvents() {
       file.status = 'Queued...';
       filesToProcess.push(file.path);
     }
-    if (filesToProcess.length === 0) return;
+    if (filesToProcess.length === 0) {
+      isPreparing = false;
+      setBusyControls(false);
+      renderFileList();
+      updateUpscaleButton();
+      return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      isPreparing = false;
+      setBusyControls(false);
+      renderFileList();
+      updateUpscaleButton();
+      log('Backend disconnected before the upscale could start', 'error');
+      return;
+    }
 
+    isPreparing = false;
+    cancelRequested = false;
+    if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     isProcessing = true;
     persistedState.isProcessing = true;
     batchStartTime = Date.now();
     batchTotalFiles = filesToProcess.length;
     batchMegapixels = 0;
+    batchFilePaths = new Set(filesToProcess);
     upscaleBtn.disabled = false;
     upscaleBtn.textContent = 'Cancel';
     upscaleBtn.classList.add('btn-cancel');
@@ -379,11 +432,30 @@ function bindEvents() {
     persistRuntimeState();
     renderFileList();
 
-    log(`Starting upscale: ${filesToProcess.length} file(s), ${scale}x, profile=${modelProfile}, format=${outputFormat.value}`);
-    ws.send(JSON.stringify({
-      action: 'upscale', files: filesToProcess, scale, output_format: outputFormat.value,
-      output_dir: outputDir, profile: modelProfile
-    }));
+    log(`Starting upscale: ${filesToProcess.length} file(s), ${batchConfig.scale}x, profile=${batchConfig.profile}, format=${batchConfig.outputFormat}`);
+    try {
+      ws.send(JSON.stringify({
+        action: 'upscale', files: filesToProcess, scale: batchConfig.scale, output_format: batchConfig.outputFormat,
+        output_dir: batchConfig.outputDir, profile: batchConfig.profile
+      }));
+    } catch (err) {
+      isProcessing = false;
+      persistedState.isProcessing = false;
+      files.filter(file => batchFilePaths.has(file.path)).forEach(file => {
+        file.state = 'pending';
+        file.status = 'Ready to retry';
+      });
+      processingIndicator.classList.remove('active');
+      setBusyControls(false);
+      upscaleBtn.textContent = 'Upscale';
+      upscaleBtn.classList.remove('btn-cancel');
+      statusText.textContent = 'Could not start upscaling';
+      setFooterProgress(0, false);
+      renderFileList();
+      updateUpscaleButton();
+      persistRuntimeState();
+      log(`Could not start upscaling: ${err.message}`, 'error');
+    }
   });
 
   // ffmpeg link
@@ -395,6 +467,7 @@ function bindEvents() {
   // Retry failed
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
+      if (isProcessing || isPreparing) return;
       files.forEach(f => { if (f.state === 'error' || f.state === 'cancelled') { f.state = 'pending'; f.progress = 0; f.status = 'Queued...'; } });
       renderFileList();
       updateUpscaleButton();
@@ -439,6 +512,7 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
+    reconnectTimerId = null;
     // Removed technical logs
     // Request initial data if needed
   };
@@ -449,7 +523,25 @@ function connectWebSocket(port) {
     handleWSMessage(data);
   };
   ws.onclose = () => {
+    if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     if (!statusText) return; // tool was unloaded
+    if (isProcessing) {
+      isProcessing = false;
+      persistedState.isProcessing = false;
+      processingIndicator.classList.remove('active');
+      setBusyControls(false);
+      upscaleBtn.textContent = 'Upscale';
+      upscaleBtn.classList.remove('btn-cancel');
+      files.forEach(file => {
+        if (file.state === 'processing') {
+          file.state = 'error';
+          file.status = 'Connection lost — ready to retry';
+        }
+      });
+      renderFileList();
+      updateUpscaleButton();
+      persistRuntimeState();
+    }
     statusText.textContent = 'Disconnected - reconnecting...';
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
@@ -477,26 +569,31 @@ function connectWebSocket(port) {
 }
 
 function backendReachable() {
-  return fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`)
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  return fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal })
     .then(r => r.ok)
-    .catch(() => false);
+    .catch(() => false)
+    .finally(() => clearTimeout(timeout));
 }
 
 function handleWSMessage(data) {
+  if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
   if (data.type === 'log') {
-    if (!isNoisyProgressLog(data.message)) log(data.message, data.level || 'info');
+    if (typeof data.message === 'string' && !isNoisyProgressLog(data.message)) log(data.message, data.level || 'info');
     return;
   }
   if (data.type === 'model_loading') {
-    log(data.message || 'Loading model...');
-    statusText.textContent = data.message || 'Loading model...';
+    const message = typeof data.message === 'string' ? data.message : 'Loading model...';
+    log(message);
+    statusText.textContent = message;
     setFooterProgress(0, true);
     persistRuntimeState();
     return;
   }
   if (data.type === 'model_progress') {
-    const pct = typeof data.progress === 'number' ? data.progress : persistedState.footerProgress;
-    statusText.textContent = data.status || 'Loading model...';
+    const pct = normalizeProgress(data.progress, persistedState.footerProgress);
+    statusText.textContent = typeof data.status === 'string' ? data.status : 'Loading model...';
     setFooterProgress(pct, true);
     persistRuntimeState();
     return;
@@ -509,32 +606,34 @@ function handleWSMessage(data) {
 
   switch (data.type) {
     case 'progress':
-      files[fileIndex].progress = data.progress;
-      files[fileIndex].status = data.status || 'Processing...';
+      files[fileIndex].progress = normalizeProgress(data.progress);
+      files[fileIndex].status = typeof data.status === 'string' ? data.status : 'Processing...';
       if (files[fileIndex].state !== 'processing') log(`Processing: ${fname}`);
       files[fileIndex].state = 'processing';
       statusText.textContent = `${fname}: ${files[fileIndex].status}`;
-      setFooterProgress(data.progress, true);
+      setFooterProgress(files[fileIndex].progress, true);
       renderFileItem(fileIndex);
       updateETA();
       persistRuntimeState();
-      if (window.setTaskbarProgress) window.setTaskbarProgress(data.progress);
+      if (window.setTaskbarProgress) window.setTaskbarProgress(files[fileIndex].progress);
       break;
     case 'complete':
       files[fileIndex].progress = 1;
       files[fileIndex].status = 'Complete';
       files[fileIndex].state = 'complete';
-      files[fileIndex].output = data.output;
+      files[fileIndex].output = typeof data.output === 'string' ? data.output : '';
       setFooterProgress(1, true);
       renderFileItem(fileIndex);
-      const outName = data.output.replace(/\\/g, '/').split('/').pop();
+      const outName = files[fileIndex].output ? files[fileIndex].output.replace(/\\/g, '/').split('/').pop() : fname;
       const tput = formatThroughput(data.megapixels, data.elapsed);
       if (typeof data.megapixels === 'number') batchMegapixels += data.megapixels;
       log(`Complete: ${fname} \u2192 ${outName}${tput ? ` (${tput})` : ''}`, 'success');
+      if (files[fileIndex].output && window.addRecentFile) window.addRecentFile(files[fileIndex].output);
       updateETA();
       persistRuntimeState();
       break;
     case 'error':
+      data.error = typeof data.error === 'string' ? data.error : 'Upscaling failed';
       files[fileIndex].progress = 0;
       files[fileIndex].status = `Error: ${data.error}`;
       files[fileIndex].state = data.error === 'Cancelled' ? 'cancelled' : 'error';
@@ -545,49 +644,65 @@ function handleWSMessage(data) {
       persistRuntimeState();
       break;
     case 'all_complete':
+      if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
       isProcessing = false;
       persistedState.isProcessing = false;
       processingIndicator.classList.remove('active');
-      upscaleBtn.disabled = false;
+      setBusyControls(false);
       upscaleBtn.textContent = 'Upscale';
       upscaleBtn.classList.remove('btn-cancel');
       etaText.textContent = '';
       setFooterProgress(0, false);
-      const completed = files.filter(f => f.state === 'complete').length;
-      const errors = files.filter(f => f.state === 'error').length;
-      const cancelled = files.filter(f => f.state === 'cancelled').length;
+      const batchFiles = files.filter(file => batchFilePaths.has(file.path));
+      const completed = batchFiles.filter(f => f.state === 'complete').length;
+      const errors = batchFiles.filter(f => f.state === 'error').length;
+      const cancelled = batchFiles.filter(f => f.state === 'cancelled').length;
+      const outputs = batchFiles.filter(f => f.state === 'complete' && typeof f.output === 'string' && f.output).map(f => f.output);
       let parts = [`${completed} completed`];
       if (errors > 0) parts.push(`${errors} failed`);
       if (cancelled > 0) parts.push(`${cancelled} cancelled`);
       const batchElapsed = (Date.now() - batchStartTime) / 1000;
       const batchTput = formatThroughput(batchMegapixels, batchElapsed);
-      statusText.textContent = `Done! ${parts.join(', ')}${batchTput ? ` · ${batchTput}` : ''}`;
+      statusText.textContent = `${cancelRequested ? 'Cancelled.' : 'Done!'} ${parts.join(', ')}${batchTput ? ` · ${batchTput}` : ''}`;
       persistedState.statusText = statusText.textContent;
       persistedState.etaText = '';
-      log(`Batch finished: ${parts.join(', ')}`, errors > 0 ? 'warn' : 'success');
+      log(cancelRequested ? `Upscale cancelled: ${parts.join(', ')}` : `Batch finished: ${parts.join(', ')}`, cancelRequested || errors > 0 ? 'warn' : 'success');
       if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
-      if (window.showCompletionToast) {
-        window.showCompletionToast(`Upscale complete: ${parts.join(', ')}`, errors > 0);
+      if (!cancelRequested && window.showCompletionToast) {
+        window.showCompletionToast(`Upscale complete: ${parts.join(', ')}`, errors > 0, outputs);
       }
       if (retryBtn) retryBtn.style.display = errors > 0 || cancelled > 0 ? '' : 'none';
-      if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(outputDir || (files[0] && files[0].output ? files[0].output.replace(/\\/g, '/').split('/').slice(0, -1).join('/') : ''));
+      if (!cancelRequested && outputs.length > 0 && window.autoOpenOutputIfEnabled) {
+        const completedDir = outputs[0] ? window.getParentDirectory(outputs[0]) : '';
+        window.autoOpenOutputIfEnabled(outputDir || completedDir);
+      }
+      updateUpscaleButton();
       persistRuntimeState();
       break;
     case 'fatal_error':
+      if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
       isProcessing = false;
       persistedState.isProcessing = false;
       processingIndicator.classList.remove('active');
-      upscaleBtn.disabled = false;
+      setBusyControls(false);
       upscaleBtn.textContent = 'Upscale';
       upscaleBtn.classList.remove('btn-cancel');
       etaText.textContent = '';
       setFooterProgress(0, false);
+      data.error = typeof data.error === 'string' ? data.error : 'Upscaling failed';
       statusText.textContent = `Fatal error: ${data.error}`;
       persistRuntimeState();
       log(`Fatal: ${data.error}`, 'error');
       if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
+      updateUpscaleButton();
       break;
   }
+}
+
+function normalizeProgress(value, fallback = 0) {
+  const progress = Number(value);
+  if (!Number.isFinite(progress)) return Math.max(0, Math.min(1, Number(fallback) || 0));
+  return Math.max(0, Math.min(1, progress > 1 ? progress / 100 : progress));
 }
 
 // ---- ETA ----
@@ -595,8 +710,9 @@ function updateETA() {
   if (!isProcessing || batchTotalFiles === 0) { etaText.textContent = ''; persistedState.etaText = ''; return; }
   const elapsed = (Date.now() - batchStartTime) / 1000;
   if (elapsed < 2) { etaText.textContent = 'ETA: calculating...'; persistedState.etaText = etaText.textContent; return; }
-  const completedFiles = files.filter(f => f.state === 'complete' || f.state === 'error' || f.state === 'cancelled').length;
-  const current = files.find(f => f.state === 'processing');
+  const batchFiles = files.filter(file => batchFilePaths.has(file.path));
+  const completedFiles = batchFiles.filter(f => f.state === 'complete' || f.state === 'error' || f.state === 'cancelled').length;
+  const current = batchFiles.find(f => f.state === 'processing');
   const effectiveCompleted = completedFiles + (current ? current.progress : 0);
   if (effectiveCompleted < 0.05) { etaText.textContent = 'ETA: calculating...'; persistedState.etaText = etaText.textContent; return; }
   const remaining = batchTotalFiles - effectiveCompleted;
@@ -645,7 +761,7 @@ function getFileExtension(fp) {
 function getFileName(fp) { return fp.replace(/\\/g, '/').split('/').pop(); }
 function isImage(fp) { return IMAGE_EXTS.has(getFileExtension(fp)); }
 
-function getOutputPath(inputPath) {
+function getOutputPath(inputPath, config = { scale, outputFormat: outputFormat.value, outputDir }) {
   const normalized = inputPath.replace(/\\/g, '/');
   const slashIndex = normalized.lastIndexOf('/');
   const sourceDir = slashIndex >= 0 ? inputPath.slice(0, slashIndex) : '';
@@ -653,14 +769,19 @@ function getOutputPath(inputPath) {
   const dotIndex = name.lastIndexOf('.');
   const baseName = dotIndex > 0 ? name.slice(0, dotIndex) : name;
   const inputExt = getFileExtension(inputPath);
-  const outExt = outputFormat.value === 'same' ? inputExt : `.${outputFormat.value}`;
-  const outDir = outputDir || sourceDir;
+  const outExt = config.outputFormat === 'same' ? inputExt : `.${config.outputFormat}`;
+  const outDir = config.outputDir || sourceDir;
   const separator = outDir.includes('\\') ? '\\' : '/';
-  return `${outDir}${outDir.endsWith('\\') || outDir.endsWith('/') ? '' : separator}${baseName}_${scale}x${outExt}`;
+  return `${outDir}${outDir.endsWith('\\') || outDir.endsWith('/') ? '' : separator}${baseName}_${config.scale}x${outExt}`;
 }
 
-async function confirmOverwrite(filePath) {
-  if (!await window.api.system.pathExists(filePath)) return { proceed: true };
+async function confirmExistingOutput(filePath) {
+  try {
+    if (!await window.api.system.pathExists(filePath)) return { proceed: true };
+  } catch (err) {
+    log(`Could not check output path: ${err.message}`, 'error');
+    return { proceed: false };
+  }
 
   try {
     const all = await window.loadAllSettings();
@@ -673,15 +794,15 @@ async function confirmOverwrite(filePath) {
       overwriteModal.setAttribute('aria-hidden', 'true');
       overwriteSkipBtn.removeEventListener('click', onSkip);
       overwriteAlwaysBtn.removeEventListener('click', onAlways);
-      overwriteConfirmBtn.removeEventListener('click', onOverwrite);
+      overwriteConfirmBtn.removeEventListener('click', onCreateCopy);
       document.removeEventListener('keydown', onKeyDown);
 
       if (result.always) {
         try {
-          const all = await window.loadAllSettings();
-          all.global = all.global || {};
-          all.global.skipOverwriteConfirm = true;
-          await window.saveAllSettings(all);
+          await window.updateSettings(all => {
+            all.global = all.global || {};
+            all.global.skipOverwriteConfirm = true;
+          });
         } catch {}
       }
 
@@ -690,7 +811,7 @@ async function confirmOverwrite(filePath) {
 
     const onSkip = () => finish({ proceed: false });
     const onAlways = () => finish({ proceed: true, always: true });
-    const onOverwrite = () => finish({ proceed: true });
+    const onCreateCopy = () => finish({ proceed: true });
     const onKeyDown = (e) => {
       if (e.key === 'Escape') finish({ proceed: false });
       if (e.key === 'Enter') finish({ proceed: true });
@@ -700,7 +821,7 @@ async function confirmOverwrite(filePath) {
     overwriteFileName.title = filePath;
     overwriteSkipBtn.addEventListener('click', onSkip);
     overwriteAlwaysBtn.addEventListener('click', onAlways);
-    overwriteConfirmBtn.addEventListener('click', onOverwrite);
+    overwriteConfirmBtn.addEventListener('click', onCreateCopy);
     document.addEventListener('keydown', onKeyDown);
     overwriteModal.classList.add('active');
     overwriteModal.setAttribute('aria-hidden', 'false');
@@ -709,17 +830,24 @@ async function confirmOverwrite(filePath) {
 }
 
 async function addFiles(paths) {
+  if (isProcessing || isPreparing || !Array.isArray(paths)) return;
   let added = 0;
   for (const p of paths) {
+    if (typeof p !== 'string') continue;
     const ext = getFileExtension(p);
     let type = null;
     if (IMAGE_EXTS.has(ext)) type = 'image';
     else if (VIDEO_EXTS.has(ext)) type = 'video';
     else continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
-    const size = await window.api.system.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for File', state: 'pending', output: null });
-    added++;
+    try {
+      const size = await window.api.system.getFileSize(p);
+      if (isProcessing || isPreparing) break;
+      files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for File', state: 'pending', output: null });
+      added++;
+    } catch (err) {
+      log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
+    }
   }
   if (added > 0) log(`Added ${added} file(s)`);
   persistedState.files = files;
@@ -731,6 +859,7 @@ async function addFiles(paths) {
 }
 
 function removeFile(index) {
+  if (isProcessing || isPreparing) return;
   files.splice(index, 1);
   persistedState.files = files;
   renderFileList();
@@ -739,6 +868,7 @@ function removeFile(index) {
 }
 
 function clearFiles() {
+  if (isProcessing || isPreparing) return;
   files = [];
   persistedState.files = files;
   persistedState.statusText = 'Waiting for File';
@@ -751,23 +881,23 @@ function clearFiles() {
   setFooterProgress(0, false);
   if (retryBtn) retryBtn.style.display = 'none';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
+  if (window.updateQueueSummary) window.updateQueueSummary([], 'upscaler');
 }
 
 // ---- Rendering ----
 function renderFileList() {
   if (files.length === 0) {
     fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
-    if (window.updateQueueSummary) window.updateQueueSummary([]);
+    if (window.updateQueueSummary) window.updateQueueSummary([], 'upscaler');
     return;
   }
   fileList.innerHTML = '';
   files.forEach((f, i) => fileList.appendChild(createFileElement(f, i)));
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'upscaler');
 }
 
 function renderFileItem(index) {
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'upscaler');
   const existing = fileList.children[index];
   if (!existing) return;
   updateFileElement(existing, files[index]);
@@ -839,13 +969,13 @@ function createFileElement(file, index) {
     window.getFileThumbnail(file.path).then(url => { if (url) thumb.src = url; });
   }
 
-  el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing) removeFile(index); });
+  el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing && !isPreparing) removeFile(index); });
   const prevBtn = el.querySelector('.file-preview-btn');
   if (prevBtn) prevBtn.addEventListener('click', (e) => { e.stopPropagation(); openPreview(file); });
 
   el.addEventListener('contextmenu', (e) => {
     if (window.showFileContextMenu) {
-      window.showFileContextMenu(e, file.path, isProcessing ? null : () => removeFile(index));
+      window.showFileContextMenu(e, file.path, isProcessing || isPreparing ? null : () => removeFile(index));
     }
   });
 
@@ -854,7 +984,15 @@ function createFileElement(file, index) {
 
 function updateUpscaleButton() {
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled');
-  upscaleBtn.disabled = pending.length === 0 && !isProcessing;
+  upscaleBtn.disabled = isPreparing || (pending.length === 0 && !isProcessing);
+}
+
+function setBusyControls(busy) {
+  document.querySelectorAll('.scale-btn').forEach(button => { button.disabled = busy; });
+  [modelProfileSelect, outputFormat, outputDirBtn, browseBtn, browseFolderBtn, clearBtn, retryBtn]
+    .filter(Boolean)
+    .forEach(control => { control.disabled = busy; });
+  if (!isProcessing) updateUpscaleButton();
 }
 
 // ---- Preview ----

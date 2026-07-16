@@ -1,5 +1,19 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+function subscribe(channel, callback) {
+  if (typeof callback !== 'function') return () => {};
+
+  const handler = (_event, payload) => callback(payload);
+  ipcRenderer.on(channel, handler);
+
+  let subscribed = true;
+  return () => {
+    if (!subscribed) return;
+    subscribed = false;
+    ipcRenderer.removeListener(channel, handler);
+  };
+}
+
 contextBridge.exposeInMainWorld('api', {
   system: {
     selectOutputDir: () => ipcRenderer.invoke('select-output-dir'),
@@ -14,6 +28,13 @@ contextBridge.exposeInMainWorld('api', {
     loadSettings: () => ipcRenderer.invoke('load-settings'),
     saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
     resolveDroppedPaths: (paths) => ipcRenderer.invoke('resolve-dropped-paths', paths),
+    saveClipboardImage: (bytes, mimeType) => {
+      const byteLength = bytes && typeof bytes.byteLength === 'number' ? bytes.byteLength : 0;
+      if (byteLength <= 0 || byteLength > 32 * 1024 * 1024) {
+        return Promise.reject(new Error('Clipboard image must be between 1 byte and 32 MB'));
+      }
+      return ipcRenderer.invoke('save-clipboard-image', { bytes, mimeType });
+    },
     // File.path was removed in Electron 32; this is the only way for the
     // renderer to get a filesystem path from a dropped/pasted File object.
     getPathForFile: (file) => {
@@ -30,72 +51,35 @@ contextBridge.exposeInMainWorld('api', {
     maximizeToggle: () => ipcRenderer.invoke('window-maximize-toggle'),
     close: () => ipcRenderer.invoke('window-close'),
     isMaximized: () => ipcRenderer.invoke('window-is-maximized'),
-    onMaximizeChange: (callback) => {
-      const handler = (_, isMax) => callback(isMax);
-      ipcRenderer.on('window-maximized', handler);
-      return () => ipcRenderer.removeListener('window-maximized', handler);
-    },
+    onMaximizeChange: (callback) => subscribe('window-maximized', callback),
   },
 
   python: {
     getPythonPort: () => ipcRenderer.invoke('get-python-port'),
     getPythonToken: () => ipcRenderer.invoke('get-python-token'),
     restartPython: () => ipcRenderer.invoke('restart-python'),
-    onPythonCrashed: (callback) => {
-      const handler = (_, code) => callback(code);
-      ipcRenderer.on('python-crashed', handler);
-      return () => ipcRenderer.removeListener('python-crashed', handler);
-    },
-    onPythonLog: (callback) => {
-      const handler = (_, msg) => callback(msg);
-      ipcRenderer.on('python-log', handler);
-      return () => ipcRenderer.removeListener('python-log', handler);
-    },
+    onPythonCrashed: (callback) => subscribe('python-crashed', callback),
+    onPythonLog: (callback) => subscribe('python-log', callback),
   },
 
   updater: {
     checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
     downloadUpdate: () => ipcRenderer.invoke('download-update'),
     downloadAndUpdate: (installerPath) => ipcRenderer.invoke('download-and-update', installerPath),
+    getLocalUpdateFolder: () => ipcRenderer.invoke('get-local-update-folder'),
+    selectLocalUpdateFolder: () => ipcRenderer.invoke('select-local-update-folder'),
+    clearLocalUpdateFolder: () => ipcRenderer.invoke('clear-local-update-folder'),
     restartToUpdate: () => ipcRenderer.invoke('restart-to-update'),
-    onUpdateStatus: (callback) => {
-      const handler = (_, status) => callback(status);
-      ipcRenderer.on('update-status', handler);
-      return () => ipcRenderer.removeListener('update-status', handler);
-    },
-    onUpdateAvailable: (callback) => {
-      const handler = (_, info) => callback(info);
-      ipcRenderer.on('update-available', handler);
-      return () => ipcRenderer.removeListener('update-available', handler);
-    },
-    onUpdateNotAvailable: (callback) => {
-      const handler = (_, info) => callback(info);
-      ipcRenderer.on('update-not-available', handler);
-      return () => ipcRenderer.removeListener('update-not-available', handler);
-    },
-    onUpdateError: (callback) => {
-      const handler = (_, err) => callback(err);
-      ipcRenderer.on('update-error', handler);
-      return () => ipcRenderer.removeListener('update-error', handler);
-    },
-    onUpdateDownloadProgress: (callback) => {
-      const handler = (_, progress) => callback(progress);
-      ipcRenderer.on('update-download-progress', handler);
-      return () => ipcRenderer.removeListener('update-download-progress', handler);
-    },
-    onUpdateDownloaded: (callback) => {
-      const handler = (_, info) => callback(info);
-      ipcRenderer.on('update-downloaded', handler);
-      return () => ipcRenderer.removeListener('update-downloaded', handler);
-    }
+    onUpdateStatus: (callback) => subscribe('update-status', callback),
+    onUpdateAvailable: (callback) => subscribe('update-available', callback),
+    onUpdateNotAvailable: (callback) => subscribe('update-not-available', callback),
+    onUpdateError: (callback) => subscribe('update-error', callback),
+    onUpdateDownloadProgress: (callback) => subscribe('update-download-progress', callback),
+    onUpdateDownloaded: (callback) => subscribe('update-downloaded', callback)
   },
 
   tools: {
-    onToolProgress: (callback) => {
-      const handler = (_, data) => callback(data);
-      ipcRenderer.on('tool-progress', handler);
-      return () => ipcRenderer.removeListener('tool-progress', handler);
-    },
+    onToolProgress: (callback) => subscribe('tool-progress', callback),
     
     formatConverter: {
       convertFormat: (options) => ipcRenderer.invoke('format-converter-convert', options),
@@ -125,6 +109,7 @@ contextBridge.exposeInMainWorld('api', {
       downloadVideoUrl: (options) => ipcRenderer.invoke('url-downloader-download', options),
       cancelUrlDownload: () => ipcRenderer.invoke('url-downloader-cancel'),
       getVideoInfo: (options) => ipcRenderer.invoke('url-downloader-info', options),
+      cancelVideoInfo: (requestId) => ipcRenderer.invoke('url-downloader-info-cancel', requestId),
       getThumbnail: (options) => ipcRenderer.invoke('url-downloader-thumbnail', options),
       updateYtDlp: () => ipcRenderer.invoke('url-downloader-update-ytdlp'),
     },

@@ -16,10 +16,12 @@ let pythonToken = null;
 let log = null;
 let batchStartTime = 0;
 let batchTotalFiles = 0;
+let batchFilePaths = new Set();
 
 let reconnectDelay = 1000;
 let reconnectAttempts = 0;
 let reconnectTimerId = null;
+let cancelWatchdog = null;
 const MAX_RECONNECT_DELAY = 30000;
 
 let dropZone, browseBtn, fileList, separateBtn, clearBtn, openOutputBtn, retryBtn;
@@ -35,7 +37,7 @@ let lastOutputDir = '';
 let _pasteHandler = null;
 let _currentAudio = null; // active stem preview, so cleanup() can stop it
 
-function init(ctx) {
+async function init(ctx) {
   pythonPort = ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
@@ -56,19 +58,20 @@ function init(ctx) {
   modelDescription = document.getElementById('modelDescription');
   updateModelDescription();
 
+  if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
+  await loadToolSettings();
   bindEvents();
-  _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFilesDirect(e.detail); };
+  _pasteHandler = (e) => { if (window.isToolActive('stem-separator') && e.detail && e.detail.length > 0) addFilesDirect(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
   connectWebSocket(pythonPort);
-  if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
-  loadToolSettings();
   log('Stem Separator initialized');
 }
 
 function cleanup() {
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
-  if (_currentAudio) { _currentAudio.pause(); _currentAudio = null; }
+  stopCurrentAudio();
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
 
@@ -77,6 +80,7 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/stem-separator/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
+    reconnectTimerId = null;
     // Removed technical logs
   };
   ws.onmessage = (event) => {
@@ -86,7 +90,22 @@ function connectWebSocket(port) {
     handleWSMessage(data);
   };
   ws.onclose = () => {
+    if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     if (!statusText) return;
+    if (isProcessing) {
+      isProcessing = false;
+      processingIndicator.classList.remove('active');
+      separateBtn.textContent = 'Separate Stems';
+      separateBtn.classList.remove('btn-cancel');
+      files.forEach(file => {
+        if (file.state === 'processing') {
+          file.state = 'error';
+          file.status = 'Connection lost — ready to retry';
+        }
+      });
+      renderFileList();
+      updateButton();
+    }
     statusText.textContent = 'Disconnected - reconnecting...';
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
@@ -97,34 +116,43 @@ function connectWebSocket(port) {
 }
 
 function handleWSMessage(data) {
-  if (data.type === 'log') { log(data.message, data.level || 'info'); return; }
+  if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
+  if (data.type === 'log') {
+    if (typeof data.message === 'string') log(data.message, data.level || 'info');
+    return;
+  }
 
   const fileIndex = files.findIndex(f => f.path === data.file);
   if (fileIndex === -1 && data.type !== 'all_complete') return;
 
   switch (data.type) {
     case 'progress':
-      files[fileIndex].progress = data.progress;
-      files[fileIndex].status = data.status || 'Processing...';
+      files[fileIndex].progress = normalizeProgress(data.progress);
+      files[fileIndex].status = typeof data.status === 'string' ? data.status : 'Processing...';
       files[fileIndex].state = 'processing';
       renderFileItem(fileIndex);
-      if (window.setTaskbarProgress) window.setTaskbarProgress(data.progress);
-      if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files);
+      if (window.setTaskbarProgress) window.setTaskbarProgress(files[fileIndex].progress);
+      if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files.filter(file => batchFilePaths.has(file.path)));
       break;
     case 'complete':
       files[fileIndex].progress = 1;
       files[fileIndex].state = 'complete';
-      files[fileIndex].outputs = data.outputs || {};
-      const stemNames = Object.keys(data.outputs || {});
+      const rawOutputs = data.outputs && typeof data.outputs === 'object' && !Array.isArray(data.outputs) ? data.outputs : {};
+      files[fileIndex].outputs = Object.fromEntries(
+        Object.entries(rawOutputs).filter(([, outputPath]) => typeof outputPath === 'string' && outputPath.length > 0)
+      );
+      const stemNames = Object.keys(files[fileIndex].outputs);
       files[fileIndex].status = `Done: ${stemNames.join(', ')}`;
       if (stemNames.length > 0) {
-        const firstOutput = data.outputs[stemNames[0]];
-        lastOutputDir = firstOutput.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        const firstOutput = files[fileIndex].outputs[stemNames[0]];
+        lastOutputDir = window.getParentDirectory(firstOutput);
+        stemNames.forEach(name => { if (window.addRecentFile) window.addRecentFile(files[fileIndex].outputs[name]); });
       }
       renderFileItem(fileIndex);
       log(`Separated: ${files[fileIndex].name} -> ${stemNames.join(', ')}`, 'success');
       break;
     case 'error':
+      data.error = typeof data.error === 'string' ? data.error : 'Stem separation failed';
       files[fileIndex].progress = 0;
       files[fileIndex].status = `Error: ${data.error}`;
       files[fileIndex].state = data.error === 'Cancelled' ? 'cancelled' : 'error';
@@ -132,35 +160,53 @@ function handleWSMessage(data) {
       log(`Error [${files[fileIndex].name}]: ${data.error}`, data.error === 'Cancelled' ? 'warn' : 'error');
       break;
     case 'all_complete':
+      if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
       isProcessing = false;
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
-      separateBtn.disabled = false;
+      updateButton();
       separateBtn.textContent = 'Separate Stems';
       separateBtn.classList.remove('btn-cancel');
-      const completed = files.filter(f => f.state === 'complete').length;
-      const errors = files.filter(f => f.state === 'error').length;
-      const cancelled = files.filter(f => f.state === 'cancelled').length;
+      const batchFiles = files.filter(file => batchFilePaths.has(file.path));
+      const completed = batchFiles.filter(f => f.state === 'complete').length;
+      const errors = batchFiles.filter(f => f.state === 'error').length;
+      const cancelled = batchFiles.filter(f => f.state === 'cancelled').length;
+      const outputs = batchFiles.flatMap(f => Object.values(f.outputs || {}).filter(value => typeof value === 'string'));
       statusText.textContent = `Done! ${completed} separated${errors > 0 ? `, ${errors} failed` : ''}${cancelled > 0 ? `, ${cancelled} cancelled` : ''}`;
       if (lastOutputDir) openOutputBtn.style.display = '';
       if (retryBtn) retryBtn.style.display = (errors > 0 || cancelled > 0) ? '' : 'none';
-      log(`Batch finished: ${completed} completed, ${errors} failed`, errors > 0 ? 'warn' : 'success');
+      log(cancelled > 0 ? `Separation cancelled: ${completed} completed` : `Batch finished: ${completed} completed, ${errors} failed`, errors > 0 || cancelled > 0 ? 'warn' : 'success');
       if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
-      if (window.showCompletionToast) window.showCompletionToast(`Stem separation complete: ${completed} separated${errors > 0 ? `, ${errors} failed` : ''}`, errors > 0);
-      if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+      if (cancelled === 0 && window.showCompletionToast) window.showCompletionToast(`Stem separation complete: ${completed} separated${errors > 0 ? `, ${errors} failed` : ''}`, errors > 0, outputs);
+      if (cancelled === 0 && outputs.length > 0 && window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
       break;
   }
 }
 
+function normalizeProgress(value) {
+  const progress = Number(value);
+  if (!Number.isFinite(progress)) return 0;
+  return Math.max(0, Math.min(1, progress > 1 ? progress / 100 : progress));
+}
+
 function getSelectedStems() {
   const checks = stemCheckboxes.querySelectorAll('input[type="checkbox"]:checked');
-  const stems = Array.from(checks).map(c => c.value);
-  return stems.length > 0 ? stems : null; // null = all
+  return Array.from(checks).map(c => c.value);
 }
 
 function bindEvents() {
   modelSelect.addEventListener('change', () => { updateModelDescription(); saveToolSettings(); });
-  stemCheckboxes.addEventListener('change', () => { saveToolSettings(); });
+  stemCheckboxes.addEventListener('change', () => {
+    saveToolSettings();
+    if (!isProcessing) {
+      const hasSelection = getSelectedStems().length > 0;
+      updateButton();
+      if (!hasSelection) statusText.textContent = 'Select at least one stem';
+      else if (files.some(file => file.state === 'pending' || file.state === 'error' || file.state === 'cancelled')) {
+        statusText.textContent = 'Ready to separate';
+      }
+    }
+  });
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
@@ -241,11 +287,17 @@ function bindEvents() {
   separateBtn.addEventListener('click', () => {
     if (isProcessing) {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: 'cancel' }));
+        try { ws.send(JSON.stringify({ action: 'cancel' })); }
+        catch (err) {
+          log(`Could not request cancellation: ${err.message}`, 'error');
+          return;
+        }
         separateBtn.disabled = true;
         separateBtn.textContent = 'Cancelling...';
         log('Cancelling...', 'warn');
-        setTimeout(() => {
+        if (cancelWatchdog) clearTimeout(cancelWatchdog);
+        cancelWatchdog = setTimeout(() => {
+          cancelWatchdog = null;
           if (isProcessing) {
             separateBtn.disabled = false;
             separateBtn.textContent = 'Cancel';
@@ -261,11 +313,21 @@ function bindEvents() {
       return;
     }
 
+    const stems = getSelectedStems();
+    if (stems.length === 0) {
+      statusText.textContent = 'Select at least one stem';
+      log('Select at least one stem before starting', 'warn');
+      updateButton();
+      return;
+    }
+
     const filesToProcess = files
       .filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled')
       .map(f => { f.state = 'pending'; f.progress = 0; f.status = 'Queued...'; return f.path; });
     if (filesToProcess.length === 0) return;
 
+    batchFilePaths = new Set(filesToProcess);
+    if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     isProcessing = true;
     batchStartTime = Date.now();
     batchTotalFiles = filesToProcess.length;
@@ -278,16 +340,30 @@ function bindEvents() {
     statusText.textContent = `Separating ${filesToProcess.length} file(s)...`;
     renderFileList();
 
-    const stems = getSelectedStems();
-    log(`Starting separation: ${filesToProcess.length} file(s), model=${modelSelect.value}, stems=${stems ? stems.join(',') : 'all'}`);
+    log(`Starting separation: ${filesToProcess.length} file(s), model=${modelSelect.value}, stems=${stems.join(',')}`);
 
-    ws.send(JSON.stringify({
-      action: 'separate',
-      files: filesToProcess,
-      model: modelSelect.value,
-      stems: stems,
-      output_dir: outputDir
-    }));
+    try {
+      ws.send(JSON.stringify({
+        action: 'separate',
+        files: filesToProcess,
+        model: modelSelect.value,
+        stems: stems,
+        output_dir: outputDir
+      }));
+    } catch (err) {
+      isProcessing = false;
+      files.filter(file => batchFilePaths.has(file.path)).forEach(file => {
+        file.state = 'pending';
+        file.status = 'Ready to retry';
+      });
+      processingIndicator.classList.remove('active');
+      separateBtn.textContent = 'Separate Stems';
+      separateBtn.classList.remove('btn-cancel');
+      statusText.textContent = 'Could not start separation';
+      renderFileList();
+      updateButton();
+      log(`Could not start stem separation: ${err.message}`, 'error');
+    }
   });
 }
 
@@ -305,19 +381,24 @@ function isSupported(fp) {
 }
 
 function addFiles(paths) {
-  addFilesDirect(paths.filter(p => isSupported(p)));
+  addFilesDirect(paths.filter(p => typeof p === 'string' && isSupported(p)));
 }
 
 async function addFilesDirect(paths) {
   let added = 0;
   for (const p of paths) {
+    if (typeof p !== 'string') continue;
     if (!isSupported(p)) continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
     const ext = getFileExtension(p);
     const type = AUDIO_EXTS.has(ext) ? 'audio' : 'video';
-    const size = await window.api.system.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for Audio', state: 'pending', outputs: {} });
-    added++;
+    try {
+      const size = await window.api.system.getFileSize(p);
+      files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for Audio', state: 'pending', outputs: {} });
+      added++;
+    } catch (err) {
+      log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
+    }
   }
   if (added > 0) log(`Added ${added} file(s)`);
   renderFileList();
@@ -325,20 +406,44 @@ async function addFilesDirect(paths) {
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
 }
 
-function removeFile(index) { files.splice(index, 1); renderFileList(); updateButton(); }
+function stopCurrentAudio() {
+  if (_currentAudio) {
+    try {
+      _currentAudio.pause();
+      _currentAudio.currentTime = 0;
+    } catch {}
+  }
+  if (fileList) {
+    fileList.querySelectorAll('.audio-play-btn.playing').forEach(button => {
+      button.innerHTML = '&#9654;';
+      button.classList.remove('playing');
+      button._audio = null;
+    });
+  }
+  _currentAudio = null;
+}
+
+function removeFile(index) {
+  stopCurrentAudio();
+  files.splice(index, 1);
+  renderFileList();
+  updateButton();
+}
 
 function clearFiles() {
+  stopCurrentAudio();
   files = [];
   renderFileList();
   updateButton();
   statusText.textContent = 'Waiting for Audio';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
+  if (window.updateQueueSummary) window.updateQueueSummary([], 'stem-separator');
 }
 
 function updateButton() {
+  if (isProcessing) return;
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled');
-  separateBtn.disabled = pending.length === 0 && !isProcessing;
+  separateBtn.disabled = pending.length === 0 || getSelectedStems().length === 0;
 }
 
 // ---- Rendering ----
@@ -349,11 +454,11 @@ function renderFileList() {
   }
   fileList.innerHTML = '';
   files.forEach((f, i) => fileList.appendChild(createFileElement(f, i)));
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'stem-separator');
 }
 
 function renderFileItem(index) {
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'stem-separator');
   const existing = fileList.children[index];
   if (!existing) return;
   const file = files[index];
@@ -390,11 +495,12 @@ function createFileElement(file, index) {
   let stemBadges = '';
   if (file.state === 'complete' && file.outputs) {
     const rows = Object.entries(file.outputs).map(([s, path]) => {
-      const fileUrl = 'file://' + path.replace(/\\/g, '/');
+      const fileUrl = window.localPathToFileUrl(path);
+      const label = window.escapeHtml(String(s));
       return `<div class="stem-audio-row">
-        <span class="stem-badge">${s}</span>
+        <span class="stem-badge">${label}</span>
         <div class="audio-preview">
-          <button class="audio-play-btn" data-src="${window.escapeHtml(fileUrl)}" title="Play ${s}">&#9654;</button>
+          <button class="audio-play-btn" data-src="${window.escapeHtml(fileUrl)}" title="Play ${label}">&#9654;</button>
         </div>
       </div>`;
     }).join('');
@@ -495,15 +601,14 @@ let _saveTimer = null;
 function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    window.loadAllSettings().then(all => {
+    window.updateSettings(all => {
       const checks = stemCheckboxes.querySelectorAll('input[type="checkbox"]:checked');
       const stems = Array.from(checks).map(c => c.value);
       all['stem-separator'] = { model: modelSelect.value, stems, outputDir };
-      window.saveAllSettings(all);
-    });
+    }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }
 
-window.registerTool('stem-separator', { init, cleanup });
+window.registerTool('stem-separator', { init, cleanup, deactivate: stopCurrentAudio });
 
 })();

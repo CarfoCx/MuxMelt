@@ -8,7 +8,12 @@ numpy>=1.24.0
 Pillow>=10.0.0
 pynvml>=11.0.0
 demucs>=4.0.0
-rembg[gpu]
+# rembg's GPU extra intentionally has no ONNX dependency on macOS. Install the
+# CPU backend there so the package cannot be present while every operation
+# fails at import time. The GPU runtime also provides a CPU execution fallback
+# on supported Windows/Linux hosts.
+rembg[cpu]; sys_platform == 'darwin'
+rembg[gpu]; sys_platform != 'darwin'
 edge-tts>=6.1.0
 yt-dlp[default,curl-cffi]>=2024.8.6
 # Pinned to the newest version with prebuilt CPU wheels on the abetlen index

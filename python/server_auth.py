@@ -10,6 +10,7 @@ on every request/WebSocket closes the otherwise-open local attack surface
 """
 
 import re
+import secrets
 from urllib.parse import parse_qs
 
 _LOCAL_ORIGIN_RE = re.compile(r'^https?://(localhost|127\.0\.0\.1)(:\d+)?$')
@@ -46,8 +47,12 @@ def request_authorized(scope, expected_token):
         return True
 
     qs = parse_qs(scope.get('query_string', b'').decode('latin-1'))
-    provided = (qs.get('token') or [None])[0]
-    if provided != expected_token:
+    tokens = qs.get('token') or []
+    if len(tokens) != 1:
+        return False
+    provided = tokens[0]
+    if (not isinstance(expected_token, str)
+            or not secrets.compare_digest(provided, expected_token)):
         return False
 
     origin = None

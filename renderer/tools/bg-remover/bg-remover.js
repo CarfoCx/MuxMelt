@@ -9,16 +9,19 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '
 let files = [];
 let outputDir = '';
 let isProcessing = false;
+let cancelRequested = false;
 let ws = null;
 let pythonPort = null;
 let pythonToken = null;
 let log = null;
 let batchStartTime = 0;
 let batchTotalFiles = 0;
+let batchFilePaths = new Set();
 
 let reconnectDelay = 1000;
 let reconnectAttempts = 0;
 let reconnectTimerId = null;
+let cancelWatchdog = null;
 const MAX_RECONNECT_DELAY = 30000;
 
 let dropZone, browseBtn, fileList, processBtn, clearBtn, openOutputBtn;
@@ -35,7 +38,7 @@ let _pasteHandler = null;
 // the tool is opened and closed).
 let _winMouseMove = null, _winMouseUp = null, _winTouchMove = null, _winTouchEnd = null;
 
-function init(ctx) {
+async function init(ctx) {
   pythonPort = ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
@@ -68,12 +71,12 @@ function init(ctx) {
   compareSlider = document.getElementById('compareSlider');
   compareTitle = document.getElementById('compareTitle');
 
+  if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
+  await loadToolSettings();
   bindEvents();
-  _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) addFiles(e.detail); };
+  _pasteHandler = (e) => { if (window.isToolActive('bg-remover') && e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
   connectWebSocket(pythonPort);
-  if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
-  loadToolSettings();
   log('Background Editor initialized');
 }
 
@@ -84,6 +87,7 @@ function cleanup() {
   if (_winTouchMove) { window.removeEventListener('touchmove', _winTouchMove); _winTouchMove = null; }
   if (_winTouchEnd) { window.removeEventListener('touchend', _winTouchEnd); _winTouchEnd = null; }
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
 
@@ -92,6 +96,7 @@ function connectWebSocket(port) {
   ws = new WebSocket(`ws://127.0.0.1:${port}/bg-remover/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
+    reconnectTimerId = null;
     // Removed technical logs
   };
   ws.onmessage = (event) => {
@@ -101,7 +106,22 @@ function connectWebSocket(port) {
     handleWSMessage(data);
   };
   ws.onclose = () => {
+    if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     if (!statusText) return;
+    if (isProcessing) {
+      isProcessing = false;
+      processingIndicator.classList.remove('active');
+      updateButton();
+      processBtn.textContent = 'Apply Background Edit';
+      processBtn.classList.remove('btn-cancel');
+      files.forEach(file => {
+        if (file.state === 'processing') {
+          file.state = 'error';
+          file.status = 'Connection lost — ready to retry';
+        }
+      });
+      renderFileList();
+    }
     statusText.textContent = 'Disconnected - reconnecting...';
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
@@ -112,57 +132,71 @@ function connectWebSocket(port) {
 }
 
 function handleWSMessage(data) {
-  if (data.type === 'log') { log(data.message, data.level || 'info'); return; }
+  if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
+  if (data.type === 'log') {
+    if (typeof data.message === 'string') log(data.message, data.level || 'info');
+    return;
+  }
 
   const fileIndex = files.findIndex(f => f.path === data.file);
   if (fileIndex === -1 && data.type !== 'all_complete' && data.type !== 'fatal_error') return;
 
   switch (data.type) {
     case 'progress':
-      files[fileIndex].progress = data.progress;
-      files[fileIndex].status = data.status || 'Processing...';
+      files[fileIndex].progress = normalizeProgress(data.progress);
+      files[fileIndex].status = typeof data.status === 'string' ? data.status : 'Processing...';
       files[fileIndex].state = 'processing';
       renderFileItem(fileIndex);
-      if (window.setTaskbarProgress) window.setTaskbarProgress(data.progress);
-      if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files);
+      if (window.setTaskbarProgress) window.setTaskbarProgress(files[fileIndex].progress);
+      if (etaText && window.calculateETA) etaText.textContent = window.calculateETA(batchStartTime, batchTotalFiles, files.filter(file => batchFilePaths.has(file.path)));
       break;
     case 'complete':
       files[fileIndex].progress = 1;
       files[fileIndex].status = 'Complete';
       files[fileIndex].state = 'complete';
-      if (data.output) files[fileIndex].outputPath = data.output;
+      if (typeof data.output === 'string' && data.output) files[fileIndex].outputPath = data.output;
       renderFileItem(fileIndex);
-      if (data.output) lastOutputDir = data.output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+      if (typeof data.output === 'string' && data.output) lastOutputDir = window.getParentDirectory(data.output);
+      if (typeof data.output === 'string' && data.output && window.addRecentFile) window.addRecentFile(data.output);
       log(`Complete: ${files[fileIndex].name}`, 'success');
       break;
     case 'error':
+      data.error = typeof data.error === 'string' ? data.error : 'Background processing failed';
       files[fileIndex].progress = 0;
       files[fileIndex].status = `Error: ${data.error}`;
-      files[fileIndex].state = 'error';
+      files[fileIndex].state = data.error === 'Cancelled' ? 'cancelled' : 'error';
       renderFileItem(fileIndex);
-      log(`Error [${files[fileIndex].name}]: ${data.error}`, 'error');
+      log(`Error [${files[fileIndex].name}]: ${data.error}`, data.error === 'Cancelled' ? 'warn' : 'error');
       break;
     case 'all_complete':
+      if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
       isProcessing = false;
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
-      processBtn.disabled = false;
+      updateButton();
       processBtn.textContent = 'Apply Background Edit';
       processBtn.classList.remove('btn-cancel');
-      const completed = files.filter(f => f.state === 'complete').length;
-      const errors = files.filter(f => f.state === 'error').length;
-      statusText.textContent = `Done! ${completed} processed${errors > 0 ? `, ${errors} failed` : ''}`;
+      const batchFiles = files.filter(file => batchFilePaths.has(file.path));
+      const completed = batchFiles.filter(f => f.state === 'complete').length;
+      const errors = batchFiles.filter(f => f.state === 'error').length;
+      const cancelled = batchFiles.filter(f => f.state === 'cancelled').length;
+      const outputs = batchFiles.filter(f => f.state === 'complete' && typeof f.outputPath === 'string').map(f => f.outputPath);
+      statusText.textContent = cancelRequested
+        ? `Cancelled. ${completed} processed${cancelled ? `, ${cancelled} cancelled` : ''}`
+        : `Done! ${completed} processed${errors > 0 ? `, ${errors} failed` : ''}`;
       if (lastOutputDir) openOutputBtn.style.display = '';
       log(`Batch finished: ${completed} completed, ${errors} failed`, errors > 0 ? 'warn' : 'success');
       if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
-      if (window.showCompletionToast) window.showCompletionToast(`Background removal complete: ${completed} processed${errors > 0 ? `, ${errors} failed` : ''}`, errors > 0);
-      if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+      if (!cancelRequested && window.showCompletionToast) window.showCompletionToast(`Background removal complete: ${completed} processed${errors > 0 ? `, ${errors} failed` : ''}`, errors > 0, outputs);
+      if (!cancelRequested && outputs.length > 0 && window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
       break;
     case 'fatal_error':
+      if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
+      data.error = typeof data.error === 'string' ? data.error : 'Background processing failed';
       isProcessing = false;
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
-      processBtn.disabled = false;
+      updateButton();
       processBtn.textContent = 'Apply Background Edit';
       processBtn.classList.remove('btn-cancel');
       statusText.textContent = `Fatal error: ${data.error}`;
@@ -170,6 +204,12 @@ function handleWSMessage(data) {
       if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
       break;
   }
+}
+
+function normalizeProgress(value) {
+  const progress = Number(value);
+  if (!Number.isFinite(progress)) return 0;
+  return Math.max(0, Math.min(1, progress > 1 ? progress / 100 : progress));
 }
 
 function bindEvents() {
@@ -221,7 +261,7 @@ function bindEvents() {
     const dir = await window.api.system.selectOutputDir();
     if (dir) {
       outputDir = dir;
-      const parts = dir.replace(/\\\\/g, '/').split('/');
+      const parts = dir.replace(/\\/g, '/').split('/');
       const display = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : dir;
       outputDirBtn.textContent = display;
       outputDirBtn.title = dir;
@@ -278,11 +318,19 @@ function bindEvents() {
   processBtn.addEventListener('click', () => {
     if (isProcessing) {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: 'cancel' }));
+        cancelRequested = true;
+        try { ws.send(JSON.stringify({ action: 'cancel' })); }
+        catch (err) {
+          cancelRequested = false;
+          log(`Could not request cancellation: ${err.message}`, 'error');
+          return;
+        }
         processBtn.disabled = true;
         processBtn.textContent = 'Cancelling...';
         log('Cancelling...', 'warn');
-        setTimeout(() => {
+        if (cancelWatchdog) clearTimeout(cancelWatchdog);
+        cancelWatchdog = setTimeout(() => {
+          cancelWatchdog = null;
           if (isProcessing) {
             processBtn.disabled = false;
             processBtn.textContent = 'Cancel';
@@ -301,10 +349,13 @@ function bindEvents() {
     }
 
     const filesToProcess = files
-      .filter(f => f.state === 'pending' || f.state === 'error')
+      .filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled')
       .map(f => { f.state = 'pending'; f.progress = 0; f.status = 'Queued...'; return f.path; });
     if (filesToProcess.length === 0) return;
 
+    cancelRequested = false;
+    if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
+    batchFilePaths = new Set(filesToProcess);
     isProcessing = true;
     batchStartTime = Date.now();
     batchTotalFiles = filesToProcess.length;
@@ -317,17 +368,32 @@ function bindEvents() {
     renderFileList();
 
     log(`Starting background removal: ${filesToProcess.length} file(s), format=${outputFormat.value}, bg=${bgMode.value}, edge refinement=${alphaMatting.checked}`);
-    ws.send(JSON.stringify({
-      action: 'remove',
-      files: filesToProcess,
-      output_format: outputFormat.value,
-      output_dir: outputDir,
-      alpha_matting: alphaMatting.checked,
-      bg_mode: bgMode.value,
-      bg_color: bgColor.value,
-      bg_blur: parseInt(bgBlur.value, 10),
-      bg_image: bgImagePath
-    }));
+    try {
+      ws.send(JSON.stringify({
+        action: 'remove',
+        files: filesToProcess,
+        output_format: outputFormat.value,
+        output_dir: outputDir,
+        alpha_matting: alphaMatting.checked,
+        bg_mode: bgMode.value,
+        bg_color: bgColor.value,
+        bg_blur: parseInt(bgBlur.value, 10),
+        bg_image: bgImagePath
+      }));
+    } catch (err) {
+      isProcessing = false;
+      files.filter(file => batchFilePaths.has(file.path)).forEach(file => {
+        file.state = 'pending';
+        file.status = 'Ready to retry';
+      });
+      processingIndicator.classList.remove('active');
+      processBtn.textContent = 'Apply Background Edit';
+      processBtn.classList.remove('btn-cancel');
+      statusText.textContent = 'Could not start processing';
+      renderFileList();
+      updateButton();
+      log(`Could not start background processing: ${err.message}`, 'error');
+    }
   });
 }
 
@@ -361,12 +427,17 @@ function getFileName(fp) { return fp.replace(/\\/g, '/').split('/').pop(); }
 async function addFiles(paths) {
   let added = 0;
   for (const p of paths) {
+    if (typeof p !== 'string') continue;
     const ext = getFileExtension(p);
     if (!IMAGE_EXTS.has(ext)) continue;
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
-    const size = await window.api.system.getFileSize(p);
-    files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Image', state: 'pending' });
-    added++;
+    try {
+      const size = await window.api.system.getFileSize(p);
+      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Image', state: 'pending' });
+      added++;
+    } catch (err) {
+      log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
+    }
   }
   if (added > 0) log(`Added ${added} image file(s)`);
   renderFileList();
@@ -382,11 +453,11 @@ function clearFiles() {
   updateButton();
   statusText.textContent = 'Waiting for Image';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
+  if (window.updateQueueSummary) window.updateQueueSummary([], 'bg-remover');
 }
 
 function updateButton() {
-  const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
+  const pending = files.filter(f => f.state === 'pending' || f.state === 'error' || f.state === 'cancelled');
   processBtn.disabled = pending.length === 0 && !isProcessing;
 }
 
@@ -398,11 +469,11 @@ function renderFileList() {
   }
   fileList.innerHTML = '';
   files.forEach((f, i) => fileList.appendChild(createFileElement(f, i)));
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'bg-remover');
 }
 
 function renderFileItem(index) {
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'bg-remover');
   const existing = fileList.children[index];
   if (!existing) return;
   const file = files[index];
@@ -479,9 +550,8 @@ function createFileElement(file, index) {
 function openCompare(file) {
   if (!file.outputPath) return;
   compareTitle.textContent = `Before / After - ${file.name}`;
-  // Use file:// protocol for local images
-  compareBefore.src = 'file://' + file.path;
-  compareAfter.src = 'file://' + file.outputPath;
+  compareBefore.src = window.localPathToFileUrl(file.path);
+  compareAfter.src = window.localPathToFileUrl(file.outputPath);
   // Reset slider to 50%
   setComparePosition(50);
   compareOverlay.classList.add('active');
@@ -563,7 +633,7 @@ let _saveTimer = null;
 function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
-    window.loadAllSettings().then(all => {
+    window.updateSettings(all => {
       all['bg-remover'] = {
         outputFormat: outputFormat.value,
         alphaMatting: alphaMatting.checked,
@@ -573,8 +643,7 @@ function saveToolSettings() {
         bgImage: bgImagePath,
         outputDir
       };
-      window.saveAllSettings(all);
-    });
+    }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }
 

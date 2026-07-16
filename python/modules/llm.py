@@ -8,8 +8,13 @@ with find_spec and only imported when a model is actually loaded.
 """
 
 import hashlib
+import math
 import os
+import shutil
+import socket
+import tempfile
 import threading
+import time
 import urllib.request
 from importlib.util import find_spec
 
@@ -38,8 +43,8 @@ def _models_dir():
 # a small size/speed cost. To add a model, drop another entry here and it shows
 # up in the picker automatically. An optional 'sha256' (lowercase hex of the
 # GGUF) pins the download for integrity — when present it is verified before the
-# file is accepted; when absent, only the length is checked against the server's
-# Content-Length to reject truncated/interrupted downloads.
+# file is accepted; when absent, the GGUF magic, expected size range, and the
+# server's Content-Length reject error pages and truncated downloads.
 MODELS = {
     'qwen2.5-1.5b-instruct-q4': {
         'name': 'Qwen2.5 1.5B — fastest (~1 GB)',
@@ -80,10 +85,22 @@ class ChatLLM:
         self.cancel_event = threading.Event()
         self._llm = None
         self._loaded_model_id = None
-        self._lock = threading.Lock()
+        # llama.cpp contexts are not safe to load/use concurrently. This also
+        # prevents a model switch from freeing a context mid-generation.
+        self._lock = threading.RLock()
+        self._download_lock = threading.Lock()
+        self._download_response_lock = threading.Lock()
+        self._active_download_response = None
 
     def cancel(self):
         self.cancel_event.set()
+        with self._download_response_lock:
+            response = self._active_download_response
+        if response is not None:
+            try:
+                response.close()
+            except OSError:
+                pass
 
     def reset_cancel(self):
         self.cancel_event.clear()
@@ -95,8 +112,21 @@ class ChatLLM:
         return os.path.join(_models_dir(), m['file'])
 
     def is_downloaded(self, model_id):
+        model_info = MODELS.get(model_id)
         p = self.model_path(model_id)
-        return bool(p and os.path.isfile(p) and os.path.getsize(p) > 0)
+        if not model_info or not p or not os.path.isfile(p):
+            return False
+        try:
+            # Every valid GGUF starts with this four-byte magic. Checking it is
+            # cheap and avoids treating an HTML error page or stale partial as
+            # an installed model.
+            minimum_size = int(model_info.get('approx_mb', 0) * 1_000_000 * 0.65)
+            if minimum_size and os.path.getsize(p) < minimum_size:
+                return False
+            with open(p, 'rb') as model_file:
+                return model_file.read(4) == b'GGUF'
+        except OSError:
+            return False
 
     def list_models(self):
         return [
@@ -115,55 +145,104 @@ class ChatLLM:
         m = MODELS.get(model_id)
         if not m:
             raise ValueError(f'Unknown model: {model_id}')
-        dest = self.model_path(model_id)
-        if self.is_downloaded(model_id):
-            return dest
+        with self._download_lock:
+            dest = self.model_path(model_id)
+            if self.is_downloaded(model_id):
+                return dest
 
-        tmp = dest + '.part'
-        expected_sha = (m.get('sha256') or '').lower() or None
-        req = urllib.request.Request(m['url'], headers={'User-Agent': 'MuxMelt'})
-        try:
-            hasher = hashlib.sha256() if expected_sha else None
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                total = int(resp.headers.get('Content-Length') or 0)
-                done = 0
-                chunk_size = 1024 * 256
-                with open(tmp, 'wb') as f:
-                    while True:
-                        if self.cancel_event.is_set():
-                            raise RuntimeError('Cancelled')
-                        buf = resp.read(chunk_size)
-                        if not buf:
-                            break
-                        f.write(buf)
-                        if hasher:
-                            hasher.update(buf)
-                        done += len(buf)
-                        if progress_cb:
-                            progress_cb(done / total if total else 0.0, done, total)
-
-            # Reject a truncated/interrupted download before it can be mistaken
-            # for a complete model (is_downloaded only checks size > 0).
-            if total and done != total:
-                raise RuntimeError(
-                    f'Download incomplete: got {done} of {total} bytes. '
-                    'Check your connection and try again.'
-                )
-            if expected_sha:
-                actual_sha = hasher.hexdigest()
-                if actual_sha != expected_sha:
+            tmp = None
+            expected_sha = (m.get('sha256') or '').lower() or None
+            expected_bytes = int(m.get('approx_mb', 0) * 1_000_000)
+            if expected_bytes:
+                free_bytes = shutil.disk_usage(os.path.dirname(dest)).free
+                if free_bytes < expected_bytes * 1.1:
                     raise RuntimeError(
-                        'Downloaded model failed integrity check (SHA-256 mismatch).'
+                        f'Not enough free disk space for this model. '
+                        f'About {m["approx_mb"] / 1000:.1f} GB is required.'
                     )
-            os.replace(tmp, dest)
-            return dest
-        except Exception:
+
+            req = urllib.request.Request(m['url'], headers={'User-Agent': 'MuxMelt/1.0'})
+            resp = None
             try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except OSError:
-                pass
-            raise
+                hasher = hashlib.sha256() if expected_sha else None
+                resp = urllib.request.urlopen(req, timeout=10)
+                with self._download_response_lock:
+                    if self.cancel_event.is_set():
+                        resp.close()
+                        raise RuntimeError('Cancelled')
+                    self._active_download_response = resp
+                with resp:
+                    total = int(resp.headers.get('Content-Length') or 0)
+                    done = 0
+                    chunk_size = 1024 * 256
+                    last_data_at = time.monotonic()
+                    with tempfile.NamedTemporaryFile(
+                        mode='wb', prefix=os.path.basename(dest) + '.',
+                        suffix='.part', dir=os.path.dirname(dest), delete=False,
+                    ) as f:
+                        tmp = f.name
+                        while True:
+                            if self.cancel_event.is_set():
+                                raise RuntimeError('Cancelled')
+                            try:
+                                buf = resp.read(chunk_size)
+                            except (TimeoutError, socket.timeout) as exc:
+                                if self.cancel_event.is_set():
+                                    raise RuntimeError('Cancelled') from exc
+                                if time.monotonic() - last_data_at >= 60:
+                                    raise RuntimeError(
+                                        'Model download stalled for 60 seconds. '
+                                        'Check your connection and try again.'
+                                    ) from exc
+                                continue
+                            if not buf:
+                                break
+                            last_data_at = time.monotonic()
+                            f.write(buf)
+                            if hasher:
+                                hasher.update(buf)
+                            done += len(buf)
+                            if progress_cb:
+                                progress_cb(done / total if total else 0.0, done, total)
+
+                if total and done != total:
+                    raise RuntimeError(
+                        f'Download incomplete: got {done} of {total} bytes. '
+                        'Check your connection and try again.'
+                    )
+                if expected_bytes and done < expected_bytes * 0.65:
+                    raise RuntimeError(
+                        'Downloaded model is much smaller than expected and is likely incomplete.'
+                    )
+                with open(tmp, 'rb') as model_file:
+                    if model_file.read(4) != b'GGUF':
+                        raise RuntimeError('The downloaded file is not a valid GGUF model.')
+                if expected_sha:
+                    actual_sha = hasher.hexdigest()
+                    if actual_sha != expected_sha:
+                        raise RuntimeError(
+                            'Downloaded model failed integrity check (SHA-256 mismatch).'
+                        )
+                os.replace(tmp, dest)
+                return dest
+            except Exception as exc:
+                try:
+                    if tmp:
+                        os.remove(tmp)
+                except OSError:
+                    pass
+                if self.cancel_event.is_set() and str(exc) != 'Cancelled':
+                    raise RuntimeError('Cancelled') from exc
+                raise
+            finally:
+                with self._download_response_lock:
+                    if self._active_download_response is resp:
+                        self._active_download_response = None
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except OSError:
+                        pass
 
     def ensure_loaded(self, model_id, status_cb=None):
         """Load the model into memory (cached). Loading a fresh model frees the
@@ -177,7 +256,9 @@ class ChatLLM:
             if self._llm is not None and self._loaded_model_id == model_id:
                 return
             path = self.model_path(model_id)
-            if not path or not os.path.isfile(path):
+            if not path:
+                raise ValueError(f'Unknown model: {model_id}')
+            if not self.is_downloaded(model_id):
                 raise RuntimeError('Model has not been downloaded yet.')
 
             if status_cb:
@@ -210,24 +291,59 @@ class ChatLLM:
         looping small models are prone to; `min_p` trims low-probability tokens
         (a steadier alternative to top_k alone). The caller maps a user-facing
         style preset (Precise/Balanced/Creative) onto these values."""
-        if self._llm is None:
-            raise RuntimeError('Model not loaded.')
-
-        stream = self._llm.create_chat_completion(
-            messages=messages,
-            stream=True,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            repeat_penalty=repeat_penalty,
-            min_p=min_p,
+        if not isinstance(messages, list) or not messages:
+            raise ValueError('Messages must be a non-empty list')
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or not 1 <= max_tokens <= 4096:
+            raise ValueError('max_tokens must be between 1 and 4096')
+        numeric_ranges = (
+            ('temperature', temperature, 0.0, 2.0),
+            ('top_p', top_p, 0.0, 1.0),
+            ('repeat_penalty', repeat_penalty, 0.0, 2.0),
+            ('min_p', min_p, 0.0, 1.0),
         )
-        for chunk in stream:
+        for name, value, low, high in numeric_ranges:
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value) or not low <= value <= high):
+                raise ValueError(f'{name} must be between {low} and {high}')
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or not 0 <= top_k <= 200:
+            raise ValueError('top_k must be between 0 and 200')
+
+        with self._lock:
+            # Cancellation can arrive while the router is loading the model or
+            # while this worker is waiting for the context lock. Do not enter
+            # llama.cpp at all when the request is already stale.
             if self.cancel_event.is_set():
-                break
-            choices = chunk.get('choices') or [{}]
-            delta = choices[0].get('delta', {}) or {}
-            text = delta.get('content')
-            if text:
-                on_token(text)
+                return
+            if self._llm is None:
+                raise RuntimeError('Model not loaded.')
+
+            stream = self._llm.create_chat_completion(
+                messages=messages,
+                stream=True,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repeat_penalty=repeat_penalty,
+                min_p=min_p,
+            )
+            try:
+                for chunk in stream:
+                    if self.cancel_event.is_set():
+                        break
+                    if not isinstance(chunk, dict):
+                        continue
+                    choices = chunk.get('choices') or []
+                    if not choices or not isinstance(choices[0], dict):
+                        continue
+                    delta = choices[0].get('delta') or {}
+                    text = delta.get('content') if isinstance(delta, dict) else None
+                    if text:
+                        on_token(text)
+            finally:
+                close = getattr(stream, 'close', None)
+                if close:
+                    try:
+                        close()
+                    except Exception:
+                        pass

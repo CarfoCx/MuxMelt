@@ -2,29 +2,73 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const sharp = require('sharp');
 const { validateOutputDir, formatToolError, autoIncrementPath } = require('./path-utils');
+
+const OPERATIONS = new Set(['resize', 'crop', 'rotate', 'flip', 'watermark']);
+const OUTPUT_FORMATS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.tif', '.tiff', '.avif']);
+const FIT_MODES = new Set(['cover', 'contain', 'fill', 'inside', 'outside']);
+const MAX_BATCH_FILES = 1000;
+
+function outputExtension(inputPath, requestedFormat) {
+  if (requestedFormat != null && requestedFormat !== '') {
+    const normalized = `.${String(requestedFormat).trim().toLowerCase().replace(/^\./, '')}`;
+    if (!OUTPUT_FORMATS.has(normalized)) throw new Error(`Unsupported output image format: ${requestedFormat}`);
+    return normalized;
+  }
+  const inputExt = path.extname(inputPath).toLowerCase();
+  return OUTPUT_FORMATS.has(inputExt) ? inputExt : '.png';
+}
+
+function finiteNumber(value, label, { min = -Infinity, max = Infinity, integer = false } = {}) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max || (integer && !Number.isInteger(number))) {
+    throw new Error(`Invalid ${label}`);
+  }
+  return number;
+}
+
+function isRegularFile(filePath) {
+  try { return fs.statSync(filePath).isFile(); } catch { return false; }
+}
 
 /**
  * Apply a single operation to one image and save the result.
  */
 async function processImage(inputPath, outputPath, operation, operationOptions) {
+  if (!OPERATIONS.has(operation)) throw new Error(`Unknown operation: ${operation}`);
+  operationOptions = operationOptions && typeof operationOptions === 'object' ? operationOptions : {};
+  const inputMetadata = await sharp(inputPath, { animated: true }).metadata();
+  if (Number(inputMetadata.pages || 1) > 1) {
+    throw new Error(
+      'Animated or multi-page images are not supported by Bulk Imager. ' +
+      'Extract the frames/pages first to avoid silently flattening them.'
+    );
+  }
   let pipeline = sharp(inputPath);
 
   switch (operation) {
     case 'resize': {
       const { width, height, percentage, fit } = operationOptions;
-      if (percentage && percentage > 0) {
+      const fitMode = FIT_MODES.has(fit) ? fit : 'inside';
+      if (percentage != null && percentage !== '') {
+        const scalePercent = finiteNumber(percentage, 'resize percentage', { min: 0.1, max: 1000 });
         // Resize by percentage – need to read metadata first
-        const meta = await sharp(inputPath).metadata();
-        const newWidth = Math.round(meta.width * (percentage / 100));
-        const newHeight = Math.round(meta.height * (percentage / 100));
-        pipeline = pipeline.resize(newWidth, newHeight, { fit: fit || 'fill' });
+        const meta = inputMetadata;
+        if (!meta.width || !meta.height) throw new Error('Could not read image dimensions');
+        const newWidth = Math.max(1, Math.round(meta.width * (scalePercent / 100)));
+        const newHeight = Math.max(1, Math.round(meta.height * (scalePercent / 100)));
+        if (newWidth > 32768 || newHeight > 32768) throw new Error('Requested resize is too large');
+        pipeline = pipeline.resize(newWidth, newHeight, { fit: fitMode });
       } else {
-        const resizeOpts = { fit: fit || 'inside', withoutEnlargement: true };
+        const newWidth = width == null || width === '' ? null : finiteNumber(width, 'resize width', { min: 1, max: 32768, integer: true });
+        const newHeight = height == null || height === '' ? null : finiteNumber(height, 'resize height', { min: 1, max: 32768, integer: true });
+        if (newWidth == null && newHeight == null) throw new Error('Resize requires a width, height, or percentage');
+        const resizeOpts = { fit: fitMode, withoutEnlargement: true };
         pipeline = pipeline.resize(
-          width || null,
-          height || null,
+          newWidth,
+          newHeight,
           resizeOpts
         );
       }
@@ -33,20 +77,19 @@ async function processImage(inputPath, outputPath, operation, operationOptions) 
 
     case 'crop': {
       const { left, top, width, height } = operationOptions;
-      if (width && height) {
-        pipeline = pipeline.extract({
-          left: left || 0,
-          top: top || 0,
-          width,
-          height
-        });
-      }
+      pipeline = pipeline.extract({
+        left: left == null || left === '' ? 0 : finiteNumber(left, 'crop left edge', { min: 0, max: 100000, integer: true }),
+        top: top == null || top === '' ? 0 : finiteNumber(top, 'crop top edge', { min: 0, max: 100000, integer: true }),
+        width: finiteNumber(width, 'crop width', { min: 1, max: 32768, integer: true }),
+        height: finiteNumber(height, 'crop height', { min: 1, max: 32768, integer: true })
+      });
       break;
     }
 
     case 'rotate': {
       const { angle, background } = operationOptions;
-      pipeline = pipeline.rotate(angle || 0, {
+      const rotation = angle == null || angle === '' ? 0 : finiteNumber(angle, 'rotation angle', { min: -36000, max: 36000 });
+      pipeline = pipeline.rotate(rotation, {
         background: background || { r: 0, g: 0, b: 0, alpha: 0 }
       });
       break;
@@ -56,8 +99,10 @@ async function processImage(inputPath, outputPath, operation, operationOptions) 
       const { direction } = operationOptions;
       if (direction === 'horizontal') {
         pipeline = pipeline.flop();
-      } else {
+      } else if (!direction || direction === 'vertical') {
         pipeline = pipeline.flip();
+      } else {
+        throw new Error('Flip direction must be horizontal or vertical');
       }
       break;
     }
@@ -72,20 +117,22 @@ async function processImage(inputPath, outputPath, operation, operationOptions) 
         margin
       } = operationOptions;
 
+      if (typeof text !== 'string') throw new Error('Watermark text must be a string');
       if (!text) break;
+      if (text.length > 5000) throw new Error('Watermark text is too long');
 
-      const meta = await sharp(inputPath).metadata();
+      const meta = inputMetadata;
       const imgWidth = meta.width;
       const imgHeight = meta.height;
 
       // Validate inputs to prevent SVG injection
       const size = Number(fontSize || Math.max(20, Math.round(imgWidth / 20)));
-      if (!Number.isFinite(size) || size <= 0) {
+      if (!Number.isFinite(size) || size <= 0 || size > 2000) {
         throw new Error('Invalid font size');
       }
 
       const textColor = String(color || 'white');
-      const colorPattern = /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)$/;
+      const colorPattern = /^(#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|[a-zA-Z]+)$/;
       if (!colorPattern.test(textColor)) {
         throw new Error('Invalid color format');
       }
@@ -96,7 +143,7 @@ async function processImage(inputPath, outputPath, operation, operationOptions) 
       }
 
       const pad = Number(margin != null ? margin : 20);
-      if (!Number.isFinite(pad) || pad < 0) {
+      if (!Number.isFinite(pad) || pad < 0 || pad > Math.max(imgWidth, imgHeight)) {
         throw new Error('Invalid margin');
       }
 
@@ -161,8 +208,10 @@ function escapeXml(str) {
 
 function registerIPC(ipcMain, getMainWindow) {
   const cancelledWindows = new Set();
+  const activeWindows = new Set();
 
-  ipcMain.handle('bulk-imager-process', async (event, options) => {
+  ipcMain.handle('bulk-imager-process', async (event, options = {}) => {
+    options = options && typeof options === 'object' ? options : {};
     const {
       files,            // array of file paths
       operation,        // 'resize', 'crop', 'rotate', 'flip', 'watermark'
@@ -172,79 +221,105 @@ function registerIPC(ipcMain, getMainWindow) {
     } = options;
 
     const winId = event.sender.id;
-    cancelledWindows.delete(winId);
 
-    if (!files || files.length === 0) {
+    if (!Array.isArray(files) || files.length === 0) {
       return { success: false, error: 'No files provided' };
     }
+    if (files.length > MAX_BATCH_FILES || files.some(file => typeof file !== 'string' || !file)) {
+      return { success: false, error: `Select between 1 and ${MAX_BATCH_FILES} valid image files.` };
+    }
+    if (!OPERATIONS.has(operation)) return { success: false, error: `Unknown operation: ${operation}` };
+    if (activeWindows.has(winId)) return { success: false, error: 'A bulk image operation is already running in this window.' };
 
-    const outDir = validateOutputDir(outputDir) || path.dirname(files[0]);
-    fs.mkdirSync(outDir, { recursive: true });
+    let outDir;
+    try {
+      outDir = validateOutputDir(outputDir) || path.dirname(files[0]);
+      outputExtension(files[0], outputFormat);
+      fs.mkdirSync(outDir, { recursive: true });
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'Bulk Imager') };
+    }
+    activeWindows.add(winId);
+    cancelledWindows.delete(winId);
 
-    const results = [];
-    const total = files.length;
+    try {
+      const results = [];
+      const total = files.length;
 
-    for (let i = 0; i < total; i++) {
+      for (let i = 0; i < total; i++) {
+        if (cancelledWindows.has(winId)) {
+          return { success: false, error: 'Operation cancelled', results };
+        }
+
+        const inputPath = files[i];
+        if (!isRegularFile(inputPath)) {
+          results.push({ input: inputPath, success: false, error: 'File not found' });
+          continue;
+        }
+        const ext = path.extname(inputPath);
+        const baseName = path.basename(inputPath, ext);
+        const outExt = outputExtension(inputPath, outputFormat);
+        let outputPath = path.join(outDir, baseName + '_edited' + outExt);
+        outputPath = autoIncrementPath(outputPath);
+
+        try {
+          const win = getMainWindow();
+          if (win) {
+            win.webContents.send('tool-progress', {
+              tool: 'bulk-imager',
+              percent: (i / total) * 100,
+              current: i + 1,
+              total,
+              currentFile: path.basename(inputPath),
+              status: `Processing ${i + 1}/${total}: ${path.basename(inputPath)}`
+            });
+          }
+
+          await processImage(inputPath, outputPath, operation, operationOptions || {});
+          if (cancelledWindows.has(winId)) {
+            try { fs.rmSync(outputPath, { force: true }); } catch {}
+            return { success: false, error: 'Operation cancelled', results };
+          }
+          results.push({ input: inputPath, output: outputPath, success: true });
+        } catch (err) {
+          try { fs.rmSync(outputPath, { force: true }); } catch {}
+          results.push({ input: inputPath, success: false, error: err.message });
+        }
+      }
+
       if (cancelledWindows.has(winId)) {
-        cancelledWindows.delete(winId);
         return { success: false, error: 'Operation cancelled', results };
       }
 
-      const inputPath = files[i];
-      if (!fs.existsSync(inputPath)) {
-        results.push({ input: inputPath, success: false, error: 'File not found' });
-        continue;
+      const win = getMainWindow();
+      if (win) {
+        win.webContents.send('tool-progress', {
+          tool: 'bulk-imager',
+          percent: 100,
+          current: total,
+          total,
+          status: 'Done'
+        });
       }
-      const ext = path.extname(inputPath);
-      const baseName = path.basename(inputPath, ext);
-      const outExt = outputFormat ? ('.' + outputFormat) : ext;
-      let outputPath = path.join(outDir, baseName + '_edited' + outExt);
-      outputPath = autoIncrementPath(outputPath);
 
-      try {
-        const win = getMainWindow();
-        if (win) {
-          win.webContents.send('tool-progress', {
-            tool: 'bulk-imager',
-            percent: (i / total) * 100,
-            current: i + 1,
-            total,
-            currentFile: path.basename(inputPath),
-            status: `Processing ${i + 1}/${total}: ${path.basename(inputPath)}`
-          });
-        }
+      const succeeded = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
 
-        await processImage(inputPath, outputPath, operation, operationOptions || {});
-        results.push({ input: inputPath, output: outputPath, success: true });
-      } catch (err) {
-        results.push({ input: inputPath, success: false, error: err.message });
-      }
+      return {
+        success: true,
+        results,
+        summary: { total, succeeded, failed }
+      };
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'Bulk Imager') };
+    } finally {
+      cancelledWindows.delete(winId);
+      activeWindows.delete(winId);
     }
-
-    const win = getMainWindow();
-    if (win) {
-      win.webContents.send('tool-progress', {
-        tool: 'bulk-imager',
-        percent: 100,
-        current: total,
-        total,
-        status: 'Done'
-      });
-    }
-
-    cancelledWindows.delete(winId);
-
-    const succeeded = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success).length;
-
-    return {
-      success: true,
-      results,
-      summary: { total, succeeded, failed }
-    };
   });
 
-  ipcMain.handle('bulk-imager-process-chain', async (event, options) => {
+  ipcMain.handle('bulk-imager-process-chain', async (event, options = {}) => {
+    options = options && typeof options === 'object' ? options : {};
     const {
       files,            // array of file paths
       chain,            // array of { operation, operationOptions }
@@ -253,110 +328,149 @@ function registerIPC(ipcMain, getMainWindow) {
     } = options;
 
     const winId = event.sender.id;
-    cancelledWindows.delete(winId);
 
-    if (!files || files.length === 0) {
+    if (!Array.isArray(files) || files.length === 0) {
       return { success: false, error: 'No files provided' };
     }
-    if (!chain || chain.length === 0) {
+    if (files.length > MAX_BATCH_FILES || files.some(file => typeof file !== 'string' || !file)) {
+      return { success: false, error: `Select between 1 and ${MAX_BATCH_FILES} valid image files.` };
+    }
+    if (!Array.isArray(chain) || chain.length === 0) {
       return { success: false, error: 'No operations in chain' };
     }
+    if (chain.length > 20 || chain.some(step => !step || typeof step !== 'object' || !OPERATIONS.has(step.operation))) {
+      return { success: false, error: 'The operation chain is invalid or too long.' };
+    }
+    if (activeWindows.has(winId)) return { success: false, error: 'A bulk image operation is already running in this window.' };
 
-    const outDir = validateOutputDir(outputDir) || path.dirname(files[0]);
-    fs.mkdirSync(outDir, { recursive: true });
+    let outDir;
+    try {
+      outDir = validateOutputDir(outputDir) || path.dirname(files[0]);
+      outputExtension(files[0], outputFormat);
+      fs.mkdirSync(outDir, { recursive: true });
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'Bulk Imager') };
+    }
+    activeWindows.add(winId);
+    cancelledWindows.delete(winId);
 
-    const results = [];
-    const total = files.length;
+    try {
+      const results = [];
+      const total = files.length;
 
-    for (let i = 0; i < total; i++) {
+      for (let i = 0; i < total; i++) {
+        if (cancelledWindows.has(winId)) {
+          return { success: false, error: 'Operation cancelled', results };
+        }
+
+        const inputPath = files[i];
+        if (!isRegularFile(inputPath)) {
+          results.push({ input: inputPath, success: false, error: 'File not found' });
+          continue;
+        }
+
+        const ext = path.extname(inputPath);
+        const baseName = path.basename(inputPath, ext);
+        const outExt = outputExtension(inputPath, outputFormat);
+        let outputPath = path.join(outDir, baseName + '_edited' + outExt);
+        outputPath = autoIncrementPath(outputPath);
+
+        const tempFiles = [];
+        try {
+          const win = getMainWindow();
+          if (win) {
+            win.webContents.send('tool-progress', {
+              tool: 'bulk-imager',
+              percent: (i / total) * 100,
+              current: i + 1,
+              total,
+              currentFile: path.basename(inputPath),
+              status: `Processing ${i + 1}/${total}: ${path.basename(inputPath)}`
+            });
+          }
+
+          // Apply operations in sequence using temp files
+          let currentInput = inputPath;
+
+          for (let step = 0; step < chain.length; step++) {
+            const { operation, operationOptions } = chain[step];
+            const isLast = step === chain.length - 1;
+            const stepOutput = isLast
+              ? outputPath
+              // Intermediates must be lossless. Reusing a requested JPEG/AVIF
+              // extension re-encoded the image at every step and compounded
+              // artifacts before the final export.
+              : path.join(outDir, `_tmp_chain_${process.pid}_${crypto.randomUUID()}.png`);
+
+            if (!isLast) tempFiles.push(stepOutput);
+
+            await processImage(currentInput, stepOutput, operation, operationOptions || {});
+            currentInput = stepOutput;
+            if (cancelledWindows.has(winId)) {
+              const cancelError = new Error('Operation cancelled');
+              cancelError.code = 'CANCELLED';
+              throw cancelError;
+            }
+          }
+
+          results.push({ input: inputPath, output: outputPath, success: true });
+        } catch (err) {
+          try { fs.rmSync(outputPath, { force: true }); } catch {}
+          if (err && err.code === 'CANCELLED') {
+            return { success: false, error: 'Operation cancelled', results };
+          }
+          results.push({ input: inputPath, success: false, error: err.message });
+        } finally {
+          // Clean up temp files even when a mid-chain step failed
+          for (const tmp of tempFiles) {
+            try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
+          }
+        }
+      }
+
       if (cancelledWindows.has(winId)) {
-        cancelledWindows.delete(winId);
         return { success: false, error: 'Operation cancelled', results };
       }
 
-      const inputPath = files[i];
-      if (!fs.existsSync(inputPath)) {
-        results.push({ input: inputPath, success: false, error: 'File not found' });
-        continue;
+      const win = getMainWindow();
+      if (win) {
+        win.webContents.send('tool-progress', {
+          tool: 'bulk-imager',
+          percent: 100,
+          current: total,
+          total,
+          status: 'Done'
+        });
       }
 
-      const ext = path.extname(inputPath);
-      const baseName = path.basename(inputPath, ext);
-      const outExt = outputFormat ? ('.' + outputFormat) : ext;
-      let outputPath = path.join(outDir, baseName + '_edited' + outExt);
-      outputPath = autoIncrementPath(outputPath);
+      const succeeded = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
 
-      const tempFiles = [];
-      try {
-        const win = getMainWindow();
-        if (win) {
-          win.webContents.send('tool-progress', {
-            tool: 'bulk-imager',
-            percent: (i / total) * 100,
-            current: i + 1,
-            total,
-            currentFile: path.basename(inputPath),
-            status: `Processing ${i + 1}/${total}: ${path.basename(inputPath)}`
-          });
-        }
-
-        // Apply operations in sequence using temp files
-        let currentInput = inputPath;
-
-        for (let step = 0; step < chain.length; step++) {
-          const { operation, operationOptions } = chain[step];
-          const isLast = step === chain.length - 1;
-          const stepOutput = isLast
-            ? outputPath
-            : path.join(outDir, `_tmp_chain_${process.pid}_${winId}_${i}_${step}${outExt}`);
-
-          if (!isLast) tempFiles.push(stepOutput);
-
-          await processImage(currentInput, stepOutput, operation, operationOptions || {});
-          currentInput = stepOutput;
-        }
-
-        results.push({ input: inputPath, output: outputPath, success: true });
-      } catch (err) {
-        results.push({ input: inputPath, success: false, error: err.message });
-      } finally {
-        // Clean up temp files even when a mid-chain step failed
-        for (const tmp of tempFiles) {
-          try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
-        }
-      }
+      return {
+        success: true,
+        results,
+        summary: { total, succeeded, failed }
+      };
+    } catch (err) {
+      return { success: false, error: formatToolError(err, 'Bulk Imager') };
+    } finally {
+      cancelledWindows.delete(winId);
+      activeWindows.delete(winId);
     }
-
-    const win = getMainWindow();
-    if (win) {
-      win.webContents.send('tool-progress', {
-        tool: 'bulk-imager',
-        percent: 100,
-        current: total,
-        total,
-        status: 'Done'
-      });
-    }
-
-    cancelledWindows.delete(winId);
-
-    const succeeded = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success).length;
-
-    return {
-      success: true,
-      results,
-      summary: { total, succeeded, failed }
-    };
   });
 
   ipcMain.handle('bulk-imager-cancel', async (event) => {
-    cancelledWindows.add(event.sender.id);
+    const winId = event.sender.id;
+    if (!activeWindows.has(winId)) return { success: false, error: 'No active bulk image operation to cancel' };
+    cancelledWindows.add(winId);
     return { success: true };
   });
 
   ipcMain.handle('bulk-imager-info', async (event, filePath) => {
     try {
+      if (typeof filePath !== 'string' || !isRegularFile(filePath)) {
+        return { success: false, error: 'Image file was not found.' };
+      }
       const meta = await sharp(filePath).metadata();
       return {
         success: true,

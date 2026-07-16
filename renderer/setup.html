@@ -78,6 +78,18 @@
       display: none;
     }
     .retry-btn:hover { background: #6a62e8; }
+    .setup-actions { display: flex; justify-content: center; gap: 10px; }
+    .quit-btn {
+      padding: 8px 20px;
+      border: 1px solid #665f78;
+      background: transparent;
+      color: #d8d4e4;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      display: none;
+    }
+    .quit-btn:hover { background: #292536; }
   </style>
 </head>
 <body>
@@ -90,7 +102,10 @@
       <div class="detail" id="detail"></div>
     </div>
     <div class="error" id="error"></div>
-    <button class="retry-btn" id="retryBtn">Retry</button>
+    <div class="setup-actions">
+      <button class="retry-btn" id="retryBtn">Retry</button>
+      <button class="quit-btn" id="quitBtn">Quit</button>
+    </div>
   </div>
   <script>
     window.setup.onProgress((data) => {
@@ -103,6 +118,7 @@
       document.getElementById('error').style.display = 'block';
       document.getElementById('error').textContent = msg;
       document.getElementById('retryBtn').style.display = 'inline-block';
+      document.getElementById('quitBtn').style.display = 'inline-block';
     });
 
     window.setup.onComplete(() => {
@@ -113,10 +129,15 @@
     document.getElementById('retryBtn').addEventListener('click', () => {
       document.getElementById('error').style.display = 'none';
       document.getElementById('retryBtn').style.display = 'none';
+      document.getElementById('quitBtn').style.display = 'none';
       document.getElementById('status').textContent = 'Retrying...';
       document.getElementById('detail').textContent = '';
       document.getElementById('progressFill').style.width = '0%';
       window.setup.requestRetry();
+    });
+
+    document.getElementById('quitBtn').addEventListener('click', () => {
+      window.setup.requestCancel();
     });
   </script>
 </body>

@@ -6,14 +6,11 @@ echo "  MuxMelt - Setup Script (macOS / Linux)"
 echo "============================================"
 echo ""
 
-# Check for Python 3.10+
+# Check for a Python version supported by rembg, PyTorch, and llama.cpp wheels.
 PYTHON_CMD=""
-for cmd in python3 python; do
+for cmd in python3.13 python3.12 python3.11 python3 python; do
   if command -v "$cmd" &>/dev/null; then
-    ver=$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
-    major=$(echo "$ver" | cut -d. -f1)
-    minor=$(echo "$ver" | cut -d. -f2)
-    if [ "$major" = "3" ] && [ "$minor" -ge 10 ]; then
+    if "$cmd" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else 1)' 2>/dev/null; then
       PYTHON_CMD="$cmd"
       break
     fi
@@ -21,9 +18,9 @@ for cmd in python3 python; do
 done
 
 if [ -z "$PYTHON_CMD" ]; then
-  echo "[ERROR] Python 3.10+ is required but not found."
+  echo "[ERROR] Python 3.11 through 3.13 is required but not found."
   echo "Install from https://www.python.org/downloads/"
-  echo "NOTE: Python 3.14 is NOT compatible with PyTorch yet."
+  echo "Python 3.10 and 3.14+ are not supported by the current media dependencies."
   exit 1
 fi
 
@@ -76,7 +73,9 @@ else
   fi
 fi
 
-$PYTHON_CMD -m pip install -r python/requirements.txt
+$PYTHON_CMD -m pip install -r python/requirements.txt \
+  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+  --prefer-binary
 
 echo ""
 echo "[OK] Python dependencies installed"

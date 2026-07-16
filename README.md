@@ -1,6 +1,6 @@
 # MuxMelt
 
-MuxMelt is a desktop media utility for common file conversion, cleanup, and batch processing workflows. It runs locally, keeps your files on your machine, and brings video, audio, image, PDF, QR, and speech tools into one app.
+MuxMelt is a desktop media utility for common file conversion, cleanup, and batch processing workflows. It runs locally, keeps your files on your machine, and brings video, audio, and image tools, downloaders, QR, speech, and a private local AI chat into one app.
 
 ## Features
 
@@ -8,16 +8,17 @@ MuxMelt is a desktop media utility for common file conversion, cleanup, and batc
 |------|--------------|
 | Upscaler | Increases image and video resolution with 2x and 4x modes |
 | Format Converter | Converts images and videos between common formats |
-| Online Video Downloader | Downloads videos from supported website URLs into a selected folder |
 | Audio Extractor | Extracts audio from video files to MP3, WAV, FLAC, AAC, or OGG |
 | GIF Maker | Creates GIFs from video clips with FPS, width, and duration controls |
 | Video Compressor | Reduces video file size with codec, CRF, preset, and resolution options |
-| Background Remover | Removes image backgrounds and exports transparent PNG files |
+| Online Video Downloader | Downloads videos from supported website URLs into a selected folder |
+| Torrent Downloader | Downloads files via WebTorrent from magnet links, info-hashes, and `.torrent` files |
+| Background Editor | Removes image backgrounds and exports transparent, solid-color, blurred, or composited results |
 | Basic Image Editor | Crops or flips one image at a time |
-| PDF Toolkit | Edits detected text, adds text, manages layers, and applies file-level PDF redactions |
 | Stem Separator | Separates vocals, drums, bass, and other stems from audio tracks |
 | QR Studio | Generates styled QR codes and scans QR codes from images |
 | Text to Speech | Converts text into speech files with voice and speed controls |
+| Local Chat | A private AI assistant that runs entirely on your computer — no account, API key, or internet needed after the model downloads once |
 
 ## Installing on Windows
 
@@ -45,7 +46,7 @@ Each release includes a `MuxMelt-<version>-windows-x64.sha256.txt` checksum.
 Confirm your download matches before running:
 
 ```powershell
-Get-FileHash .\MuxMelt-1.2.9-windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\MuxMelt-1.2.11-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 Compare the printed hash against the value in the checksum file on the release.
@@ -53,7 +54,7 @@ Compare the printed hash against the value in the checksum file on the release.
 ## Requirements
 
 - Node.js 18+
-- Python 3.10 through 3.13
+- Python 3.11 through 3.13
 - ffmpeg for video and audio operations
 - Optional GPU acceleration for supported processing tasks
 
@@ -67,7 +68,7 @@ cd MuxMelt
 setup.bat
 ```
 
-### macOS / Linux
+### Linux
 
 ```bash
 git clone https://github.com/CarfoCx/MuxMelt.git
@@ -93,15 +94,6 @@ npm run build:slim:win
 npm run build:full:win
 ```
 
-### macOS
-
-```bash
-npm run build:slim:mac
-npm run build:full:mac
-```
-
-The macOS build produces separate Intel (`x64`) and Apple Silicon (`arm64`) DMG files when run on macOS.
-
 ### Linux
 
 ```bash
@@ -114,18 +106,14 @@ Linux builds produce an AppImage.
 
 | Path | Purpose |
 |------|---------|
-| `main.js` | Electron app lifecycle, windows, IPC, and tool launch wiring |
+| `main.js` | Electron app entry point, app lifecycle, and IPC/tool launch wiring |
 | `preload.js` | Safe API bridge exposed to renderer windows |
 | `package.json` | App metadata, dependencies, and build scripts |
-| `renderer/` | Main app shell and non-React tool pages |
+| `src/main/` | Electron main-process modules (window manager, IPC handlers, Python/setup managers, updater, folder scanning) |
+| `renderer/` | Main app shell, splash/setup screens, and non-build tool pages |
 | `renderer/tools/` | Individual tool UIs loaded by the Electron app |
-| `renderer/tools/pdf-toolkit/dist/` | Built React PDF editor bundle used at runtime |
-| `src/` | React source for the PDF editor |
-| `src/components/` | PDF viewer, annotation layer, pages list, and editor UI pieces |
-| `src/store/` | PDF editor state store |
-| `src/types/` | Electron API TypeScript declarations |
-| `node-tools/` | Node processing helpers and IPC handlers for tools |
-| `python/` | Python processing backend, PDF redaction/editing, OCR, TTS, and media modules |
+| `node-tools/` | Node processing helpers and IPC handlers for tools (ffmpeg runner, converters, downloaders) |
+| `python/` | FastAPI processing backend (`server.py`), media/AI modules, routers, and model weights |
 | `build/` | Icons, packaging config, and Python/ffmpeg bundle prep |
 | `dist/` | Generated installers and release artifacts; safe to delete and rebuild |
 
@@ -133,9 +121,8 @@ Linux builds produce an AppImage.
 
 | File | What it is |
 |------|------------|
-| `MuxMelt-Windows-Setup.exe` | Windows NSIS installer |
-| `MuxMelt-macOS-x64.dmg` | macOS Intel installer |
-| `MuxMelt-macOS-arm64.dmg` | macOS Apple Silicon installer |
+| `MuxMelt-<version>-windows-x64-setup.exe` | Windows NSIS installer |
+| `MuxMelt-<version>-windows-x64.sha256.txt` | SHA-256 checksum for the Windows installer |
 | `MuxMelt-Slim-Linux.AppImage` | Linux AppImage |
 | `*.blockmap`, `latest*.yml` | Auto-update metadata generated by Electron Builder |
 

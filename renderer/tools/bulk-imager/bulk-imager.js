@@ -9,6 +9,7 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '
 let files = [];
 let outputDir = '';
 let isProcessing = false;
+let cancelRequested = false;
 let log = null;
 let progressCleanup = null;
 let dropZone, browseBtn, fileList, applyBtn, clearBtn, openOutputBtn;
@@ -16,7 +17,7 @@ let outputDirBtn, statusText, processingIndicator;
 let lastOutputDir = '';
 let _pasteHandler = null;
 
-let editorModal, editorOverlay, editorCanvas, editorCtx;
+let editorModal, editorOverlay, editorCanvas, editorCtx, editorApplyBtn;
 let editorCanvasWrap, cropOverlay;
 let currentEditorFile = null;
 let editorImg = null;
@@ -32,7 +33,7 @@ let cropAspectRatio = null;
 let flipH = false;
 let flipV = false;
 
-function init(ctx) {
+async function init(ctx) {
   log = ctx.log;
 
   dropZone = document.getElementById('dropZone');
@@ -51,12 +52,14 @@ function init(ctx) {
   editorCtx = editorCanvas.getContext('2d');
   editorCanvasWrap = document.getElementById('editorCanvasWrap');
   cropOverlay = document.getElementById('cropOverlay');
+  editorApplyBtn = document.getElementById('edApplyOne');
 
+  await loadToolSettings();
+  if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   bindEvents();
   bindEditorEvents();
-  _pasteHandler = (e) => { if (e.detail && e.detail.length > 0) setImageFromPaths(e.detail); };
+  _pasteHandler = (e) => { if (!isProcessing && window.isToolActive('bulk-imager') && e.detail && e.detail.length > 0) setImageFromPaths(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
-  if (!outputDir && window.applyDefaultOutputDir) outputDir = window.applyDefaultOutputDir(outputDirBtn);
   log('Basic Image Editor initialized');
 }
 
@@ -70,11 +73,13 @@ function bindEvents() {
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
     const dir = await window.api.system.selectOutputDir();
+    if (isProcessing) return;
     if (dir) {
       outputDir = dir;
       const display = dir.length > 35 ? '...' + dir.slice(-32) : dir;
       outputDirBtn.textContent = display;
       outputDirBtn.title = dir;
+      saveToolSettings();
     }
   });
 
@@ -88,6 +93,7 @@ function bindEvents() {
     e.preventDefault();
     e.stopPropagation();
     dropZone.classList.remove('dragover');
+    if (isProcessing) return;
   });
 
   dropZone.addEventListener('drop', async (e) => {
@@ -97,6 +103,7 @@ function bindEvents() {
     const paths = [...e.dataTransfer.files].map(file => window.api.system.getPathForFile(file));
     if (paths.length > 0) {
       const resolved = await window.api.system.resolveDroppedPaths(paths);
+      if (isProcessing) return;
       if (resolved.length > 0) setImageFromPaths(resolved);
       else log('No supported image found', 'warn');
     }
@@ -104,10 +111,12 @@ function bindEvents() {
 
   browseBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
+    if (isProcessing) return;
     await browseForImage();
   });
 
   dropZone.addEventListener('click', async (e) => {
+    if (isProcessing) return;
     if (dropZone.classList.contains('collapsed')) {
       dropZone.classList.remove('collapsed');
       return;
@@ -141,10 +150,12 @@ function bindEvents() {
 }
 
 async function browseForImage() {
+  if (isProcessing) return;
   const paths = await window.api.system.selectFiles({
     title: 'Select Image',
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif'] }]
   });
+  if (isProcessing) return;
   if (paths.length > 0) setImageFromPaths(paths);
 }
 
@@ -320,13 +331,19 @@ function openEditor(fileIndex) {
     document.getElementById('editorImageInfo').textContent = `${editorImg.naturalWidth} x ${editorImg.naturalHeight}`;
     drawEditor();
   };
-  editorImg.src = `file://${file.path.replace(/\\/g, '/')}`;
+  editorImg.onerror = () => {
+    statusText.textContent = 'Could not open image';
+    log(`Could not preview ${file.name}`, 'error');
+    closeEditor();
+  };
+  editorImg.src = window.localPathToFileUrl(file.path);
 
   editorOverlay.classList.add('active');
   editorModal.classList.add('active');
 }
 
 function closeEditor() {
+  if (isProcessing) return;
   if (editorOverlay) editorOverlay.classList.remove('active');
   if (editorModal) editorModal.classList.remove('active');
   if (cropOverlay) cropOverlay.style.display = 'none';
@@ -397,6 +414,15 @@ function buildOperationChain() {
 }
 
 async function applyToOne() {
+  if (isProcessing) {
+    if (cancelRequested) return;
+    cancelRequested = true;
+    editorApplyBtn.disabled = true;
+    editorApplyBtn.textContent = 'Cancelling...';
+    statusText.textContent = 'Cancelling export...';
+    try { await window.api.tools.bulkImager.cancelBulkImager(); } catch {}
+    return;
+  }
   const file = files[currentEditorFile];
   if (!file) return;
 
@@ -408,14 +434,17 @@ async function applyToOne() {
 
   log(`Exporting ${file.name}...`);
   isProcessing = true;
+  cancelRequested = false;
   applyBtn.disabled = true;
+  editorApplyBtn.disabled = false;
+  editorApplyBtn.textContent = 'Cancel';
   file.state = 'processing';
   file.status = 'Processing...';
   file.progress = 0;
   renderFileList();
   processingIndicator.classList.add('active');
   statusText.textContent = 'Exporting image...';
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'bulk-imager');
 
   try {
     const result = chain.length === 1
@@ -436,18 +465,24 @@ async function applyToOne() {
       file.state = 'complete';
       file.progress = 1;
       file.status = 'Complete';
-      const output = first && first.output ? first.output : '';
+      const output = first && typeof first.output === 'string' ? first.output : '';
       if (output) {
-        lastOutputDir = output.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        lastOutputDir = window.getParentDirectory(output);
         if (window.addRecentFile) window.addRecentFile(output);
       } else {
-        lastOutputDir = outputDir || file.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+        lastOutputDir = outputDir || window.getParentDirectory(file.path);
       }
       openOutputBtn.style.display = '';
       log(`Exported: ${output || file.name}`, 'success');
       statusText.textContent = 'Image exported';
       if (window.showCompletionToast) window.showCompletionToast('Image exported successfully', false, output ? [output] : []);
       if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(lastOutputDir);
+    } else if (cancelRequested || (first && /cancel/i.test(first.error || ''))) {
+      file.state = 'pending';
+      file.status = 'Cancelled';
+      file.progress = 0;
+      statusText.textContent = 'Export cancelled';
+      log('Image export cancelled', 'warn');
     } else {
       const error = first && first.error ? first.error : (result ? result.error : 'unknown');
       file.state = 'error';
@@ -456,14 +491,25 @@ async function applyToOne() {
       log(`Error: ${error}`, 'error');
     }
   } catch (err) {
-    file.state = 'error';
-    file.status = `Error: ${err.message}`;
-    statusText.textContent = 'Export failed';
-    log(`Error: ${err.message}`, 'error');
+    if (cancelRequested || /cancel/i.test(err.message || '')) {
+      file.state = 'pending';
+      file.status = 'Cancelled';
+      file.progress = 0;
+      statusText.textContent = 'Export cancelled';
+      log('Image export cancelled', 'warn');
+    } else {
+      file.state = 'error';
+      file.status = `Error: ${err.message}`;
+      statusText.textContent = 'Export failed';
+      log(`Error: ${err.message}`, 'error');
+    }
   }
 
   renderFileList();
   isProcessing = false;
+  cancelRequested = false;
+  editorApplyBtn.disabled = false;
+  editorApplyBtn.textContent = 'Export Image';
   processingIndicator.classList.remove('active');
   updateButton();
   closeEditor();
@@ -479,13 +525,21 @@ function getFileName(filePath) {
 }
 
 async function setImageFromPaths(paths) {
-  const selected = paths.find(path => IMAGE_EXTS.has(getFileExtension(path)));
+  if (isProcessing || !Array.isArray(paths)) return;
+  const selected = paths.find(path => typeof path === 'string' && IMAGE_EXTS.has(getFileExtension(path)));
   if (!selected) {
     log('No supported image found', 'warn');
     return;
   }
 
-  const size = await window.api.system.getFileSize(selected);
+  let size = 0;
+  try {
+    size = await window.api.system.getFileSize(selected);
+  } catch (err) {
+    log(`Could not open ${getFileName(selected)}: ${err.message}`, 'error');
+    return;
+  }
+  if (isProcessing) return;
   files = [{ path: selected, name: getFileName(selected), size, progress: 0, status: 'Active', state: 'pending' }];
   lastOutputDir = '';
   openOutputBtn.style.display = 'none';
@@ -501,7 +555,7 @@ function removeFile(index) {
   renderFileList();
   updateButton();
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, files.length);
-  if (files.length === 0 && window.updateQueueSummary) window.updateQueueSummary([]);
+  if (files.length === 0 && window.updateQueueSummary) window.updateQueueSummary([], 'bulk-imager');
 }
 
 function clearFiles() {
@@ -509,7 +563,7 @@ function clearFiles() {
   renderFileList();
   updateButton();
   statusText.textContent = 'Waiting for Image';
-  if (window.updateQueueSummary) window.updateQueueSummary([]);
+  if (window.updateQueueSummary) window.updateQueueSummary([], 'bulk-imager');
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
 }
 
@@ -524,7 +578,7 @@ function renderFileList() {
   }
   fileList.innerHTML = '';
   files.forEach((file, index) => fileList.appendChild(createFileElement(file, index)));
-  if (window.updateQueueSummary) window.updateQueueSummary(files);
+  if (window.updateQueueSummary) window.updateQueueSummary(files, 'bulk-imager');
 }
 
 function createFileElement(file, index) {
@@ -565,6 +619,27 @@ function createFileElement(file, index) {
   });
 
   return el;
+}
+
+async function loadToolSettings() {
+  try {
+    const all = await window.loadAllSettings();
+    const settings = all['bulk-imager'] || {};
+    if (typeof settings.outputDir === 'string' && settings.outputDir) {
+      outputDir = settings.outputDir;
+      const parts = outputDir.replace(/\\/g, '/').split('/');
+      outputDirBtn.textContent = parts.length > 2 ? '.../' + parts.slice(-2).join('/') : outputDir;
+      outputDirBtn.title = outputDir;
+    }
+  } catch (err) {
+    log(`Could not load image editor settings: ${err.message}`, 'warn');
+  }
+}
+
+function saveToolSettings() {
+  window.updateSettings(all => {
+    all['bulk-imager'] = { outputDir };
+  }).catch(err => log(`Could not save image editor settings: ${err.message}`, 'warn'));
 }
 
 function clamp(value, min, max) {

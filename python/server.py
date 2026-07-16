@@ -1,11 +1,13 @@
 import asyncio
-import json
+import math
 import os
+import secrets
 import sys
 import time
 import argparse
 import queue as thread_queue
 from pathlib import Path
+from PIL import Image
 
 from contextlib import asynccontextmanager
 
@@ -15,8 +17,15 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from server_auth import TokenAuthMiddleware
-from upscaler import Upscaler, CancellationError
-from routers.validation import validate_output_dir
+from upscaler import MODEL_PROFILES, Upscaler, CancellationError
+from routers.validation import (
+    next_output_path,
+    validate_choice,
+    validate_files_payload,
+    validate_input_file,
+    validate_int,
+    validate_output_dir,
+)
 
 upscaler = None
 available_modules = ['upscaler']
@@ -26,7 +35,11 @@ available_modules = ['upscaler']
 async def lifespan(app):
     global upscaler
     upscaler = Upscaler()
-    yield
+    try:
+        yield
+    finally:
+        upscaler.cancel()
+        upscaler.close()
 
 AUTH_TOKEN = None  # set from --token in __main__; gates every request when present
 
@@ -36,6 +49,7 @@ app = FastAPI(title='MuxMelt Backend', lifespan=lifespan)
 app.add_middleware(TokenAuthMiddleware, get_token=lambda: AUTH_TOKEN)
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=['null'],
     allow_origin_regex=r'^https?://(localhost|127\.0\.0\.1)(:\d+)?$',
     allow_methods=['*'],
     allow_headers=['*'],
@@ -46,29 +60,29 @@ try:
     from routers.bg_remover_routes import router as bg_router
     app.include_router(bg_router, prefix='/bg-remover')
     available_modules.append('bg-remover')
-except ImportError:
-    pass
+except ImportError as exc:
+    print(f'Background remover router is unavailable: {exc}', file=sys.stderr)
 
 try:
     from routers.stem_separator_routes import router as stem_router
     app.include_router(stem_router, prefix='/stem-separator')
     available_modules.append('stem-separator')
-except ImportError:
-    pass
+except ImportError as exc:
+    print(f'Stem separator router is unavailable: {exc}', file=sys.stderr)
 
 try:
     from routers.tts_routes import router as tts_router
     app.include_router(tts_router, prefix='/tts')
     available_modules.append('tts')
-except ImportError:
-    pass
+except ImportError as exc:
+    print(f'TTS router is unavailable: {exc}', file=sys.stderr)
 
 try:
     from routers.chat_routes import router as chat_router
     app.include_router(chat_router, prefix='/chat')
     available_modules.append('chat')
-except ImportError:
-    pass
+except ImportError as exc:
+    print(f'Chat router is unavailable: {exc}', file=sys.stderr)
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.webm'}
@@ -77,6 +91,67 @@ VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.webm'}
 # singleton with one shared cancel_event and one model cache, so a second
 # concurrent job would have its cancellation crossed and its model evicted.
 _upscale_in_progress = False
+
+
+async def _run_upscale_batch(ws, data):
+    global _upscale_in_progress
+    try:
+        try:
+            files = validate_files_payload(data.get('files', []), max_files=500)
+            if not files:
+                raise ValueError('No files provided')
+            scale = validate_int(data.get('scale', 4), 'Scale', 2, 4)
+            if scale not in (2, 4):
+                raise ValueError('Scale must be 2 or 4')
+            output_format = validate_choice(
+                data.get('output_format', 'same'),
+                {'same', 'png', 'jpg', 'webp', 'mp4', 'mov', 'mkv', 'webm', 'avi'},
+                'Output format',
+            )
+            output_dir = validate_output_dir(data.get('output_dir', ''))
+            profile = validate_choice(
+                data.get('profile', 'general'), set(MODEL_PROFILES), 'Profile'
+            )
+        except Exception as exc:
+            await ws.send_json({'type': 'fatal_error', 'error': str(exc)})
+            return
+
+        upscaler.reset_cancel()
+        first_supported = next(
+            (
+                file_path for file_path in files
+                if os.path.isfile(file_path)
+                and (
+                    (Path(file_path).suffix.lower() in IMAGE_EXTENSIONS
+                     and output_format in {'same', 'png', 'jpg', 'webp'})
+                    or
+                    (Path(file_path).suffix.lower() in VIDEO_EXTENSIONS
+                     and output_format in {'same', 'mp4', 'mov', 'mkv', 'webm', 'avi'})
+                )
+            ),
+            None,
+        )
+        if first_supported is not None:
+            await ensure_model_with_progress(
+                ws, scale, profile, first_supported
+            )
+
+        for file_path in files:
+            if upscaler.cancel_event.is_set():
+                await ws.send_json({
+                    'type': 'error', 'file': file_path, 'error': 'Cancelled',
+                })
+                continue
+            await process_file(
+                ws, file_path, scale, output_format, output_dir, profile
+            )
+        await ws.send_json({'type': 'all_complete'})
+    except WebSocketDisconnect:
+        raise
+    except Exception as exc:
+        await ws.send_json({'type': 'fatal_error', 'error': categorize_error(exc)})
+    finally:
+        _upscale_in_progress = False
 
 
 
@@ -127,12 +202,18 @@ def vram():
 async def shutdown(token: str = None):
     """Allow Electron to stop the local backend before quitting."""
     expected_token = getattr(app.state, 'token', None)
-    if expected_token is not None and token != expected_token:
+    if (expected_token is not None
+            and (not isinstance(token, str)
+                 or not secrets.compare_digest(token, expected_token))):
         raise HTTPException(status_code=403, detail="Forbidden: Invalid token")
 
     async def stop_server():
         await asyncio.sleep(0.1)
-        os._exit(0)
+        server = getattr(app.state, 'uvicorn_server', None)
+        if server is not None:
+            # Let Uvicorn close WebSockets and run lifespan cleanup. This is
+            # essential for cancelling/reaping ffmpeg and Demucs children.
+            server.should_exit = True
 
     asyncio.create_task(stop_server())
     return {'status': 'shutting_down'}
@@ -142,6 +223,7 @@ async def shutdown(token: str = None):
 async def websocket_endpoint(ws: WebSocket):
     global _upscale_in_progress
     await ws.accept()
+    job_task = None
     try:
         while True:
             try:
@@ -154,53 +236,28 @@ async def websocket_endpoint(ws: WebSocket):
                 except Exception:
                     break
                 continue
+            if not isinstance(data, dict):
+                await ws.send_json({'type': 'error', 'error': 'Message must be an object'})
+                continue
             action = data.get('action')
 
             if action == 'upscale':
                 if _upscale_in_progress:
                     await ws.send_json({
-                        'type': 'error',
+                        'type': 'fatal_error',
                         'error': 'The upscaler is already processing another job. Wait for it to finish before starting a new one.'
                     })
                     continue
 
-                files = data.get('files', [])
-                if not files:
-                    await ws.send_json({'type': 'error', 'error': 'No files provided'})
-                    continue
-                scale = data.get('scale', 4)
-                if scale not in (2, 4):
-                    await ws.send_json({'type': 'error', 'error': f'Invalid scale: {scale}. Must be 2 or 4.'})
-                    continue
-                output_format = data.get('output_format', 'same')
-                output_dir = data.get('output_dir', '')
-                profile = data.get('profile', 'general')
-
                 _upscale_in_progress = True
-                try:
-                    upscaler.reset_cancel()
-
-                    # Pre-load model with progress feedback
-                    await ensure_model_with_progress(ws, scale, profile, files[0] if files else '')
-
-                    for file_path in files:
-                        if upscaler.cancel_event.is_set():
-                            await ws.send_json({
-                                'type': 'error',
-                                'file': file_path,
-                                'error': 'Cancelled'
-                            })
-                            continue
-
-                        await process_file(ws, file_path, scale, output_format, output_dir, profile)
-
-                    await ws.send_json({'type': 'all_complete'})
-                finally:
-                    _upscale_in_progress = False
+                job_task = asyncio.create_task(_run_upscale_batch(ws, data))
 
             elif action == 'cancel':
-                upscaler.cancel()
-                await send_log(ws, 'Cancellation requested...', 'warn')
+                if job_task is not None and not job_task.done():
+                    upscaler.cancel()
+                    await send_log(ws, 'Cancellation requested...', 'warn')
+            else:
+                await ws.send_json({'type': 'error', 'error': f'Unknown action: {action}'})
 
     except WebSocketDisconnect:
         pass
@@ -209,6 +266,16 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.send_json({'type': 'fatal_error', 'error': categorize_error(e)})
         except Exception:
             pass
+    finally:
+        if job_task is not None and not job_task.done():
+            upscaler.cancel()
+        if job_task is not None:
+            try:
+                await job_task
+            except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
+                pass
+            except Exception:
+                pass
 
 
 async def send_log(ws, message, level='info'):
@@ -242,7 +309,7 @@ def categorize_error(e):
             return ('ffmpeg is not installed or not in PATH. '
                     'Video upscaling requires ffmpeg. '
                     'Install from https://ffmpeg.org/download.html')
-        return f'File not found: {msg}'
+        return msg if msg.lower().startswith('file not found:') else f'File not found: {msg}'
 
     if _is_oom_error(e):
         vram_info = ''
@@ -289,7 +356,18 @@ async def ensure_model_with_progress(ws, scale, profile, first_file):
         None, lambda: upscaler._ensure_model(scale, profile, on_progress)
     )
 
-    while not task.done():
+    try:
+        while not task.done():
+            while not progress_q.empty():
+                pct, status = progress_q.get_nowait()
+                await ws.send_json({
+                    'type': 'model_progress',
+                    'file': first_file,
+                    'progress': pct,
+                    'status': status
+                })
+            await asyncio.sleep(0.1)
+
         while not progress_q.empty():
             pct, status = progress_q.get_nowait()
             await ws.send_json({
@@ -298,19 +376,14 @@ async def ensure_model_with_progress(ws, scale, profile, first_file):
                 'progress': pct,
                 'status': status
             })
-        await asyncio.sleep(0.3)
-
-    # Drain remaining
-    while not progress_q.empty():
-        pct, status = progress_q.get_nowait()
-        await ws.send_json({
-            'type': 'model_progress',
-            'file': first_file,
-            'progress': pct,
-            'status': status
-        })
-
-    await task  # Re-raise any exception
+        await task
+    except BaseException:
+        upscaler.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
+        raise
 
     await ws.send_json({'type': 'model_loaded', 'file': first_file})
     await send_log(ws, 'Model loaded successfully', 'success')
@@ -318,12 +391,22 @@ async def ensure_model_with_progress(ws, scale, profile, first_file):
 
 async def process_file(ws, file_path, scale, output_format, output_dir, profile):
     try:
-        if not os.path.exists(file_path):
-            await ws.send_json({'type': 'error', 'file': file_path, 'error': f'File not found: {file_path}'})
-            return
-
+        file_path = validate_input_file(
+            file_path, IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+        )
         ext = Path(file_path).suffix.lower()
         name = Path(file_path).stem
+        file_type = 'image' if ext in IMAGE_EXTENSIONS else 'video'
+
+        allowed_outputs = (
+            {'same', 'png', 'jpg', 'webp'}
+            if file_type == 'image'
+            else {'same', 'mp4', 'mov', 'mkv', 'webm', 'avi'}
+        )
+        if output_format not in allowed_outputs:
+            raise ValueError(
+                f'{output_format.upper()} is not a valid {file_type} output format'
+            )
 
         if output_format == 'same':
             out_ext = ext
@@ -336,15 +419,7 @@ async def process_file(ws, file_path, scale, output_format, output_dir, profile)
             out_dir = str(Path(file_path).parent)
 
         os.makedirs(out_dir, exist_ok=True)
-        
-        base_output_name = f'{name}_{scale}x{out_ext}'
-        output_path = os.path.join(out_dir, base_output_name)
-        counter = 1
-        while os.path.exists(output_path):
-            output_path = os.path.join(out_dir, f'{name}_{scale}x_{counter}{out_ext}')
-            counter += 1
-
-        file_type = 'image' if ext in IMAGE_EXTENSIONS else 'video' if ext in VIDEO_EXTENSIONS else 'unknown'
+        output_path = next_output_path(out_dir, f'{name}_{scale}x', out_ext)
 
         if file_type == 'video' and not Upscaler.check_ffmpeg():
             await ws.send_json({
@@ -357,17 +432,11 @@ async def process_file(ws, file_path, scale, output_format, output_dir, profile)
 
         await send_log(ws, f'Queued {file_type}: {name}{ext} ({scale}x \u2192 {out_ext})')
 
-        if ext in IMAGE_EXTENSIONS:
+        if file_type == 'image':
             await process_image(ws, file_path, output_path, scale, profile)
-        elif ext in VIDEO_EXTENSIONS:
+        else:
             actual_ext = out_ext.lstrip('.')
             await process_video(ws, file_path, output_path, scale, actual_ext, profile)
-        else:
-            await ws.send_json({
-                'type': 'error',
-                'file': file_path,
-                'error': f'Unsupported file format: {ext}'
-            })
 
     except CancellationError:
         await ws.send_json({
@@ -384,10 +453,10 @@ async def process_file(ws, file_path, scale, output_format, output_dir, profile)
 
 
 async def process_image(ws, file_path, output_path, scale, profile):
-    import cv2
     name = Path(file_path).name
     started = time.monotonic()
     megapixels = None
+    input_dimensions = None
 
     await ws.send_json({
         'type': 'progress',
@@ -397,11 +466,19 @@ async def process_image(ws, file_path, output_path, scale, profile):
     })
 
     loop = asyncio.get_running_loop()
-    img = await loop.run_in_executor(None, cv2.imread, file_path)
-    if img is not None:
-        h, w = img.shape[:2]
+    def read_dimensions(path):
+        # Pillow reads container headers lazily; it does not allocate/decode a
+        # full pixel array just to obtain width and height.
+        with Image.open(path) as image:
+            return image.size
+
+    try:
+        w, h = await loop.run_in_executor(None, read_dimensions, file_path)
+        input_dimensions = (w, h)
         megapixels = (w * h) / 1_000_000
         await send_log(ws, f'Input: {name} ({w}x{h})')
+    except (OSError, ValueError):
+        pass
 
     progress_q = thread_queue.Queue()
 
@@ -415,28 +492,33 @@ async def process_image(ws, file_path, output_path, scale, profile):
         )
     )
 
-    while not task.done():
-        last_pct = None
+    try:
+        while not task.done():
+            last_pct = None
+            while not progress_q.empty():
+                last_pct = progress_q.get_nowait()
+            if last_pct is not None:
+                await ws.send_json({
+                    'type': 'progress',
+                    'file': file_path,
+                    'progress': 0.1 + last_pct * 0.85,
+                    'status': f'Upscaling... {int(last_pct * 100)}%'
+                })
+            await asyncio.sleep(0.1)
+
         while not progress_q.empty():
-            last_pct = progress_q.get_nowait()
-        if last_pct is not None:
-            await ws.send_json({
-                'type': 'progress',
-                'file': file_path,
-                'progress': 0.1 + last_pct * 0.85,
-                'status': f'Upscaling... {int(last_pct * 100)}%'
-            })
-        await asyncio.sleep(0.2)
+            progress_q.get_nowait()
+        await task
+    except BaseException:
+        upscaler.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
+        raise
 
-    # Drain
-    while not progress_q.empty():
-        progress_q.get_nowait()
-
-    await task  # Re-raise exceptions
-
-    out_img = await loop.run_in_executor(None, cv2.imread, output_path)
-    if out_img is not None:
-        oh, ow = out_img.shape[:2]
+    if input_dimensions:
+        ow, oh = input_dimensions[0] * scale, input_dimensions[1] * scale
         await send_log(ws, f'Output: {Path(output_path).name} ({ow}x{oh})', 'success')
 
     await ws.send_json({
@@ -454,12 +536,22 @@ async def process_video(ws, file_path, output_path, scale, output_ext, profile):
     name = Path(file_path).name
     started = time.monotonic()
 
-    cap = cv2.VideoCapture(file_path)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
+    def probe_video():
+        cap = cv2.VideoCapture(file_path)
+        try:
+            if not cap.isOpened():
+                return 0, 0, 0.0, 0
+            width = max(0, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+            height = max(0, int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+            frame_rate = float(cap.get(cv2.CAP_PROP_FPS))
+            raw_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            frame_count = max(0, int(raw_count)) if math.isfinite(raw_count) else 0
+            return width, height, frame_rate, frame_count
+        finally:
+            cap.release()
+
+    loop = asyncio.get_running_loop()
+    w, h, fps, frames = await loop.run_in_executor(None, probe_video)
     await send_log(ws, f'Video: {name} ({w}x{h}, {fps:.1f}fps, {frames} frames)')
 
     progress_q = thread_queue.Queue()
@@ -467,13 +559,26 @@ async def process_video(ws, file_path, output_path, scale, output_ext, profile):
     def on_progress(progress, status):
         progress_q.put_nowait((progress, status))
 
-    loop = asyncio.get_running_loop()
     task = loop.run_in_executor(
         None, upscaler.upscale_video, file_path, output_path, scale, output_ext,
         on_progress, profile
     )
 
-    while not task.done():
+    try:
+        while not task.done():
+            while not progress_q.empty():
+                try:
+                    progress, status = progress_q.get_nowait()
+                    await ws.send_json({
+                        'type': 'progress',
+                        'file': file_path,
+                        'progress': progress,
+                        'status': status
+                    })
+                except thread_queue.Empty:
+                    break
+            await asyncio.sleep(0.1)
+
         while not progress_q.empty():
             try:
                 progress, status = progress_q.get_nowait()
@@ -485,22 +590,14 @@ async def process_video(ws, file_path, output_path, scale, output_ext, profile):
                 })
             except thread_queue.Empty:
                 break
-        await asyncio.sleep(0.2)
-
-    # Drain remaining progress messages
-    while not progress_q.empty():
+        await task
+    except BaseException:
+        upscaler.cancel()
         try:
-            progress, status = progress_q.get_nowait()
-            await ws.send_json({
-                'type': 'progress',
-                'file': file_path,
-                'progress': progress,
-                'status': status
-            })
-        except thread_queue.Empty:
-            break
-
-    await task
+            await task
+        except BaseException:
+            pass
+        raise
 
     await send_log(ws, f'Video complete: {Path(output_path).name} ({w*scale}x{h*scale})', 'success')
 
@@ -519,6 +616,8 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--token', type=str, default=None)
     args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error('--port must be between 1 and 65535')
 
     app.state.token = args.token
     AUTH_TOKEN = args.token
@@ -528,11 +627,24 @@ if __name__ == '__main__':
     # Python version check
     v = sys.version_info
     print(f'Python {v.major}.{v.minor}.{v.micro}')
-    if v.major != 3 or v.minor < 10:
-        print('WARNING: Python 3.10+ is required for PyTorch compatibility')
-    if v.minor >= 14:
-        print('WARNING: Python 3.14+ may not be compatible with PyTorch')
+    if v.major != 3 or not 11 <= v.minor <= 13:
+        print(
+            'ERROR: Python 3.11 through 3.13 is required by the current media dependencies.',
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     print(f'Starting MuxMelt backend on port {args.port}...')
     print(f'Available modules: {", ".join(available_modules)}')
-    uvicorn.run(app, host='127.0.0.1', port=args.port, log_level='info')
+    # Tokens travel in the query string because browser WebSockets cannot set a
+    # custom auth header. Disable access logs so those credentials are never
+    # copied into Electron's console/log stream.
+    config = uvicorn.Config(
+        app, host='127.0.0.1', port=args.port,
+        # Uvicorn's INFO-level WebSocket handshake log also includes the query
+        # string, so WARNING is required in addition to access_log=False.
+        log_level='warning', access_log=False,
+    )
+    server = uvicorn.Server(config)
+    app.state.uvicorn_server = server
+    server.run()

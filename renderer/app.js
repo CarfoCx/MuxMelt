@@ -71,7 +71,8 @@ function renderLogEntries(toolId = currentToolId) {
 function log(message, level = 'info', toolId = currentToolId) {
   const key = getLogToolId(toolId);
   const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const entry = { time, message, level };
+  const safeLevel = ['info', 'warn', 'error', 'success'].includes(level) ? level : 'info';
+  const entry = { time, message: String(message ?? ''), level: safeLevel };
 
   logsByTool[key] = logsByTool[key] || [];
   logsByTool[key].push(entry);
@@ -118,13 +119,46 @@ function formatFileSize(bytes) {
 }
 window.formatFileSize = formatFileSize;
 
+// Build a valid URL for local media previews. Concatenating "file://" breaks
+// Windows drive paths and treats # / ? in filenames as URL syntax.
+function localPathToFileUrl(filePath) {
+  const normalized = String(filePath || '').replace(/\\/g, '/');
+  if (!normalized) return '';
+
+  if (normalized.startsWith('//')) {
+    const [host, ...segments] = normalized.slice(2).split('/');
+    return `file://${host}/${segments.map(encodeURIComponent).join('/')}`;
+  }
+
+  const encoded = normalized.split('/').map((segment, index) => {
+    if (index === 0 && /^[A-Za-z]:$/.test(segment)) return segment;
+    return encodeURIComponent(segment);
+  }).join('/');
+  return normalized.startsWith('/') ? `file://${encoded}` : `file:///${encoded}`;
+}
+window.localPathToFileUrl = localPathToFileUrl;
+
+function getParentDirectory(filePath) {
+  const normalized = String(filePath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const separator = normalized.lastIndexOf('/');
+  if (separator < 0) return '';
+  if (separator === 0) return '/';
+  if (separator === 2 && /^[A-Za-z]:\//.test(normalized)) return normalized.slice(0, 3);
+  return normalized.slice(0, separator);
+}
+window.getParentDirectory = getParentDirectory;
+
 // Show an in-app toast notification + native OS notification
 function showCompletionToast(message, isError = false, outputFiles = []) {
+  message = String(message ?? '');
   window.setTaskbarProgress(-1); // Clear on completion
+  const safeOutputFiles = Array.isArray(outputFiles)
+    ? outputFiles.filter(filePath => typeof filePath === 'string' && filePath.length > 0)
+    : [];
 
   // Store last output files for workflow chaining
-  if (outputFiles && outputFiles.length > 0) {
-    window.lastOutputFiles = outputFiles;
+  if (safeOutputFiles.length > 0) {
+    window.lastOutputFiles = safeOutputFiles;
   }
 
   // Remove existing toast
@@ -139,8 +173,8 @@ function showCompletionToast(message, isError = false, outputFiles = []) {
   let toastHTML = `<div class="toast-content"><div class="toast-message"><span class="completion-toast-icon">${isError ? '\u26A0' : '\u2714'}</span><span>${escapeHtml(message)}</span></div>`;
 
   // Add "Send to..." actions if we have output files and it's not an error
-  if (!isError && outputFiles && outputFiles.length > 0) {
-    const suggestions = getSendToSuggestions(outputFiles);
+  if (!isError && safeOutputFiles.length > 0) {
+    const suggestions = getSendToSuggestions(safeOutputFiles);
     if (suggestions.length > 0) {
       toastHTML += '<div class="toast-actions">';
       suggestions.forEach(s => {
@@ -172,7 +206,7 @@ function showCompletionToast(message, isError = false, outputFiles = []) {
   window.api.system.showNotification({
     title: 'MuxMelt',
     body: message
-  });
+  }).catch(() => {});
 }
 window.showCompletionToast = showCompletionToast;
 
@@ -206,20 +240,21 @@ function getSendToSuggestions(outputFiles) {
 }
 
 // Send output files to another tool for chaining
-window.sendToTool = function(toolId) {
+window.sendToTool = async function(toolId) {
   const files = window.lastOutputFiles || [];
-  loadTool(toolId);
-  // Dispatch paste-files after a short delay to let the tool initialize
-  setTimeout(() => {
+  const loaded = await loadTool(toolId);
+  // loadTool resolves only after the destination has initialized. A fixed
+  // delay raced slower disks and caused files to be silently dropped.
+  if (loaded && currentToolId === toolId) {
     document.dispatchEvent(new CustomEvent('paste-files', { detail: files }));
-  }, 300);
+  }
 };
 
 // Auto-open output folder if setting is enabled
 window.autoOpenOutputIfEnabled = async function(outputDir) {
   if (!outputDir) return;
   try {
-    const all = await window.api.system.loadSettings();
+    const all = await loadAllSettings();
     if (all.global && all.global.autoOpenOutput) {
       window.api.system.openFolder(outputDir);
     }
@@ -230,36 +265,31 @@ window.autoOpenOutputIfEnabled = async function(outputDir) {
 const RECENT_FILES_MAX = 20;
 
 window.addRecentFile = async function(filePath) {
-  if (!filePath) return;
+  if (typeof filePath !== 'string' || !filePath) return;
   try {
-    const all = await window.api.system.loadSettings();
-    all.global = all.global || {};
-    let recent = all.global.recentFiles || [];
-    // Remove duplicate if already exists
-    recent = recent.filter(f => f !== filePath);
-    // Add to front
-    recent.unshift(filePath);
-    // Trim to max
-    if (recent.length > RECENT_FILES_MAX) recent = recent.slice(0, RECENT_FILES_MAX);
-    all.global.recentFiles = recent;
-    await window.api.system.saveSettings(all);
+    await updateSettings(all => {
+      all.global = all.global || {};
+      let recent = Array.isArray(all.global.recentFiles) ? all.global.recentFiles : [];
+      recent = recent.filter(f => f !== filePath);
+      recent.unshift(filePath);
+      all.global.recentFiles = recent.slice(0, RECENT_FILES_MAX);
+    });
   } catch {}
 };
 
 window.getRecentFiles = async function() {
   try {
-    const all = await window.api.system.loadSettings();
-    return (all.global && all.global.recentFiles) || [];
+    const all = await loadAllSettings();
+    const recent = all.global && all.global.recentFiles;
+    return Array.isArray(recent) ? recent.filter(filePath => typeof filePath === 'string' && filePath) : [];
   } catch { return []; }
 };
 
 window.clearRecentFiles = async function() {
   try {
-    const all = await window.api.system.loadSettings();
-    if (all.global) {
-      all.global.recentFiles = [];
-      await window.api.system.saveSettings(all);
-    }
+    await updateSettings(all => {
+      if (all.global) all.global.recentFiles = [];
+    });
   } catch {}
 };
 
@@ -291,14 +321,24 @@ window.calculateETA = function(batchStartTime, totalFiles, files) {
   return 'ETA: ' + window.formatDuration(eta);
 };
 
-// Update file count badge in footer
-window.updateFileCount = function(count) {
-  let badge = document.querySelector('.file-count');
+function getToolSummaryRoot(toolIdOrRoot) {
+  if (toolIdOrRoot && typeof toolIdOrRoot.querySelector === 'function') return toolIdOrRoot;
+  if (typeof toolIdOrRoot === 'string') {
+    return toolCache[toolIdOrRoot]?.container || null;
+  }
+  return toolContent.querySelector('.tool-instance');
+}
+
+// Update a tool's own cached footer, even while another tool is visible.
+window.updateFileCount = function(count, toolIdOrRoot) {
+  const root = getToolSummaryRoot(toolIdOrRoot);
+  if (!root) return;
+  let badge = root.querySelector('.file-count');
   if (count > 0) {
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'file-count';
-      const footerLeft = document.querySelector('.tool-footer-left');
+      const footerLeft = root.querySelector('.tool-footer-left');
       if (footerLeft) footerLeft.appendChild(badge);
     }
     badge.textContent = count === 1 ? '1 file' : `${count} files`;
@@ -307,15 +347,17 @@ window.updateFileCount = function(count) {
   }
 };
 
-window.updateQueueSummary = function(items) {
-  const footerLeft = document.querySelector('.tool-footer-left');
+window.updateQueueSummary = function(items, toolIdOrRoot) {
+  const root = getToolSummaryRoot(toolIdOrRoot);
+  if (!root) return;
+  const footerLeft = root.querySelector('.tool-footer-left');
   if (!footerLeft) return;
 
-  let summary = document.querySelector('.queue-summary');
+  let summary = root.querySelector('.queue-summary');
   const list = Array.isArray(items) ? items : [];
   if (list.length === 0) {
     if (summary) summary.remove();
-    window.updateFileCount(0);
+    window.updateFileCount(0, root);
     return;
   }
 
@@ -328,7 +370,7 @@ window.updateQueueSummary = function(items) {
   if (!summary) {
     summary = document.createElement('span');
     summary.className = 'queue-summary';
-    const fileCount = document.querySelector('.file-count');
+    const fileCount = root.querySelector('.file-count');
     if (fileCount && fileCount.parentNode === footerLeft) {
       fileCount.insertAdjacentElement('afterend', summary);
     } else {
@@ -345,7 +387,7 @@ window.updateQueueSummary = function(items) {
   if (counts.cancelled) parts.push(`<span class="queue-pill">Cancelled ${counts.cancelled}</span>`);
 
   summary.innerHTML = parts.join('');
-  window.updateFileCount(list.length);
+  window.updateFileCount(list.length, root);
 };
 
 // Platform-aware file reveal label
@@ -374,7 +416,7 @@ window.showFileContextMenu = function(e, filePath, onRemove) {
   revealBtn.setAttribute('role', 'menuitem');
   revealBtn.textContent = getRevealLabel();
   revealBtn.addEventListener('click', () => {
-    const dir = filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+    const dir = getParentDirectory(filePath);
     window.api.system.openFolder(dir);
     menu.remove();
   });
@@ -446,22 +488,32 @@ window.getFileThumbnail = async function(filePath) {
   } catch { return null; }
 };
 
-// Global clipboard paste support — saves pasted images to temp and dispatches
+// Global clipboard paste support: disk files are resolved normally and
+// in-memory screenshots are persisted through the validated main-process API.
 document.addEventListener('paste', async (e) => {
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
+  const pastedPaths = [];
   for (const item of items) {
     if (item.type.startsWith('image/')) {
       const blob = item.getAsFile();
-      // Only files copied from disk have a path; in-memory screenshots don't.
-      const blobPath = blob ? window.api.system.getPathForFile(blob) : '';
+      if (!blob) continue;
+      const blobPath = window.api.system.getPathForFile(blob);
       if (blobPath) {
         const resolved = await window.api.system.resolveDroppedPaths([blobPath]);
-        if (resolved.length > 0) {
-          document.dispatchEvent(new CustomEvent('paste-files', { detail: resolved }));
+        pastedPaths.push(...resolved);
+      } else if (window.api.system.saveClipboardImage) {
+        try {
+          const savedPath = await window.api.system.saveClipboardImage(await blob.arrayBuffer(), blob.type);
+          if (savedPath) pastedPaths.push(savedPath);
+        } catch (err) {
+          log(`Could not paste image: ${err.message}`, 'error');
         }
       }
     }
+  }
+  if (pastedPaths.length > 0) {
+    document.dispatchEvent(new CustomEvent('paste-files', { detail: pastedPaths }));
   }
 });
 
@@ -470,10 +522,50 @@ document.addEventListener('paste', async (e) => {
 // ============================================================================
 
 let globalSettings = {};
+let settingsWriteQueue = Promise.resolve();
+
+function queueSettingsWrite(operation) {
+  const result = settingsWriteQueue.catch(() => {}).then(operation);
+  settingsWriteQueue = result.catch(err => {
+    console.warn('Failed to save settings:', err);
+  });
+  return result;
+}
+
+async function loadAllSettings() {
+  await settingsWriteQueue;
+  const loaded = await window.api.system.loadSettings();
+  return loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
+}
+
+function updateSettings(mutator) {
+  if (typeof mutator !== 'function') {
+    return Promise.reject(new TypeError('Settings mutator must be a function'));
+  }
+  return queueSettingsWrite(async () => {
+    const loaded = await window.api.system.loadSettings();
+    const all = loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
+    await mutator(all);
+    const saved = await window.api.system.saveSettings(all);
+    if (saved !== true) throw new Error('The settings file could not be saved');
+    globalSettings = all.global || {};
+    return all;
+  });
+}
+
+function replaceAllSettings(settings) {
+  return queueSettingsWrite(async () => {
+    const next = settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
+    const saved = await window.api.system.saveSettings(next);
+    if (saved !== true) throw new Error('The settings file could not be saved');
+    globalSettings = next.global || {};
+    return next;
+  });
+}
 
 async function loadGlobalSettings() {
   try {
-    const all = await window.api.system.loadSettings();
+    const all = await loadAllSettings();
     globalSettings = all.global || {};
     return all;
   } catch (err) {
@@ -483,15 +575,13 @@ async function loadGlobalSettings() {
 }
 
 function saveGlobalSettings() {
-  window.api.system.loadSettings().then(all => {
+  return updateSettings(all => {
     all.global = {
       ...(all.global || {}),
       logCollapsed: logPanel.classList.contains('collapsed'),
       lastTool: currentToolId,
     };
-    globalSettings = all.global;
-    window.api.system.saveSettings(all);
-  });
+  }).catch(err => console.warn('Failed to save global settings:', err));
 }
 
 // Default output directory helpers — used by all tools
@@ -508,8 +598,9 @@ window.applyDefaultOutputDir = (outputDirBtn) => {
 };
 
 // Expose settings helpers for tools
-window.loadAllSettings = () => window.api.system.loadSettings();
-window.saveAllSettings = (settings) => window.api.system.saveSettings(settings);
+window.loadAllSettings = loadAllSettings;
+window.saveAllSettings = replaceAllSettings;
+window.updateSettings = updateSettings;
 
 // ============================================================================
 // GPU monitoring
@@ -534,11 +625,11 @@ async function pollGpuStats() {
     _scheduleVramPoll(5000);
     return;
   }
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 4000);
   try {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 4000);
     const resp = await fetch(`http://127.0.0.1:${pythonPort}/vram?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal });
-    clearTimeout(tid);
+    if (!resp.ok) throw new Error(`GPU status request failed (${resp.status})`);
     const data = await resp.json();
 
     _vramFailCount = 0;
@@ -582,6 +673,8 @@ async function pollGpuStats() {
     // Exponential backoff: 3 s -> 6 s -> 12 s -> ... capped at 60 s
     const backoff = Math.min(3000 * (2 ** (_vramFailCount - 1)), 60000);
     _scheduleVramPoll(backoff);
+  } finally {
+    clearTimeout(tid);
   }
 }
 
@@ -591,11 +684,16 @@ function checkHealth() {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), 8000);
   fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal })
-    .then(r => { clearTimeout(tid); return r.json(); })
+    .then(r => {
+      clearTimeout(tid);
+      if (!r.ok) throw new Error(`Health request failed (${r.status})`);
+      return r.json();
+    })
     .then(data => {
       const hasGpu = data.device === 'cuda' || data.device === 'mps';
       gpuBadge.textContent = hasGpu ? data.gpu_name || 'GPU Active' : 'CPU Mode (slower)';
       gpuBadge.style.borderColor = hasGpu ? '#4ade80' : '#fbbf24';
+      _vramFailCount = 0;
       if (!hasGpu) {
         log('No GPU detected — processing will be slower. An NVIDIA GPU with CUDA or Apple Silicon is recommended.', 'warn');
       }
@@ -616,23 +714,74 @@ const toolRegistry = {};
 const toolCache = {};
 
 function registerTool(id, module) {
+  if (typeof id !== 'string' || !/^[a-z0-9-]+$/.test(id) || !module || typeof module.init !== 'function') {
+    console.error('Ignoring invalid tool registration:', id);
+    return false;
+  }
   toolRegistry[id] = module;
+  return true;
 }
 
 // Make this available globally so tool scripts can self-register
 window.registerTool = registerTool;
+// Tool DOM nodes are cached between visits, so their document-level event
+// listeners remain alive too. Handlers use this to ignore events intended for
+// the currently visible tool.
+window.isToolActive = (toolId) => currentToolId === toolId;
 window.pythonPort = null; // will be set during init
 window.pythonToken = null; // will be set during init
 
-let _loadingToolId = null;
+let _loadRequestId = 0;
+
+function restorePreviousTool(previousToolId, message) {
+  const previous = previousToolId && toolCache[previousToolId];
+  if (previous && previous.initialized && previous.container) {
+    toolContent.replaceChildren(previous.container);
+    currentToolId = previousToolId;
+    currentToolModule = previous.module || toolRegistry[previousToolId] || null;
+    toolStylesheet.href = `tools/${previousToolId}/${previousToolId}.css`;
+    renderLogEntries(previousToolId);
+  } else {
+    currentToolId = null;
+    currentToolModule = null;
+    toolStylesheet.removeAttribute('href');
+    toolContent.innerHTML = `
+      <div class="tool-placeholder">
+        <div class="tool-placeholder-icon">&#9888;</div>
+        <div class="tool-placeholder-text">${escapeHtml(message || 'Unable to load this tool')}</div>
+      </div>`;
+  }
+
+  document.querySelectorAll('.sidebar-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.tool === currentToolId);
+  });
+  const label = currentToolId
+    ? document.querySelector(`.sidebar-item[data-tool="${currentToolId}"] .sidebar-label`)
+    : null;
+  document.title = label ? `${label.textContent} - MuxMelt` : 'MuxMelt';
+}
 
 async function loadTool(toolId) {
-  if (toolId === currentToolId) return;
+  if (typeof toolId !== 'string' || !/^[a-z0-9-]+$/.test(toolId)) return false;
+  if (toolId === currentToolId && toolCache[toolId]?.initialized) return true;
 
-  // Guard against concurrent loads from rapid clicks
-  _loadingToolId = toolId;
+  // A monotonically increasing request id also handles A -> B -> A races;
+  // comparing only the tool name lets the first stale A request win again.
+  const requestId = ++_loadRequestId;
 
-  const previousToolId = currentToolId;
+  const displayedToolId = toolContent.firstElementChild?.dataset?.tool;
+  const previousToolId = displayedToolId && toolCache[displayedToolId]?.initialized
+    ? displayedToolId
+    : (toolCache[currentToolId]?.initialized ? currentToolId : null);
+  if (previousToolId && previousToolId !== toolId) {
+    const previous = toolCache[previousToolId];
+    previous?.container?.querySelectorAll('audio, video').forEach(media => {
+      try { media.pause(); } catch {}
+    });
+    try { previous?.module?.deactivate?.(); } catch (err) {
+      log(`Could not deactivate ${previousToolId}: ${err.message}`, 'warn', previousToolId);
+    }
+  }
   currentToolModule = null;
 
   // Update sidebar
@@ -650,87 +799,103 @@ async function loadTool(toolId) {
   // Load tool CSS
   toolStylesheet.href = `tools/${toolId}/${toolId}.css`;
 
-  if (toolCache[toolId]?.container) {
-    toolContent.replaceChildren(toolCache[toolId].container);
+  let container = toolCache[toolId]?.container || null;
+  if (container) {
+    toolContent.replaceChildren(container);
     currentToolModule = toolCache[toolId].module || toolRegistry[toolId] || null;
-    saveGlobalSettings();
-    return;
-  }
-
-  // Load tool HTML
-  const container = document.createElement('div');
-  container.className = 'tool-instance';
-  container.dataset.tool = toolId;
-
-  try {
+    if (toolCache[toolId].initialized) {
+      saveGlobalSettings();
+      return true;
+    }
+    // A rapid navigation can cache HTML before its script initializes. Fall
+    // through and finish initialization instead of returning a dead UI.
+  } else try {
+    container = document.createElement('div');
+    container.className = 'tool-instance';
+    container.dataset.tool = toolId;
     const resp = await fetch(`tools/${toolId}/${toolId}.html`);
     if (!resp.ok) throw new Error('not found');
     const html = await resp.text();
+    if (_loadRequestId !== requestId) return false;
     container.innerHTML = html;
     toolCache[toolId] = {
       ...(toolCache[toolId] || {}),
       container,
       module: null,
     };
-    if (_loadingToolId !== toolId) return;
     toolContent.replaceChildren(container);
-  } catch {
+  } catch (err) {
     // If another tool was requested while this one was loading, that load owns
     // the UI now — don't stomp its content or roll its state back.
-    if (_loadingToolId !== toolId) return;
-    toolContent.innerHTML = `
-      <div class="tool-placeholder">
-        <div class="tool-placeholder-icon">&#128679;</div>
-        <div class="tool-placeholder-text">This tool is coming soon</div>
-      </div>`;
-    // Roll the sidebar highlight and title back too, so the UI doesn't claim
-    // the failed tool is active.
-    currentToolId = previousToolId;
-    document.querySelectorAll('.sidebar-item').forEach(item => {
-      item.classList.toggle('active', item.dataset.tool === previousToolId);
-    });
-    const prevLabel = document.querySelector(`.sidebar-item[data-tool="${previousToolId}"] .sidebar-label`);
-    document.title = prevLabel ? `${prevLabel.textContent} - MuxMelt` : 'MuxMelt';
+    if (_loadRequestId !== requestId) return false;
+    delete toolCache[toolId];
+    log(`Failed to load ${toolId}: ${err.message}`, 'error', toolId);
+    restorePreviousTool(previousToolId, 'Unable to load this tool');
     saveGlobalSettings();
-    return;
+    return false;
   }
 
   // Load and execute tool JS
   try {
+    const cacheEntry = toolCache[toolId];
     const existingScript = document.getElementById(`toolScript-${toolId}`);
 
     if (!existingScript) {
       const script = document.createElement('script');
       script.id = `toolScript-${toolId}`;
       script.src = `tools/${toolId}/${toolId}.js`;
-      document.body.appendChild(script);
-
-      // Wait for script to register.
-      await new Promise((resolve) => {
-        script.onload = resolve;
-        script.onerror = resolve;
+      // Store the promise so a second visit while the same script is still
+      // loading waits for registration rather than mistaking it for loaded.
+      cacheEntry.scriptLoadPromise = new Promise((resolve) => {
+        script.onload = () => resolve(true);
+        script.onerror = () => {
+          script.remove();
+          resolve(false);
+        };
       });
+      document.body.appendChild(script);
     }
+    if (cacheEntry.scriptLoadPromise && !(await cacheEntry.scriptLoadPromise)) {
+      cacheEntry.scriptLoadPromise = null;
+      throw new Error(`Failed to load script for ${toolId}`);
+    }
+    if (_loadRequestId !== requestId) return false;
+    if (!toolRegistry[toolId]) throw new Error(`Tool script did not register ${toolId}`);
 
     // Initialize the tool once. Its state and DOM stay cached across navigation
     // until the user clears the tool from inside that module.
-    if (toolRegistry[toolId]) {
-      currentToolModule = toolRegistry[toolId];
-      toolCache[toolId].module = currentToolModule;
-      if (!toolCache[toolId].initialized && currentToolModule.init) {
-        // Abort if another tool was requested while loading
-        if (_loadingToolId !== toolId) return;
+    currentToolModule = toolRegistry[toolId];
+    toolCache[toolId].module = currentToolModule;
+    if (!toolCache[toolId].initialized) {
+      if (!cacheEntry.initPromise) {
         const toolLog = (message, level = 'info') => log(message, level, toolId);
         const toolClearLog = () => clearLog(toolId);
-        currentToolModule.init({ pythonPort, pythonToken, log: toolLog, escapeHtml, clearLog: toolClearLog });
-        toolCache[toolId].initialized = true;
+        const moduleToInitialize = currentToolModule;
+        cacheEntry.initPromise = Promise.resolve().then(() => moduleToInitialize.init({
+          pythonPort, pythonToken, log: toolLog, escapeHtml, clearLog: toolClearLog
+        }));
       }
+      await cacheEntry.initPromise;
+      cacheEntry.initPromise = null;
+      cacheEntry.initialized = true;
+      if (_loadRequestId !== requestId) return false;
     }
   } catch (e) {
-    log(`Failed to load tool: ${toolId}`, 'error');
+    const staleRequest = _loadRequestId !== requestId;
+    const failedModule = toolRegistry[toolId];
+    try { failedModule?.cleanup?.(); } catch {}
+    delete toolRegistry[toolId];
+    document.getElementById(`toolScript-${toolId}`)?.remove();
+    delete toolCache[toolId];
+    if (staleRequest) return false;
+    log(`Failed to load tool ${toolId}: ${e.message}`, 'error', toolId);
+    restorePreviousTool(previousToolId, 'Unable to initialize this tool');
+    saveGlobalSettings();
+    return false;
   }
 
   saveGlobalSettings();
+  return true;
 }
 
 // Sidebar click + keyboard handlers with ARIA
@@ -855,7 +1020,11 @@ if (window.api.updater.onUpdateAvailable) {
       updateBanner.style.display = 'flex';
       updateDownloadBtn.style.display = 'inline-block';
       updateDownloadBtn.disabled = false;
-      updateDownloadBtn.textContent = info.isLocal ? 'Install' : 'Download';
+      updateDownloadBtn.textContent = info.isLocal
+        ? 'Install'
+        : info.manualOnly
+          ? 'Open release'
+          : 'Download';
       updateRestartBtn.style.display = 'none';
     }
     log(`Update available: ${info.version}`, 'info');
@@ -878,7 +1047,8 @@ if (window.api.updater.onUpdateDownloaded) {
 if (window.api.updater.onUpdateDownloadProgress) {
   window.api.updater.onUpdateDownloadProgress((progress) => {
     if (updateBannerText) {
-      const pct = Math.round(progress.percent);
+      const rawPercent = Number(progress && progress.percent);
+      const pct = Number.isFinite(rawPercent) ? Math.min(100, Math.max(0, Math.round(rawPercent))) : 0;
       updateBannerText.textContent = `Downloading update... ${pct}%`;
     }
   });
@@ -893,15 +1063,37 @@ if (window.api.updater.onUpdateError) {
 if (updateDownloadBtn) {
   updateDownloadBtn.addEventListener('click', async () => {
     updateDownloadBtn.disabled = true;
-    updateDownloadBtn.textContent = pendingUpdateInfo && pendingUpdateInfo.isLocal ? 'Installing...' : 'Downloading...';
-
-    if (pendingUpdateInfo && pendingUpdateInfo.isLocal && pendingUpdateInfo.installerPath) {
-      await window.api.updater.downloadAndUpdate(pendingUpdateInfo.installerPath);
-      return;
-    }
-
-    const result = await window.api.updater.downloadUpdate();
-    if (result && result.error) {
+    const isManualRelease = !!(pendingUpdateInfo && pendingUpdateInfo.manualOnly);
+    updateDownloadBtn.textContent = pendingUpdateInfo && pendingUpdateInfo.isLocal
+      ? 'Installing...'
+      : isManualRelease
+        ? 'Opening...'
+        : 'Downloading...';
+    try {
+      let result;
+      if (isManualRelease) {
+        const releaseUrl = pendingUpdateInfo && pendingUpdateInfo.releaseUrl;
+        if (typeof releaseUrl !== 'string' || !/^https:\/\/github\.com\//i.test(releaseUrl)) {
+          throw new Error('The update release page URL is invalid');
+        }
+        const opened = await window.api.system.openExternal(releaseUrl);
+        result = opened ? { success: true } : { error: 'The release page could not be opened' };
+      } else {
+        result = pendingUpdateInfo && pendingUpdateInfo.isLocal && pendingUpdateInfo.installerPath
+          ? await window.api.updater.downloadAndUpdate(pendingUpdateInfo.installerPath)
+          : await window.api.updater.downloadUpdate();
+      }
+      if (!result || result.error || result.success === false) {
+        const error = result && result.error ? result.error : 'Update could not be started';
+        log(`Update error: ${error}`, 'error');
+        updateDownloadBtn.disabled = false;
+        updateDownloadBtn.textContent = 'Retry';
+      } else if (isManualRelease) {
+        updateDownloadBtn.disabled = false;
+        updateDownloadBtn.textContent = 'Open release';
+      }
+    } catch (err) {
+      log(`Update error: ${err.message}`, 'error');
       updateDownloadBtn.disabled = false;
       updateDownloadBtn.textContent = 'Retry';
     }

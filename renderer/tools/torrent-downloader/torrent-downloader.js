@@ -8,13 +8,15 @@ let outputDir = '';
 let torrentFile = null;
 let log = null;
 let progressCleanup = null;
-const activeDownloads = {};
+let isStarting = false;
+const activeDownloads = Object.create(null);
+const pendingProgress = Object.create(null);
 
 let magnetInput, dropZone, fileCount, outputDirBtn, outputDirText;
 let startBtn, openOutputBtn, cancelAllBtn, footerStatus, footerCount;
 let downloadsContainer, emptyState;
 
-function init(ctx) {
+async function init(ctx) {
   log = ctx.log;
 
   magnetInput = document.getElementById('magnetInput');
@@ -31,8 +33,12 @@ function init(ctx) {
   footerStatus = document.getElementById('footerStatus');
   footerCount = document.getElementById('footerCount');
 
+  await loadToolSettings();
+  if (!outputDir && window.getDefaultOutputDir) {
+    outputDir = window.getDefaultOutputDir();
+    updateOutputButton();
+  }
   bindEvents();
-  loadToolSettings();
   updateFooter();
   log('Torrent Downloader initialized');
 }
@@ -76,7 +82,7 @@ function bindEvents() {
     if (e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
       const filePath = window.api.system.getPathForFile(file);
-      if (filePath && file.name.endsWith('.torrent')) {
+      if (filePath && file.name.toLowerCase().endsWith('.torrent')) {
         torrentFile = filePath;
         magnetInput.value = '';
         updateFileText();
@@ -93,7 +99,10 @@ function bindEvents() {
 
   // Allow Enter key to start download
   magnetInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') startDownload();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      startDownload();
+    }
   });
 
   startBtn.addEventListener('click', startDownload);
@@ -103,7 +112,12 @@ function bindEvents() {
   });
 
   cancelAllBtn.addEventListener('click', async () => {
-    await window.api.tools.torrentDownloader.cancelAllTorrents();
+    try {
+      const result = await window.api.tools.torrentDownloader.cancelAllTorrents();
+      if (result && result.success === false) throw new Error(result.error || 'Could not cancel torrents');
+    } catch (err) {
+      log(`Could not cancel downloads: ${err.message}`, 'error');
+    }
   });
 
   progressCleanup = window.api.tools.onToolProgress((data) => {
@@ -154,11 +168,12 @@ function updateFooter() {
 // ── Formatting utilities ───────────────────────────────────────────────
 
 function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  const i = Math.min(sizes.length - 1, Math.floor(Math.log(value) / Math.log(k)));
+  return parseFloat((value / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 function formatSpeed(bytesPerSec) {
@@ -178,6 +193,7 @@ function formatEta(seconds) {
 // ── Download card creation ─────────────────────────────────────────────
 
 function createDownloadCard(id) {
+  if (!id || activeDownloads[id]) return;
   const card = document.createElement('div');
   card.className = 'torrent-card state-downloading';
 
@@ -278,6 +294,10 @@ function createDownloadCard(id) {
     totalLength: 0
   };
 
+  const queued = pendingProgress[id] || [];
+  delete pendingProgress[id];
+  queued.forEach(handleProgress);
+
   updateFooter();
 }
 
@@ -286,23 +306,29 @@ function createDownloadCard(id) {
 async function togglePause(id) {
   const dl = activeDownloads[id];
   if (!dl) return;
-  if (dl.state === 'downloading') {
-    dl.state = 'paused';
-    dl.dot.className = 'torrent-state-dot paused';
-    dl.pauseBtn.textContent = 'Resume';
-    dl.elDown.textContent = '0 B/s';
-    dl.elUp.textContent = '0 B/s';
-    dl.progressFill.classList.add('paused');
-    dl.card.className = 'torrent-card state-paused';
-    await window.api.tools.torrentDownloader.pauseTorrent(id);
-    updateFooter();
-  } else if (dl.state === 'paused') {
-    dl.state = 'downloading';
-    dl.dot.className = 'torrent-state-dot downloading';
-    dl.pauseBtn.textContent = 'Pause';
-    dl.progressFill.classList.remove('paused');
-    dl.card.className = 'torrent-card state-downloading';
-    await window.api.tools.torrentDownloader.resumeTorrent(id);
+  if (dl.state !== 'downloading' && dl.state !== 'paused') return;
+
+  const pausing = dl.state === 'downloading';
+  dl.pauseBtn.disabled = true;
+  try {
+    const result = pausing
+      ? await window.api.tools.torrentDownloader.pauseTorrent(id)
+      : await window.api.tools.torrentDownloader.resumeTorrent(id);
+    if (result && result.success === false) throw new Error(result.error || 'Torrent is no longer active');
+
+    dl.state = pausing ? 'paused' : 'downloading';
+    dl.dot.className = `torrent-state-dot ${dl.state}`;
+    dl.pauseBtn.textContent = pausing ? 'Resume' : 'Pause';
+    dl.progressFill.classList.toggle('paused', pausing);
+    dl.card.className = `torrent-card state-${dl.state}`;
+    if (pausing) {
+      dl.elDown.textContent = '0 B/s';
+      dl.elUp.textContent = '0 B/s';
+    }
+  } catch (err) {
+    log(`Could not ${pausing ? 'pause' : 'resume'} download: ${err.message}`, 'error');
+  } finally {
+    dl.pauseBtn.disabled = false;
     updateFooter();
   }
 }
@@ -312,7 +338,14 @@ async function cancelDownload(id) {
   if (!dl) return;
   dl.pauseBtn.disabled = true;
   dl.cancelBtn.disabled = true;
-  await window.api.tools.torrentDownloader.cancelTorrent(id);
+  try {
+    const result = await window.api.tools.torrentDownloader.cancelTorrent(id);
+    if (result && result.success === false) throw new Error(result.error || 'Torrent is no longer active');
+  } catch (err) {
+    dl.pauseBtn.disabled = false;
+    dl.cancelBtn.disabled = false;
+    log(`Could not cancel download: ${err.message}`, 'error');
+  }
 }
 
 function finalizeCard(id, label, onclick) {
@@ -330,6 +363,7 @@ function finalizeCard(id, label, onclick) {
     setTimeout(() => {
       dl.card.remove();
       delete activeDownloads[id];
+      delete pendingProgress[id];
       updateFooter();
     }, 250);
   });
@@ -338,9 +372,15 @@ function finalizeCard(id, label, onclick) {
 // ── Progress handler ───────────────────────────────────────────────────
 
 function handleProgress(data) {
+  if (!data || typeof data !== 'object' || typeof data.id !== 'string') return;
   const id = data.id;
   const dl = activeDownloads[id];
-  if (!dl) return;
+  if (!dl) {
+    pendingProgress[id] = pendingProgress[id] || [];
+    pendingProgress[id].push(data);
+    if (pendingProgress[id].length > 20) pendingProgress[id].shift();
+    return;
+  }
 
   // Error
   if (data.status === 'error') {
@@ -370,7 +410,8 @@ function handleProgress(data) {
 
   // Complete
   if (data.status === 'done') {
-    log('Download complete: ' + data.name, 'success');
+    const completedName = data.name || dl.title.textContent || 'Torrent';
+    log('Download complete: ' + completedName, 'success');
     dl.state = 'complete';
     dl.dot.className = 'torrent-state-dot complete';
     dl.title.classList.remove('loading');
@@ -388,7 +429,8 @@ function handleProgress(data) {
     }
 
     finalizeCard(id, 'Remove');
-    window.showCompletionToast(`Downloaded: ${data.name}`);
+    window.showCompletionToast(`Downloaded: ${completedName}`);
+    if (window.autoOpenOutputIfEnabled) window.autoOpenOutputIfEnabled(outputDir);
     updateFooter();
     return;
   }
@@ -412,7 +454,8 @@ function handleProgress(data) {
   // Downloading progress
   if (data.status === 'downloading' && dl.state === 'downloading') {
     if (data.progress !== undefined) {
-      const pct = (data.progress * 100).toFixed(1);
+      const progress = Math.max(0, Math.min(1, Number(data.progress) || 0));
+      const pct = (progress * 100).toFixed(1);
       dl.progressFill.style.width = `${pct}%`;
       dl.progressText.textContent = `${pct}%`;
     }
@@ -441,64 +484,70 @@ function handleProgress(data) {
 // ── Start download ─────────────────────────────────────────────────────
 
 async function startDownload() {
+  if (isStarting) return;
   const source = torrentFile || magnetInput.value.trim();
   if (!source) {
     log('Please provide a magnet link or select a .torrent file.', 'warn');
     return;
   }
 
-  if (!outputDir) {
-    const dir = await window.api.system.selectOutputDir();
-    if (!dir) return;
-    outputDir = dir;
-    updateOutputButton();
-    saveToolSettings();
-  }
+  isStarting = true;
+  startBtn.disabled = true;
+  const originalLabel = startBtn.textContent;
+  startBtn.textContent = 'Starting...';
+  try {
+    if (!outputDir) {
+      const dir = await window.api.system.selectOutputDir();
+      if (!dir) return;
+      outputDir = dir;
+      updateOutputButton();
+      await saveToolSettings();
+    }
 
-  log('Starting torrent download…');
+    log('Starting torrent download…');
+    const result = await window.api.tools.torrentDownloader.downloadTorrent({ source, outputDir });
+    if (!result || !result.success || !result.id) {
+      throw new Error(result && result.error ? result.error : 'The torrent could not be started');
+    }
 
-  // Clear inputs for next add
-  const currentSource = source;
-  torrentFile = null;
-  magnetInput.value = '';
-  updateFileText();
-
-  const result = await window.api.tools.torrentDownloader.downloadTorrent({
-    source: currentSource,
-    outputDir: outputDir
-  });
-
-  if (result.success) {
     createDownloadCard(result.id);
-  } else {
-    log(`Error: ${result.error}`, 'error');
-    window.showCompletionToast(result.error, true);
+    torrentFile = null;
+    magnetInput.value = '';
+    updateFileText();
+  } catch (err) {
+    log(`Error: ${err.message}`, 'error');
+    window.showCompletionToast(err.message, true);
+  } finally {
+    isStarting = false;
+    startBtn.disabled = false;
+    startBtn.textContent = originalLabel;
   }
 }
 
 // ── Settings ───────────────────────────────────────────────────────────
 
-function loadToolSettings() {
-  const settings = window.api.system.loadSettings();
-  if (settings.torrentDownloader) {
-    outputDir = settings.torrentDownloader.outputDir || '';
+async function loadToolSettings() {
+  try {
+    const settings = await window.loadAllSettings();
+    const saved = settings['torrent-downloader'] || settings.torrentDownloader || {};
+    outputDir = typeof saved.outputDir === 'string' ? saved.outputDir : '';
     updateOutputButton();
+  } catch (err) {
+    log(`Could not load torrent settings: ${err.message}`, 'warn');
   }
 }
 
 function saveToolSettings() {
-  const settings = window.api.system.loadSettings();
-  settings.torrentDownloader = settings.torrentDownloader || {};
-  settings.torrentDownloader.outputDir = outputDir;
-  window.api.system.saveSettings(settings);
+  return window.updateSettings(settings => {
+    settings['torrent-downloader'] = { outputDir };
+    delete settings.torrentDownloader;
+  }).catch(err => {
+    log(`Could not save torrent settings: ${err.message}`, 'warn');
+  });
 }
 
 // ── Register ───────────────────────────────────────────────────────────
 
-window.registerTool({
-  id: 'torrent-downloader',
-  init: init,
-  cleanup: cleanup
-});
+window.registerTool('torrent-downloader', { init, cleanup });
 
 })();
