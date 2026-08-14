@@ -25,16 +25,29 @@ function parseTimeToSeconds(value) {
   return NaN;
 }
 
-function registerIPC(ipcMain, getMainWindow) {
+function registerIPC(ipcMain, getMainWindow, jobRegistry = null) {
+  const assertJobStart = () => {
+    ffmpeg.throwIfCleanupFailed();
+    jobRegistry?.assertCanStart?.('GIF creation');
+  };
   const activeCancels = new Map();
   const activeWindows = new Set();
   const cancelledWindows = new Set();
+  if (jobRegistry && typeof jobRegistry.register === 'function') {
+    jobRegistry.register('gif-maker', async () => {
+      for (const winId of activeWindows) cancelledWindows.add(winId);
+      const cancellations = [...activeCancels.values()].map((cancel) => Promise.resolve().then(cancel));
+      await Promise.all(cancellations);
+      ffmpeg.throwIfCleanupFailed();
+    });
+  }
 
   const throwIfCancelled = (winId) => {
     if (cancelledWindows.has(winId)) throw new Error('GIF creation cancelled by user.');
   };
 
   ipcMain.handle('gif-maker-create', async (event, options = {}) => {
+    assertJobStart();
     const winId = event.sender.id;
     options = options && typeof options === 'object' ? options : {};
     const {
@@ -298,7 +311,8 @@ function registerIPC(ipcMain, getMainWindow) {
     }
     cancelledWindows.add(winId);
     const cancel = activeCancels.get(winId);
-    if (cancel) cancel();
+    if (cancel) await cancel();
+    ffmpeg.throwIfCleanupFailed();
     return { success: true };
   });
 }

@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest a focused improvement to an existing workflow or a carefully scoped new one.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What job is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+      description: Describe the simplest workflow that solves it.
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network behavior
+      options:
+        - Fully offline
+        - Downloads a local component or model
+        - Sends user-provided content to a service
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Privacy, storage, accessibility, and maintenance impact
+      description: Include likely dependencies or model sizes if known.

@@ -17,6 +17,7 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld('api', {
   system: {
     selectOutputDir: () => ipcRenderer.invoke('select-output-dir'),
+    getDownloadsDir: () => ipcRenderer.invoke('get-downloads-dir'),
     selectFiles: (options) => ipcRenderer.invoke('select-files', options),
     selectFolder: () => ipcRenderer.invoke('select-folder'),
     openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
@@ -44,6 +45,11 @@ contextBridge.exposeInMainWorld('api', {
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     setProgress: (value) => ipcRenderer.invoke('set-progress', value),
     checkOverwrite: (filePath) => ipcRenderer.invoke('check-overwrite', filePath),
+    getStorageSummary: () => ipcRenderer.invoke('get-storage-summary'),
+    clearPrivateData: (options) => ipcRenderer.invoke('clear-private-data', options),
+    openDataFolder: () => ipcRenderer.invoke('open-data-folder'),
+    exportDiagnostics: () => ipcRenderer.invoke('export-diagnostics'),
+    setOfflineMode: (enabled) => ipcRenderer.invoke('set-offline-mode', enabled),
   },
 
   windowControls: {
@@ -57,7 +63,13 @@ contextBridge.exposeInMainWorld('api', {
   python: {
     getPythonPort: () => ipcRenderer.invoke('get-python-port'),
     getPythonToken: () => ipcRenderer.invoke('get-python-token'),
+    getStatus: () => ipcRenderer.invoke('component-status'),
+    installMediaPack: () => ipcRenderer.invoke('install-media-pack'),
+    installChatPack: () => ipcRenderer.invoke('install-chat-pack'),
+    removePack: (id) => ipcRenderer.invoke('remove-component-pack', id),
     restartPython: () => ipcRenderer.invoke('restart-python'),
+    onStatus: (callback) => subscribe('component-status', callback),
+    onBackendStatus: (callback) => subscribe('python-status', callback),
     onPythonCrashed: (callback) => subscribe('python-crashed', callback),
     onPythonLog: (callback) => subscribe('python-log', callback),
   },
@@ -110,8 +122,6 @@ contextBridge.exposeInMainWorld('api', {
       cancelUrlDownload: () => ipcRenderer.invoke('url-downloader-cancel'),
       getVideoInfo: (options) => ipcRenderer.invoke('url-downloader-info', options),
       cancelVideoInfo: (requestId) => ipcRenderer.invoke('url-downloader-info-cancel', requestId),
-      getThumbnail: (options) => ipcRenderer.invoke('url-downloader-thumbnail', options),
-      updateYtDlp: () => ipcRenderer.invoke('url-downloader-update-ytdlp'),
     },
 
     torrentDownloader: {

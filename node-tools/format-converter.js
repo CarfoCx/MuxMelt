@@ -4,9 +4,12 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
 const ffmpeg = require('./ffmpeg-runner');
+const { decodeTim } = require('./tim-decoder');
 const { validateOutputDir, formatToolError, validateMagicBytes, autoIncrementPath } = require('./path-utils');
 
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif', '.gif', '.svg', '.heic', '.heif']);
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif', '.gif', '.svg', '.heic', '.heif', '.tim']);
+// Formats sharp cannot open itself; we decode these to raw RGBA first.
+const DECODED_IMAGE_EXTS = new Set(['.tim']);
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov']);
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac', '.wma', '.mka', '.opus']);
 const IMAGE_OUTPUT_FORMATS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif', 'tiff', 'gif', 'ico']);
@@ -42,10 +45,35 @@ function sharpOutputOptions(format, quality) {
   }
 }
 
-async function createIcoBuffer(inputPath) {
+/**
+ * Build a factory that yields a fresh sharp pipeline for an input file.
+ *
+ * Most formats go straight to sharp by path. Formats sharp cannot parse (TIM)
+ * are decoded to raw RGBA once, up front, and every pipeline reuses that buffer
+ * so a multi-size output like ICO decodes the source only a single time.
+ */
+function createImageSource(inputPath) {
+  const ext = path.extname(inputPath).toLowerCase();
+  if (!DECODED_IMAGE_EXTS.has(ext)) {
+    return { create: (options) => sharp(inputPath, options) };
+  }
+
+  if (ext === '.tim') {
+    const image = decodeTim(fs.readFileSync(inputPath));
+    const raw = { width: image.width, height: image.height, channels: image.channels };
+    return {
+      metadata: { width: image.width, height: image.height, pages: 1 },
+      create: () => sharp(image.data, { raw })
+    };
+  }
+
+  throw new Error(`No decoder registered for ${ext} files.`);
+}
+
+async function createIcoBuffer(source) {
   const sizes = [16, 32, 48, 64, 128, 256];
   const images = await Promise.all(sizes.map(async (size) => {
-    const buffer = await sharp(inputPath, { animated: false })
+    const buffer = await source.create({ animated: false })
       .resize(size, size, {
         fit: 'contain',
         background: { r: 0, g: 0, b: 0, alpha: 0 }
@@ -87,7 +115,8 @@ async function convertImage(inputPath, outputPath, targetFormat, quality, keepMe
     throw new Error(`Unsupported image output format: ${targetFormat}`);
   }
 
-  const metadata = await sharp(inputPath, { animated: false }).metadata();
+  const source = createImageSource(inputPath);
+  const metadata = source.metadata || await source.create({ animated: false }).metadata();
   const isAnimated = Number(metadata.pages) > 1;
   if (isAnimated && !ANIMATED_IMAGE_OUTPUT_FORMATS.has(targetFormat)) {
     throw new Error(
@@ -96,7 +125,7 @@ async function convertImage(inputPath, outputPath, targetFormat, quality, keepMe
   }
 
   if (targetFormat === 'ico') {
-    const icoBuffer = await createIcoBuffer(inputPath);
+    const icoBuffer = await createIcoBuffer(source);
     fs.writeFileSync(outputPath, icoBuffer);
     return outputPath;
   }
@@ -107,7 +136,7 @@ async function convertImage(inputPath, outputPath, targetFormat, quality, keepMe
     throw new Error('BMP output is not supported. Please use PNG, JPG, or WebP instead.');
   }
 
-  let pipeline = sharp(inputPath, { animated: isAnimated });
+  let pipeline = source.create({ animated: isAnimated });
   if (keepMetadata) pipeline = pipeline.withMetadata();
   const outputOptions = isAnimated && (format === 'gif' || format === 'webp')
     ? {
@@ -120,16 +149,29 @@ async function convertImage(inputPath, outputPath, targetFormat, quality, keepMe
   return outputPath;
 }
 
-function registerIPC(ipcMain, getMainWindow) {
+function registerIPC(ipcMain, getMainWindow, jobRegistry = null) {
+  const assertJobStart = () => {
+    ffmpeg.throwIfCleanupFailed();
+    jobRegistry?.assertCanStart?.('Format conversion');
+  };
   const activeCancels = new Map();
   const activeWindows = new Set();
   const cancelledWindows = new Set();
+  if (jobRegistry && typeof jobRegistry.register === 'function') {
+    jobRegistry.register('format-converter', async () => {
+      for (const winId of activeWindows) cancelledWindows.add(winId);
+      const cancellations = [...activeCancels.values()].map((cancel) => Promise.resolve().then(cancel));
+      await Promise.all(cancellations);
+      ffmpeg.throwIfCleanupFailed();
+    });
+  }
 
   const throwIfCancelled = (winId) => {
     if (cancelledWindows.has(winId)) throw new Error('Format conversion cancelled by user.');
   };
 
   ipcMain.handle('format-converter-convert', async (event, options = {}) => {
+    assertJobStart();
     const winId = event.sender.id;
     options = options && typeof options === 'object' ? options : {};
     const {
@@ -279,7 +321,8 @@ function registerIPC(ipcMain, getMainWindow) {
     }
     cancelledWindows.add(winId);
     const cancel = activeCancels.get(winId);
-    if (cancel) cancel();
+    if (cancel) await cancel();
+    ffmpeg.throwIfCleanupFailed();
     return { success: true };
   });
 

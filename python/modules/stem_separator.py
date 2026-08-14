@@ -19,6 +19,51 @@ except (ImportError, AttributeError, ValueError):
     _available = False
 SUPPORTED_MODELS = {'htdemucs', 'htdemucs_ft', 'mdx_extra'}
 SUPPORTED_STEMS = {'vocals', 'drums', 'bass', 'other'}
+FFMPEG_LOCAL_PROTOCOLS = (
+    'file,pipe,fd,crypto,data,concat,concatf,subfile,async,cache'
+)
+
+
+def _offline_mode_enabled():
+    return os.environ.get('MUXMELT_OFFLINE', '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
+
+def _decode_offline_input(input_path, output_path, cancel_event):
+    """Decode through network-disabled FFmpeg before handing data to Demucs.
+
+    Demucs/torchaudio may use native codec backends that bypass Python's socket
+    guard. A plain WAV boundary prevents a crafted local container or manifest
+    from causing those libraries to resolve an external resource.
+    """
+    command = [
+        'ffmpeg', '-y', '-nostdin', '-hide_banner', '-loglevel', 'error',
+        '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOLS,
+        '-i', input_path, '-vn', '-ac', '2', '-ar', '44100',
+        '-f', 'wav', output_path,
+    ]
+    process = subprocess.Popen(
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    while process.poll() is None:
+        if cancel_event.is_set():
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            raise RuntimeError('Cancelled')
+        cancel_event.wait(0.1)
+    if process.returncode != 0:
+        raise RuntimeError(
+            f'Could not safely decode local media for Offline Mode '
+            f'(FFmpeg exit code {process.returncode})'
+        )
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 44:
+        raise RuntimeError('Offline media decode produced no usable audio')
+    return output_path
 
 
 def is_available():
@@ -87,6 +132,15 @@ class StemSeparator:
         reader_thread = None
 
         try:
+            demucs_input = input_path
+            demucs_base_name = base_name
+            if _offline_mode_enabled():
+                demucs_input = _decode_offline_input(
+                    input_path,
+                    os.path.join(temp_dir, 'offline-input.wav'),
+                    self.cancel_event,
+                )
+                demucs_base_name = Path(demucs_input).stem
             runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'demucs_runner.py')
             cmd = [
                 sys.executable,
@@ -94,7 +148,7 @@ class StemSeparator:
                 '-n', model,
                 '-o', temp_dir,
                 '--filename', '{track}_{stem}.{ext}',
-                input_path,
+                demucs_input,
             ]
 
             if progress_callback:
@@ -168,7 +222,7 @@ class StemSeparator:
                 progress_callback(0.85, 'Saving stems...')
 
             demucs_output_dir = Path(temp_dir, model)
-            prefix = f'{base_name}_'
+            prefix = f'{demucs_base_name}_'
             available = {}
             if demucs_output_dir.is_dir():
                 for path in demucs_output_dir.iterdir():
@@ -291,12 +345,33 @@ class StemSeparator:
                         if progress_callback:
                             progress_callback(input_path, 0.05, 'Loading separation model...')
 
+                    prepared_group = []
+                    for input_index, (input_path, output_dir, base_name) in enumerate(group):
+                        demucs_input = input_path
+                        demucs_base_name = base_name
+                        if _offline_mode_enabled():
+                            if progress_callback:
+                                progress_callback(
+                                    input_path, 0.05,
+                                    'Safely decoding local media for Offline Mode...',
+                                )
+                            demucs_input = _decode_offline_input(
+                                input_path,
+                                os.path.join(temp_dir, f'offline-input-{input_index}.wav'),
+                                self.cancel_event,
+                            )
+                            demucs_base_name = Path(demucs_input).stem
+                        prepared_group.append((
+                            input_path, output_dir, base_name,
+                            demucs_input, demucs_base_name,
+                        ))
+
                     cmd = [
                         sys.executable, runner_path,
                         '-n', model,
                         '-o', temp_dir,
                         '--filename', '{track}_{stem}.{ext}',
-                        *[job[0] for job in group],
+                        *[job[3] for job in prepared_group],
                     ]
                     process = subprocess.Popen(
                         cmd,
@@ -358,10 +433,11 @@ class StemSeparator:
                         )
 
                     demucs_output_dir = Path(temp_dir, model)
-                    for input_path, output_dir, base_name in group:
+                    for (input_path, output_dir, base_name, _demucs_input,
+                         demucs_base_name) in prepared_group:
                         if self.cancel_event.is_set():
                             raise RuntimeError('Cancelled')
-                        prefix = f'{base_name}_'
+                        prefix = f'{demucs_base_name}_'
                         available = {}
                         if demucs_output_dir.is_dir():
                             for candidate in demucs_output_dir.iterdir():

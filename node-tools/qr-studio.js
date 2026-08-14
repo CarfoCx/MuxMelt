@@ -53,10 +53,12 @@ async function decodeQrFile(inputPath) {
   return jsQR(pixels, info.width, info.height);
 }
 
-function registerIPC(ipcMain, getMainWindow) {
+function registerIPC(ipcMain, getMainWindow, jobRegistry = null) {
+  const assertJobStart = () => jobRegistry?.assertCanStart?.('QR operation');
 
   // ---- GENERATE QR CODE ----
   ipcMain.handle('qr-studio-generate', async (event, options = {}) => {
+    assertJobStart();
     options = options && typeof options === 'object' ? options : {};
     const {
       text,
@@ -116,6 +118,7 @@ function registerIPC(ipcMain, getMainWindow) {
 
   // ---- GENERATE QR AS DATA URL (for preview) ----
   ipcMain.handle('qr-studio-preview', async (event, options = {}) => {
+    assertJobStart();
     options = options && typeof options === 'object' ? options : {};
     const {
       text,
@@ -143,6 +146,7 @@ function registerIPC(ipcMain, getMainWindow) {
 
   // ---- SCAN / DECODE QR FROM IMAGE ----
   ipcMain.handle('qr-studio-scan', async (event, options = {}) => {
+    assertJobStart();
     options = options && typeof options === 'object' ? options : {};
     const { inputPath } = options;
 
@@ -192,8 +196,14 @@ function registerIPC(ipcMain, getMainWindow) {
   // ---- BATCH SCAN multiple images ----
   const cancelledWindows = new Set();
   const activeBatchWindows = new Set();
+  if (jobRegistry && typeof jobRegistry.register === 'function') {
+    jobRegistry.register('qr-studio', () => {
+      for (const winId of activeBatchWindows) cancelledWindows.add(winId);
+    });
+  }
 
   ipcMain.handle('qr-studio-batch-scan', async (event, options = {}) => {
+    assertJobStart();
     options = options && typeof options === 'object' ? options : {};
     const { inputPaths } = options;
 

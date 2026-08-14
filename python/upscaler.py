@@ -1,11 +1,14 @@
 import os
 import json
+import hashlib
+import hmac
 import cv2
 import numpy as np
 import subprocess
 import socket
 import tempfile
 import urllib.request
+import urllib.parse
 import threading
 import time
 from collections import deque
@@ -14,6 +17,10 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+FFMPEG_LOCAL_PROTOCOLS = (
+    'file,pipe,fd,crypto,data,concat,concatf,subfile,async,cache'
+)
 
 try:
     import pynvml
@@ -33,11 +40,15 @@ MODEL_PROFILES = {
             'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth',
             'num_block': 23,
             'filename': 'RealESRGAN_x2plus.pth',
+            'sha256': '49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb',
+            'max_bytes': 70_000_000,
         },
         4: {
             'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth',
             'num_block': 23,
             'filename': 'RealESRGAN_x4plus.pth',
+            'sha256': '4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1',
+            'max_bytes': 70_000_000,
         },
     },
     'anime': {
@@ -45,14 +56,32 @@ MODEL_PROFILES = {
             'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth',
             'num_block': 23,
             'filename': 'RealESRGAN_x2plus.pth',
+            'sha256': '49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb',
+            'max_bytes': 70_000_000,
         },
         4: {
             'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth',
             'num_block': 6,
             'filename': 'RealESRGAN_x4plus_anime_6B.pth',
+            'sha256': 'f872d837d3c90ed2e05227bed711af5671a6fd1c9f7d7e91c911a61f155e99da',
+            'max_bytes': 20_000_000,
         },
     },
 }
+MODEL_DOWNLOAD_HOSTS = {
+    'github.com', 'release-assets.githubusercontent.com',
+    'objects.githubusercontent.com',
+}
+
+
+class _RestrictedModelRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        host = (urllib.parse.urlparse(newurl).hostname or '').lower()
+        if host not in MODEL_DOWNLOAD_HOSTS:
+            raise RuntimeError(
+                f'Model download redirected to an unexpected host: {host}'
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 BUNDLED_WEIGHTS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'weights'
@@ -549,6 +578,7 @@ class Upscaler:
             result = subprocess.run(
                 [
                     'ffprobe', '-v', 'error',
+                    '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOLS,
                     '-show_entries',
                     'stream=codec_type,avg_frame_rate,r_frame_rate,duration,nb_frames',
                     '-of', 'json', input_path,
@@ -696,8 +726,16 @@ class Upscaler:
         with self._model_lock:
             return (profile, scale) in self._models
 
-    def _download_model(self, url, model_path, callback=None):
+    def _download_model(self, url, model_path, expected_sha256, max_bytes,
+                        callback=None):
         """Download model weights to a temporary file and atomically publish."""
+        if os.environ.get('MUXMELT_OFFLINE') == '1':
+            raise RuntimeError(
+                'This model is not installed and cannot be downloaded while '
+                'Offline Mode is enabled.'
+            )
+        if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+            raise RuntimeError('Model download manifest is missing a SHA-256 value')
         temp_path = None
         response = None
         request = urllib.request.Request(url, headers={'User-Agent': 'MuxMelt/1.0'})
@@ -705,7 +743,15 @@ class Upscaler:
             # A short socket timeout bounds cancellation latency even during
             # connection setup. Once connected, cancel() also closes this
             # response from the websocket thread to interrupt stalled reads.
-            response = urllib.request.urlopen(request, timeout=10)
+            response = urllib.request.build_opener(
+                _RestrictedModelRedirects()
+            ).open(request, timeout=10)
+            final_host = (urllib.parse.urlparse(response.geturl()).hostname or '').lower()
+            if final_host not in MODEL_DOWNLOAD_HOSTS:
+                response.close()
+                raise RuntimeError(
+                    f'Model download redirected to an unexpected host: {final_host}'
+                )
             with self._download_response_lock:
                 if self.cancel_event.is_set():
                     response.close()
@@ -713,7 +759,10 @@ class Upscaler:
                 self._active_download_response = response
             with response:
                 total = int(response.headers.get('Content-Length') or 0)
+                if total > max_bytes:
+                    raise RuntimeError('Model download exceeds its declared size limit')
                 downloaded = 0
+                digest = hashlib.sha256()
                 last_data_at = time.monotonic()
                 with tempfile.NamedTemporaryFile(
                     mode='wb', prefix=os.path.basename(model_path) + '.',
@@ -740,7 +789,10 @@ class Upscaler:
                             break
                         last_data_at = time.monotonic()
                         output.write(chunk)
+                        digest.update(chunk)
                         downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            raise RuntimeError('Model download exceeded its size limit')
                         if callback:
                             progress = downloaded / total if total else 0.0
                             callback(
@@ -756,6 +808,8 @@ class Upscaler:
                 )
             if downloaded < 1_000_000:
                 raise RuntimeError('Downloaded model file is unexpectedly small')
+            if not hmac.compare_digest(digest.hexdigest(), expected_sha256):
+                raise RuntimeError('Downloaded model failed its SHA-256 integrity check')
             os.replace(temp_path, model_path)
         finally:
             with self._download_response_lock:
@@ -793,8 +847,21 @@ class Upscaler:
             if not os.path.isfile(model_path):
                 url = model_info['url']
                 print(f'Downloading {model_info["filename"]} from {url}...')
-                self._download_model(url, model_path, download_callback)
+                self._download_model(
+                    url, model_path, model_info['sha256'],
+                    model_info['max_bytes'], download_callback,
+                )
                 print(f'Downloaded ({os.path.getsize(model_path) / 1e6:.1f} MB)')
+
+            digest = hashlib.sha256()
+            with open(model_path, 'rb') as model_file:
+                for chunk in iter(lambda: model_file.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            if not hmac.compare_digest(digest.hexdigest(), model_info['sha256']):
+                raise RuntimeError(
+                    f'Model weights {model_info["filename"]} failed their '
+                    'SHA-256 integrity check'
+                )
 
             if self.cancel_event.is_set():
                 raise CancellationError('Processing cancelled by user')
@@ -1042,6 +1109,7 @@ class Upscaler:
 
         reader_cmd = [
             'ffmpeg', '-nostdin', '-hide_banner', '-nostats', '-loglevel', 'error',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOLS,
             '-i', input_path,
             '-map', '0:v:0', '-an',
             # Raw video has no timestamps. Normalize through FFmpeg's fps
@@ -1052,9 +1120,11 @@ class Upscaler:
         ]
         writer_cmd = [
             'ffmpeg', '-y', '-nostdin', '-hide_banner', '-nostats', '-loglevel', 'error',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOLS,
             '-f', 'rawvideo', '-pix_fmt', 'bgr24',
             '-video_size', f'{src_w * scale}x{src_h * scale}',
             '-framerate', f'{fps:.12g}', '-i', 'pipe:0',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOLS,
             '-i', input_path,
             '-map', '0:v:0', '-map', '1:a?',
         ]

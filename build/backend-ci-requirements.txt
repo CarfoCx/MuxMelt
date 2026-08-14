@@ -1,0 +1,7 @@
+# Minimal pinned imports needed to exercise the real FastAPI server in CI.
+# PyTorch is installed separately from its CPU-only wheel index.
+fastapi==0.136.3
+uvicorn==0.48.0
+opencv-python-headless==4.13.0.92
+numpy==2.4.4
+Pillow==12.2.0

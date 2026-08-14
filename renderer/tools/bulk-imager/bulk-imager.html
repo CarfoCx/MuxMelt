@@ -4,23 +4,23 @@
     <strong>Basic Image Editor.</strong> Crop or flip one image at a time.
   </div>
 
-  <div class="drop-zone" id="dropZone">
+  <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-describedby="editorDropHint">
     <div class="drop-zone-icon">&#128444;</div>
     <div class="drop-zone-text">
       Drag &amp; drop one image for editing
     </div>
     <div class="drop-zone-actions">
-      <span class="drop-zone-link" id="browseBtn">browse image</span>
+      <button type="button" class="drop-zone-link" id="browseBtn">browse image</button>
     </div>
-    <div class="drop-zone-hint">
+    <div class="drop-zone-hint" id="editorDropHint">
       Supports: PNG, JPG, WebP, BMP, TIFF
     </div>
   </div>
 
   <div class="settings-bar">
     <div class="setting-group">
-      <label>Output:</label>
-      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+      <label for="outputDirBtn">Output:</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
         Same as source
       </button>
     </div>
@@ -35,27 +35,27 @@
   </div>
 </div>
 
-<div class="editor-overlay" id="editorOverlay"></div>
-<div class="editor-modal" id="editorModal">
+<div class="editor-overlay" id="editorOverlay" aria-hidden="true"></div>
+<div class="editor-modal" id="editorModal" role="dialog" aria-modal="true" aria-labelledby="editorTitle" aria-hidden="true" tabindex="-1">
   <div class="editor-header">
     <span class="editor-title" id="editorTitle">Edit Image</span>
-    <button class="editor-close" id="editorClose" title="Close">&times;</button>
+    <button type="button" class="editor-close" id="editorClose" title="Close" aria-label="Close image editor">&times;</button>
   </div>
 
-  <div class="editor-toolbar">
-    <button class="editor-tool active" data-tool="crop" title="Crop">Crop</button>
-    <button class="editor-tool" data-tool="flip" title="Flip">Flip</button>
+  <div class="editor-toolbar" role="group" aria-label="Image editing operation">
+    <button type="button" class="editor-tool active" data-tool="crop" title="Crop" aria-pressed="true">Crop</button>
+    <button type="button" class="editor-tool" data-tool="flip" title="Flip" aria-pressed="false">Flip</button>
   </div>
 
   <div class="editor-options" id="editorOptions">
     <div class="editor-option-panel active" id="opt-crop">
       <span class="opt-label">Drag on image to select crop area</span>
       <div class="aspect-ratio-presets">
-        <button class="aspect-btn active" data-ratio="free">Free</button>
-        <button class="aspect-btn" data-ratio="1:1">1:1</button>
-        <button class="aspect-btn" data-ratio="16:9">16:9</button>
-        <button class="aspect-btn" data-ratio="4:3">4:3</button>
-        <button class="aspect-btn" data-ratio="9:16">9:16</button>
+        <button type="button" class="aspect-btn active" data-ratio="free" aria-pressed="true">Free</button>
+        <button type="button" class="aspect-btn" data-ratio="1:1" aria-pressed="false">1:1</button>
+        <button type="button" class="aspect-btn" data-ratio="16:9" aria-pressed="false">16:9</button>
+        <button type="button" class="aspect-btn" data-ratio="4:3" aria-pressed="false">4:3</button>
+        <button type="button" class="aspect-btn" data-ratio="9:16" aria-pressed="false">9:16</button>
       </div>
       <span class="opt-info" id="cropInfo">-</span>
       <button class="btn btn-sm" id="cropResetBtn">Reset Crop</button>
@@ -70,7 +70,7 @@
   </div>
 
   <div class="editor-canvas-wrap" id="editorCanvasWrap">
-    <canvas id="editorCanvas"></canvas>
+    <canvas id="editorCanvas" aria-label="Image editing canvas"></canvas>
     <div class="crop-overlay" id="cropOverlay" style="display:none;"></div>
   </div>
 
@@ -86,7 +86,7 @@
 
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Waiting for Image</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for Image</span>
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>

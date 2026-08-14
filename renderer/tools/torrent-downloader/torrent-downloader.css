@@ -10,6 +10,25 @@
   gap: 14px;
 }
 
+.torrent-privacy-warning {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning, #fbbf24) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning, #fbbf24) 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.torrent-privacy-warning label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.torrent-privacy-warning input { margin-top: 2px; }
+
 .torrent-input-row {
   display: flex;
   gap: 12px;
@@ -58,11 +77,55 @@
   transform: translateY(-2px);
 }
 
+.torrent-drop-zone:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.torrent-drop-zone.has-file {
+  border-style: solid;
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.06);
+  color: var(--text-secondary);
+}
+
+.torrent-drop-zone .file-selected-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 90%;
+}
+
 .torrent-drop-zone .file-selected {
   color: var(--accent);
   font-weight: 600;
   font-size: 12px;
-  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clear-file-btn {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.clear-file-btn:hover {
+  color: var(--error);
+  border-color: var(--error);
 }
 
 /* ── Add button row ─────────────────────────────────────────────────────── */
@@ -72,6 +135,26 @@
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.torrent-start-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  animation: torrent-hint-in 0.3s ease;
+}
+
+@keyframes torrent-hint-in {
+  from { opacity: 0; transform: translateX(4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.torrent-add-row .btn-primary.ready:not(:disabled) {
+  animation: torrent-ready-pulse 2s ease-in-out infinite;
+}
+
+@keyframes torrent-ready-pulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(99, 102, 241, 0); }
+  50% { box-shadow: 0 0 14px var(--accent-glow); }
 }
 
 /* ── Downloads container ────────────────────────────────────────────────── */

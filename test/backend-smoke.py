@@ -7,7 +7,8 @@ Four layers:
   Layer 2 (real HTTP, auto-skips): if fastapi/uvicorn/torch are importable,
     boots the actual server.py in a subprocess and asserts that /health is 403
     without the token and 200 with it.
-  Layer 3 (stdlib): exercises chat cancellation without llama.cpp.
+  Layer 3 (stdlib): exercises the local llama-server adapter, hardware policy,
+    local-model registry, and chat cancellation without llama.cpp.
   Layer 4 (stdlib): proves a stem batch uses one Demucs process and maps each
     track's outputs correctly without importing Demucs.
 
@@ -44,7 +45,7 @@ def check(name, cond):
 def layer1():
     from server_auth import request_authorized
 
-    tok = secrets.token_hex(16)
+    tok = secrets.token_hex(32)
 
     def http(q=b'', headers=None, method='GET'):
         return {'type': 'http', 'method': method, 'query_string': q, 'headers': headers or []}
@@ -115,7 +116,7 @@ def layer2():
               + os.path.basename(sys.executable) + '. Auth gate proven by Layer 1.')
         return
 
-    token = secrets.token_hex(16)
+    token = secrets.token_hex(32)
     port = free_port()
     env = dict(os.environ)
     env['PYTHONPATH'] = PYTHON_DIR + os.pathsep + env.get('PYTHONPATH', '')
@@ -155,26 +156,25 @@ def layer2():
 
 
 def layer3_chat_cancellation():
-    """Exercise chat cancellation without FastAPI or llama-cpp installed."""
+    """Exercise the professional chat path without FastAPI or llama.cpp."""
     import asyncio
+    import io
     import importlib
     import threading
     import types
 
-    from modules.llm import ChatLLM
+    from modules import llm as llm_module
+    from modules.llm import (
+        ChatLLM,
+        MODELS,
+        PROFESSIONAL_MINIMUM_MODEL,
+        default_model,
+        recommend_tier,
+        resolve_resource_profile,
+    )
 
-    print('\n--- Layer 3: chat cancellation ---')
+    print('\n--- Layer 3: local chat runtime ---')
 
-    class FakeModel:
-        def __init__(self):
-            self.completion_calls = 0
-
-        def create_chat_completion(self, **_kwargs):
-            self.completion_calls += 1
-            return iter(({'choices': [{'delta': {'content': 'ok'}}]},))
-
-    engine = ChatLLM()
-    engine._llm = FakeModel()
     class CloseableResponse:
         def __init__(self):
             self.closed = False
@@ -182,19 +182,249 @@ def layer3_chat_cancellation():
         def close(self):
             self.closed = True
 
-    response = CloseableResponse()
-    engine._active_download_response = response
+    # Even a machine-wide proxy must not become part of the private prompt hop.
+    with mock.patch.dict(os.environ, {
+        'HTTP_PROXY': 'http://proxy.invalid:9999',
+        'HTTPS_PROXY': 'http://proxy.invalid:9999',
+    }):
+        engine = ChatLLM()
+    download_response = CloseableResponse()
+    inference_response = CloseableResponse()
+    engine._active_download_response = download_response
+    engine._active_chat_response = inference_response
     engine.cancel()
-    check('chat cancellation closes a blocking model download response', response.closed)
+    check('chat cancellation closes a blocking model download response',
+          download_response.closed)
+    check('chat cancellation closes the active inference response',
+          inference_response.closed)
+
+    # A cancelled request must stop before it reaches the local server.
+    class FakeServerProcess:
+        def poll(self):
+            return None
+
+    class StreamResponse:
+        def __init__(self):
+            self.closed = False
+            self.lines = iter((
+                b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n',
+                b'data: {"choices":[],"usage":{"completion_tokens":1}}\n',
+                b'data: [DONE]\n',
+            ))
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.lines)
+
+        def close(self):
+            self.closed = True
+
+    class CapturingOpener:
+        def __init__(self, response):
+            self.response = response
+            self.calls = []
+
+        def open(self, request, timeout=None):
+            self.calls.append((request, timeout))
+            return self.response
+
+    # Python omits an explicitly empty ProxyHandler from the final handler list,
+    # so success means there is no ProxyHandler carrying any configured proxy.
+    proxy_free = not any(
+        isinstance(handler, urllib.request.ProxyHandler) and handler.proxies
+        for handler in engine._loopback_opener.handlers
+    )
+    check('private inference opener ignores ambient proxy settings', proxy_free)
+
+    stream_response = StreamResponse()
+    opener = CapturingOpener(stream_response)
+    engine._loopback_opener = opener
+    engine._server_proc = FakeServerProcess()
+    engine._server_port = 49321
+    engine._active_backend = 'cpu'
+    engine._active_download_response = None
+    engine._active_chat_response = None
     emitted = []
     engine.chat_stream([{'role': 'user', 'content': 'hello'}], emitted.append)
-    check('pre-cancelled chat_stream never enters llama.cpp',
-          engine._llm.completion_calls == 0)
+    check('pre-cancelled chat_stream never contacts llama-server', not opener.calls)
     check('pre-cancelled chat_stream emits no tokens', emitted == [])
+
     engine.reset_cancel()
-    engine.chat_stream([{'role': 'user', 'content': 'hello'}], emitted.append)
-    check('non-cancelled chat_stream still streams normally',
-          engine._llm.completion_calls == 1 and emitted == ['ok'])
+    stats = engine.chat_stream(
+        [{'role': 'user', 'content': 'hello'}], emitted.append
+    )
+    request = opener.calls[0][0] if opener.calls else None
+    check('chat inference targets literal loopback only',
+          request is not None
+          and request.full_url == 'http://127.0.0.1:49321/v1/chat/completions')
+    check('chat inference authenticates to the private llama-server',
+          request is not None
+          and request.get_header('Authorization') == f'Bearer {engine._api_key}')
+    check('non-cancelled llama-server stream returns text and completion stats',
+          emitted == ['ok']
+          and stream_response.closed
+          and stats.get('finish_reason') == 'stop'
+          and stats.get('completion_tokens') == 1
+          and stats.get('cancelled') is False)
+    # Avoid leaving a fake process attached to the atexit cleanup callback.
+    engine._server_proc = None
+
+    weak_cpu = {'backend': 'cpu', 'ramMb': 8192, 'vramMb': 0, 'cpuCores': 4}
+    balanced_boundary = {
+        'backend': 'cpu', 'ramMb': 10_000, 'vramMb': 0, 'cpuCores': 8,
+    }
+    performance_boundary = {
+        'backend': 'cpu', 'ramMb': 24_000, 'vramMb': 0, 'cpuCores': 8,
+    }
+    check('automatic resource profile selects eco for constrained hardware',
+          resolve_resource_profile(weak_cpu)['resolved'] == 'eco')
+    check('automatic resource profile selects balanced at the 10 GB boundary',
+          resolve_resource_profile(balanced_boundary)['resolved'] == 'balanced')
+    check('automatic resource profile selects performance at its RAM/CPU boundary',
+          resolve_resource_profile(performance_boundary)['resolved'] == 'performance')
+    check('manual eco profile caps CPU use even on strong hardware',
+          resolve_resource_profile(performance_boundary, 'eco')['threads'] <= 4)
+
+    expected_catalog = {
+        'qwen3.5-4b-instruct',
+        'qwen3.5-9b-instruct-q4',
+        'qwen3.5-9b-instruct-q5',
+        'qwen3.5-27b-instruct',
+        'qwen3.5-35b-a3b-instruct',
+    }
+    check('curated chat catalog excludes experimental 0.8B and 2B models',
+          set(MODELS) == expected_catalog
+          and 'qwen3.5-0.8b-instruct' not in MODELS
+          and 'qwen3.5-2b-instruct' not in MODELS)
+    check('every curated model declares an explicit capability category',
+          all(
+              model.get('quality_tier') in {
+                  'standard', 'recommended', 'advanced', 'expert',
+              }
+              and isinstance(model.get('quality_rank'), int)
+              and model['quality_rank'] > 0
+              and model.get('recommended_cpu_ram_mb', 0) >= model['min_ram_mb']
+              and model.get('min_cpu_cores', 0) >= 1
+              for model in MODELS.values()
+          ))
+
+    four_b = 'qwen3.5-4b-instruct'
+    nine_b = 'qwen3.5-9b-instruct-q4'
+    check('4B professional minimum requires CPU headroom and eight cores',
+          recommend_tier(four_b, {
+              'backend': 'cpu', 'ramMb': 12000, 'vramMb': 0, 'cpuCores': 7,
+          }) == 'possible'
+          and recommend_tier(four_b, {
+              'backend': 'cpu', 'ramMb': 12000, 'vramMb': 0, 'cpuCores': 8,
+          }) == 'recommended')
+    check('9B recommendation changes at its VRAM boundary',
+          recommend_tier(nine_b, {
+              'backend': 'cuda', 'ramMb': 16_000, 'vramMb': 6999, 'cpuCores': 4,
+          }) == 'possible'
+          and recommend_tier(nine_b, {
+              'backend': 'cuda', 'ramMb': 16_000, 'vramMb': 7000, 'cpuCores': 4,
+          }) == 'recommended')
+    check('Apple unified memory participates in model recommendations',
+          recommend_tier(four_b, {
+              'backend': 'metal', 'ramMb': 8192, 'vramMb': 0, 'cpuCores': 8,
+          }) == 'recommended')
+    check('dynamic default never falls below the curated quality floor',
+          PROFESSIONAL_MINIMUM_MODEL == four_b
+          and default_model(weak_cpu) == four_b
+          and default_model({
+              'backend': 'cpu', 'ramMb': 16_000, 'vramMb': 0,
+              'cpuCores': 8,
+          }) == nine_b
+          and default_model({
+              'backend': 'cuda', 'ramMb': 16_000, 'vramMb': 8000,
+              'cpuCores': 8,
+          }) == 'qwen3.5-9b-instruct-q5')
+
+    with tempfile.TemporaryDirectory() as data_dir:
+        gguf_path = os.path.join(data_dir, 'Private Assistant.gguf')
+        with open(gguf_path, 'wb') as model_file:
+            model_file.write(b'GGUF')
+            model_file.seek(1024 * 1024 - 1)
+            model_file.write(b'\0')
+        with mock.patch.dict(os.environ, {'MUXMELT_DATA_DIR': data_dir}):
+            registry_engine = ChatLLM()
+            local_id = registry_engine.register_local_model(gguf_path)
+            listed = {
+                item['id']: item for item in ChatLLM().list_models()
+            }
+            local_entry = listed.get(local_id)
+            check('local GGUF registration uses a stable local model id',
+                  local_id.startswith('local-')
+                  and registry_engine.model_path(local_id) == os.path.abspath(gguf_path))
+            check('registered GGUF persists in the local model listing',
+                  local_entry is not None
+                  and local_entry.get('source') == 'local'
+                  and local_entry.get('downloaded') is True
+                  and local_entry.get('can_download') is False
+                  and local_entry.get('quality_tier') == 'unverified'
+                  and local_entry.get('quality_rank') == 0
+                  and local_entry.get('fit') == local_entry.get('tier')
+                  and local_entry.get('name') == 'Private Assistant')
+            check('local GGUF registry stays inside MUXMELT_DATA_DIR',
+                  os.path.isfile(os.path.join(
+                      data_dir, 'models', 'local-models.json'
+                  )))
+
+    class FakeDownloadResponse(io.BytesIO):
+        def __init__(self, body, declared_size=None):
+            super().__init__(body)
+            self.headers = {
+                'Content-Length': str(len(body) if declared_size is None else declared_size)
+            }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    catalog_entry = {
+        'name': 'Integrity test model',
+        'file': 'integrity-test.gguf',
+        'url': 'https://example.invalid/integrity-test.gguf',
+        'sha256': '0' * 64,
+        'approx_mb': 1,
+        'min_vram_mb': 1,
+        'min_ram_mb': 1,
+    }
+    with tempfile.TemporaryDirectory() as data_dir, \
+            mock.patch.dict(os.environ, {'MUXMELT_DATA_DIR': data_dir}), \
+            mock.patch.dict(llm_module.MODELS, {'integrity-test': catalog_entry}):
+        body = b'GGUF' + (b'x' * 700_000)
+        integrity_engine = ChatLLM()
+        with mock.patch.object(
+            llm_module.urllib.request, 'urlopen',
+            return_value=FakeDownloadResponse(body),
+        ):
+            try:
+                integrity_engine.download('integrity-test')
+                mismatch_rejected = False
+            except RuntimeError as exc:
+                mismatch_rejected = 'integrity check' in str(exc).lower()
+        model_dir = os.path.join(data_dir, 'models')
+        leftovers = os.listdir(model_dir) if os.path.isdir(model_dir) else []
+        check('model hash mismatch is rejected without publishing a GGUF',
+              mismatch_rejected
+              and not os.path.exists(integrity_engine.model_path('integrity-test'))
+              and not any(name.endswith('.part') for name in leftovers))
+
+        with mock.patch.object(
+            llm_module.urllib.request, 'urlopen',
+            return_value=FakeDownloadResponse(b'', declared_size=100 * 1024 * 1024),
+        ):
+            try:
+                integrity_engine.download('integrity-test')
+                oversized_rejected = False
+            except RuntimeError as exc:
+                oversized_rejected = 'larger than' in str(exc).lower()
+        check('model download rejects an oversized declared response', oversized_rejected)
 
     # chat_routes imports only these FastAPI symbols at module import time.
     # A tiny stub keeps this focused regression runnable in the lightweight
@@ -224,12 +454,17 @@ def layer3_chat_cancellation():
 
         class FakeRouteLLM:
             def __init__(self):
+                self.dynamic_default = 'dynamic-default-model'
                 self.cancel_event = threading.Event()
                 self.load_started = threading.Event()
                 self.load_release = threading.Event()
                 self.load_returns = 0
                 self.cancel_calls = 0
                 self.chat_calls = 0
+                self.fit_calls = 0
+                self.unload_calls = 0
+                self.loaded_model_ids = []
+                self.default_calls = 0
 
             def reset_cancel(self):
                 self.cancel_event.clear()
@@ -239,17 +474,33 @@ def layer3_chat_cancellation():
                 self.cancel_event.set()
                 self.load_release.set()
 
+            def default_model(self):
+                self.default_calls += 1
+                return self.dynamic_default
+
+            def has_model(self, model_id):
+                return model_id == self.dynamic_default
+
             def is_downloaded(self, _model_id):
                 return True
 
-            def ensure_loaded(self, _model_id, _status_cb):
+            def ensure_loaded(self, model_id, execution='auto', profile='auto',
+                              status_cb=None):
+                self.loaded_model_ids.append(model_id)
                 self.load_started.set()
                 if not self.load_release.wait(timeout=2):
                     raise RuntimeError('test timed out waiting for cancellation')
                 self.load_returns += 1
 
+            def fit_messages(self, messages, _max_tokens):
+                self.fit_calls += 1
+                return messages, False, 1
+
             def chat_stream(self, *_args, **_kwargs):
                 self.chat_calls += 1
+
+            def unload(self):
+                self.unload_calls += 1
 
         class FakeSocket:
             def __init__(self, fake_llm, mode):
@@ -269,7 +520,6 @@ def layer3_chat_cancellation():
                 if self.receive_count == 1:
                     return {
                         'action': 'chat',
-                        'model': chat_routes.DEFAULT_MODEL,
                         'messages': [{'role': 'user', 'content': 'hello'}],
                     }
                 if self.receive_count == 2:
@@ -297,15 +547,22 @@ def layer3_chat_cancellation():
         )
         check('cancel during model load returns from ensure_loaded',
               cancel_llm.load_returns == 1 and cancel_llm.cancel_calls >= 1)
-        check('cancel after model load prevents inference and start',
+        check('cold-load cancellation uses the runtime default model',
+              cancel_llm.default_calls >= 1
+              and cancel_llm.loaded_model_ids == [cancel_llm.dynamic_default])
+        check('cancel after model load prevents context fitting, inference, and start',
               cancel_llm.chat_calls == 0
-              and all(message.get('type') != 'start' for message in cancel_socket.sent))
-        check('cancel during model load sends a terminal acknowledgement',
-              any(message.get('type') == 'cancelled' for message in cancel_socket.sent))
+              and cancel_llm.fit_calls == 0
+              and all(message.get('type') not in ('start', 'token', 'done')
+                      for message in cancel_socket.sent))
+        check('cancel during model load sends exactly one terminal acknowledgement',
+              sum(message.get('type') == 'cancelled'
+                  for message in cancel_socket.sent) == 1)
         check('disconnect during model load returns from ensure_loaded',
               disconnect_llm.load_returns == 1 and disconnect_llm.cancel_calls >= 1)
         check('disconnect after model load prevents inference and start',
               disconnect_llm.chat_calls == 0
+              and disconnect_llm.fit_calls == 0
               and all(message.get('type') != 'start' for message in disconnect_socket.sent))
     finally:
         sys.modules.pop('routers.chat_routes', None)

@@ -11,7 +11,8 @@ let outputDir = '';
 let isProcessing = false;
 let cancelRequested = false;
 let ws = null;
-let pythonPort = null;
+let getPythonPort = () => null;
+let connectedPythonPort = null;
 let pythonToken = null;
 let log = null;
 let batchStartTime = 0;
@@ -33,13 +34,14 @@ let bgImagePath = '';
 let compareOverlay, compareClose, compareContainer, compareBefore, compareAfter, compareSlider, compareTitle;
 let lastOutputDir = '';
 let _pasteHandler = null;
+let compareReturnFocus = null;
 // Window-level drag handlers for the compare slider; tracked so cleanup() can
 // remove them (otherwise they leak — and keep the old DOM alive — every time
 // the tool is opened and closed).
 let _winMouseMove = null, _winMouseUp = null, _winTouchMove = null, _winTouchEnd = null;
 
 async function init(ctx) {
-  pythonPort = ctx.pythonPort;
+  getPythonPort = typeof ctx.getPythonPort === 'function' ? ctx.getPythonPort : () => ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
 
@@ -76,7 +78,7 @@ async function init(ctx) {
   bindEvents();
   _pasteHandler = (e) => { if (window.isToolActive('bg-remover') && e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
-  connectWebSocket(pythonPort);
+  connectWebSocket();
   log('Background Editor initialized');
 }
 
@@ -89,10 +91,14 @@ function cleanup() {
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  connectedPythonPort = null;
 }
 
 // ---- WebSocket ----
-function connectWebSocket(port) {
+function connectWebSocket() {
+  const port = getPythonPort();
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  connectedPythonPort = port;
   ws = new WebSocket(`ws://127.0.0.1:${port}/bg-remover/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
@@ -106,6 +112,8 @@ function connectWebSocket(port) {
     handleWSMessage(data);
   };
   ws.onclose = () => {
+    ws = null;
+    connectedPythonPort = null;
     if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     if (!statusText) return;
     if (isProcessing) {
@@ -126,9 +134,17 @@ function connectWebSocket(port) {
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
     log(`WebSocket disconnected, reconnecting in ${(delay / 1000).toFixed(1)}s...`, 'warn');
-    reconnectTimerId = setTimeout(() => connectWebSocket(port), delay);
+    reconnectTimerId = setTimeout(connectWebSocket, delay);
   };
   ws.onerror = () => { if (statusText) statusText.textContent = 'Connection error'; };
+}
+
+function onBackendStatus(status = {}) {
+  const nextPort = status.port;
+  if (status.state !== 'ready' || !Number.isInteger(nextPort) || nextPort === connectedPythonPort) return;
+  if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (ws) ws.close();
+  else connectWebSocket();
 }
 
 function handleWSMessage(data) {
@@ -254,6 +270,18 @@ function bindEvents() {
   // Comparison modal controls
   compareClose.addEventListener('click', closeCompare);
   compareOverlay.addEventListener('click', (e) => { if (e.target === compareOverlay) closeCompare(); });
+  compareOverlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCompare();
+    }
+  });
+  compareSlider.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const current = Number(compareSlider.getAttribute('aria-valuenow')) || 50;
+    setComparePosition(e.key === 'Home' ? 0 : e.key === 'End' ? 100 : current + (e.key === 'ArrowRight' ? 5 : -5));
+  });
   initCompareSlider();
 
   outputDirBtn.addEventListener('click', async () => {
@@ -549,18 +577,24 @@ function createFileElement(file, index) {
 // ---- Before/After Comparison ----
 function openCompare(file) {
   if (!file.outputPath) return;
+  compareReturnFocus = document.activeElement;
   compareTitle.textContent = `Before / After - ${file.name}`;
   compareBefore.src = window.localPathToFileUrl(file.path);
   compareAfter.src = window.localPathToFileUrl(file.outputPath);
   // Reset slider to 50%
   setComparePosition(50);
   compareOverlay.classList.add('active');
+  compareOverlay.setAttribute('aria-hidden', 'false');
+  compareClose.focus();
 }
 
 function closeCompare() {
   compareOverlay.classList.remove('active');
+  compareOverlay.setAttribute('aria-hidden', 'true');
   compareBefore.src = '';
   compareAfter.src = '';
+  if (compareReturnFocus?.isConnected) compareReturnFocus.focus();
+  compareReturnFocus = null;
 }
 
 function setComparePosition(pct) {
@@ -568,6 +602,7 @@ function setComparePosition(pct) {
   const beforeEl = compareContainer.querySelector('.compare-before');
   beforeEl.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
   compareSlider.style.left = pct + '%';
+  compareSlider.setAttribute('aria-valuenow', String(Math.round(pct)));
 }
 
 function initCompareSlider() {
@@ -647,6 +682,6 @@ function saveToolSettings() {
   }, 300);
 }
 
-window.registerTool('bg-remover', { init, cleanup });
+window.registerTool('bg-remover', { init, cleanup, onBackendStatus });
 
 })();

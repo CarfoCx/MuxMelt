@@ -3,9 +3,47 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const {
+  spawnSupervised,
+  terminateSupervisedProcess,
+  supervisedCleanupError,
+} = require('../src/main/process-supervisor');
 const { validateOutputDir, formatToolError } = require('./path-utils');
-const { BrowserWindow, net } = require('electron');
+
+const PRIVATE_TEMP_PREFIXES = ['muxmelt-ytdlp-', 'muxmelt-url-cookie-'];
+const PRIVATE_TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function cleanupStalePrivateTempDirs(tempRoot = os.tmpdir(), now = Date.now()) {
+  const root = path.resolve(tempRoot);
+  let entries;
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return 0; }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    if (!PRIVATE_TEMP_PREFIXES.some(prefix => entry.name.startsWith(prefix))) continue;
+    if (!/^[A-Za-z0-9_-]+$/.test(entry.name)) continue;
+    const candidate = path.resolve(root, entry.name);
+    if (path.dirname(candidate) !== root) continue;
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || now - stat.mtimeMs < PRIVATE_TEMP_MAX_AGE_MS) continue;
+      fs.rmSync(candidate, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 });
+      removed++;
+    } catch {}
+  }
+  return removed;
+}
+
+async function assertNetworkAllowed(networkPolicy, feature) {
+  if (!networkPolicy) return;
+  if (typeof networkPolicy.isOffline === 'function' && await networkPolicy.isOffline()) {
+    throw new Error('Offline mode is enabled. This action requires network access.');
+  }
+  if (typeof networkPolicy.assertAllowed === 'function') {
+    const allowed = await networkPolicy.assertAllowed(feature);
+    if (allowed === false) throw new Error('Network access is disabled for this action.');
+  }
+}
 
 function sendToolProgress(win, payload) {
   try {
@@ -21,44 +59,17 @@ function cancelledError() {
   return err;
 }
 
-// On POSIX, detached children lead a new process group. yt-dlp and pip can
-// launch their own ffmpeg/helper descendants, so cancellation must target the
-// whole group rather than only the Python leader. Windows uses taskkill /T
-// below and therefore keeps its existing spawn behavior.
+// The intermediary watchdog owns yt-dlp and every ffmpeg/helper it may
+// launch. It also reaps the tree if the Electron process disappears abruptly.
 function spawnProcessTree(cmd, args, options = {}) {
-  return spawn(cmd, args, process.platform === 'win32'
-    ? options
-    : { ...options, detached: true });
+  return spawnSupervised(cmd, args, options);
 }
 
 function terminateProcessTree(proc) {
-  if (!proc || !Number.isSafeInteger(proc.pid) || proc.pid <= 0) return;
-  if (process.platform === 'win32') {
-    if (proc.exitCode !== null) return;
-    try {
-      const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true
-      });
-      killer.once('error', () => { try { proc.kill('SIGKILL'); } catch {} });
-      killer.once('close', (code) => { if (code !== 0) { try { proc.kill('SIGKILL'); } catch {} } });
-    } catch {
-      try { proc.kill('SIGKILL'); } catch {}
-    }
-    return;
-  }
-
-  const processGroupId = -proc.pid;
-  try { process.kill(processGroupId, 'SIGTERM'); } catch {}
-  // Always escalate against the group ID. The Python leader can exit on TERM
-  // while an ffmpeg descendant remains alive in the same process group.
-  const timer = setTimeout(() => {
-    try { process.kill(processGroupId, 'SIGKILL'); } catch {}
-  }, 3000);
-  if (typeof timer.unref === 'function') timer.unref();
+  terminateSupervisedProcess(proc, 3000);
 }
 
-// Promise wrapper around spawn so long-running Python/pip calls never block the
+// Promise wrapper around spawn so long-running Python checks never block the
 // Electron main process (execFileSync freezes the entire UI for its timeout).
 function execFileAsync(cmd, args, { timeout = 0, operation = null } = {}) {
   return new Promise((resolve, reject) => {
@@ -67,29 +78,28 @@ function execFileAsync(cmd, args, { timeout = 0, operation = null } = {}) {
     let stderr = '';
     let timer = null;
     let settled = false;
+    let terminationError = null;
     const MAX_OUTPUT = 16 * 1024 * 1024;
     const proc = spawnProcessTree(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     if (operation) operation.processes.add(proc);
+    const requestTermination = (error) => {
+      if (settled || terminationError) return;
+      terminationError = error;
+      if (timer) clearTimeout(timer);
+      // Keep the watchdog in operation.processes until `close`: it exits only
+      // after its complete child tree has been reaped.
+      terminateProcessTree(proc);
+    };
     if (timeout > 0) {
       timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        terminateProcessTree(proc);
-        if (operation) operation.processes.delete(proc);
-        reject(new Error(`Process timed out after ${Math.round(timeout / 1000)} seconds.`));
+        requestTermination(new Error(`Process timed out after ${Math.round(timeout / 1000)} seconds.`));
       }, timeout);
       if (typeof timer.unref === 'function') timer.unref();
     }
     const append = (current, chunk) => {
       const next = current + chunk.toString();
       if (next.length <= MAX_OUTPUT) return next;
-      if (!settled) {
-        settled = true;
-        if (timer) clearTimeout(timer);
-        terminateProcessTree(proc);
-        if (operation) operation.processes.delete(proc);
-        reject(new Error('Process output exceeded the safety limit.'));
-      }
+      requestTermination(new Error('Process output exceeded the safety limit.'));
       return current;
     };
     proc.stdout.on('data', (c) => { stdout = append(stdout, c); });
@@ -99,14 +109,21 @@ function execFileAsync(cmd, args, { timeout = 0, operation = null } = {}) {
       settled = true;
       if (timer) clearTimeout(timer);
       if (operation) operation.processes.delete(proc);
-      reject(operation && operation.cancelled ? cancelledError() : err);
+      reject(operation && operation.cancelled ? cancelledError() : (terminationError || err));
     });
     proc.once('close', (code) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       if (operation) operation.processes.delete(proc);
+      const cleanupError = supervisedCleanupError(proc, cmd);
+      if (cleanupError) {
+        if (operation) operation.cleanupErrors.push(cleanupError);
+        reject(cleanupError);
+        return;
+      }
       if (operation && operation.cancelled) { reject(cancelledError()); return; }
+      if (terminationError) { reject(terminationError); return; }
       if (code === 0) resolve({ stdout, stderr });
       else {
         const err = new Error(stderr.trim() || stdout.trim() || `Process exited with code ${code}`);
@@ -143,7 +160,8 @@ function resolveOutputFile(candidate, outDir) {
 function isHttpUrl(value) {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && !parsed.username && !parsed.password;
   } catch {
     return false;
   }
@@ -267,10 +285,8 @@ function shouldRetryWithImpersonation(error) {
 }
 
 // A "we parsed the page but found no video" failure, as opposed to a block.
-// yt-dlp emits these when a page embeds its stream in a way the generic
-// extractor can't see (e.g. a base64-encoded iframe/player URL). Browser
-// impersonation can't help here — only the in-app stream sniffer can — so
-// these are routed straight to the sniffer fallback.
+// Retrying browser impersonation cannot help these extraction failures, so we
+// skip directly to yt-dlp's generic extractor and then report the error.
 function isExtractionFailure(error) {
   const message = String(error && error.message ? error.message : error || '').toLowerCase();
   return message.includes('unsupported url') ||
@@ -281,21 +297,16 @@ function isExtractionFailure(error) {
 }
 
 const IMPERSONATION_BROWSERS = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'];
-// Cap how many browser-cookie attempts we make. Each spawns yt-dlp and can
-// stall on a locked cookie DB (e.g. the browser is running), so trying all
-// seven is slow; the selected browser plus a couple of common fallbacks covers
-// the realistic cases.
-const MAX_BROWSER_COOKIE_ATTEMPTS = 3;
 
 /**
- * Build the ordered, bounded list of impersonation retry attempts.
+ * Build the ordered list of impersonation retry attempts.
  * Returns descriptors like { impersonate, cookieBrowser? , cookiesFile? }.
  * - A cookies file (if provided) is the single most reliable option, so it is
  *   used alone.
- * - Otherwise: impersonation without cookies first, then the user-selected
- *   browser, then a bounded set of other browsers.
+ * - Otherwise: impersonation without cookies first, then only the browser the
+ *   user explicitly selected. "None" never probes installed browser profiles.
  */
-function orderedImpersonationAttempts(options = {}, cap = MAX_BROWSER_COOKIE_ATTEMPTS) {
+function orderedImpersonationAttempts(options = {}) {
   const cookiesFile = options.cookiesFile && typeof options.cookiesFile === 'string'
     ? options.cookiesFile.trim()
     : '';
@@ -305,13 +316,8 @@ function orderedImpersonationAttempts(options = {}, cap = MAX_BROWSER_COOKIE_ATT
 
   const attempts = [{ impersonate: true }];
   const selected = options.cookieBrowser;
-  const ordered = [];
-  if (selected && IMPERSONATION_BROWSERS.includes(selected)) ordered.push(selected);
-  for (const b of IMPERSONATION_BROWSERS) {
-    if (b !== selected) ordered.push(b);
-  }
-  for (const b of ordered.slice(0, Math.max(0, cap))) {
-    attempts.push({ impersonate: true, cookieBrowser: b });
+  if (selected && IMPERSONATION_BROWSERS.includes(selected)) {
+    attempts.push({ impersonate: true, cookieBrowser: selected });
   }
   return attempts;
 }
@@ -324,51 +330,10 @@ async function hasPythonModule(pythonInfo, moduleName, operation = null) {
       `import ${moduleName}`
     ], { timeout: 10000, operation });
     return true;
-  } catch {
+  } catch (error) {
+    if (error?.code === 'PROCESS_CLEANUP_FAILED') throw error;
     return false;
   }
-}
-
-let ytDlpInstallPromise = null;
-
-function waitForOperation(task, operation) {
-  if (!operation) return task;
-  if (operation.cancelled) return Promise.reject(cancelledError());
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (callback, value) => {
-      if (settled) return;
-      settled = true;
-      operation.cancelWaiters.delete(cancelWaiter);
-      callback(value);
-    };
-    const cancelWaiter = () => finish(reject, cancelledError());
-    operation.cancelWaiters.add(cancelWaiter);
-    task.then(
-      value => finish(resolve, value),
-      err => finish(reject, err)
-    );
-  });
-}
-
-async function installYtDlpImpersonationDeps(pythonInfo, operation = null) {
-  if (!ytDlpInstallPromise) {
-    const task = execFileAsync(pythonInfo.cmd, [
-      ...(pythonInfo.args || []),
-      '-m',
-      'pip',
-      'install',
-      '--upgrade',
-      'yt-dlp[default,curl-cffi]',
-      '--no-warn-script-location'
-    ], { timeout: 300000 });
-    ytDlpInstallPromise = task;
-    const clear = () => {
-      if (ytDlpInstallPromise === task) ytDlpInstallPromise = null;
-    };
-    task.then(clear, clear);
-  }
-  return waitForOperation(ytDlpInstallPromise, operation);
 }
 
 function formatDownloadError(err, url) {
@@ -396,11 +361,75 @@ function formatDownloadError(err, url) {
   return formatToolError(err, 'Online Video Downloader');
 }
 
+function validateSensitiveOption(value, label, { trim = false } = {}) {
+  if (typeof value !== 'string' || !value) return '';
+  const normalized = trim ? value.trim() : value;
+  if (!normalized) return '';
+  if (normalized.length > 2000 || /[\r\n\0]/.test(normalized)) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  return normalized;
+}
+
+function quoteYtDlpConfigValue(value) {
+  // yt-dlp configuration files use shell-like quoting but are parsed directly,
+  // not executed. One quoted value per line safely preserves spaces and #.
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function writePrivateAuthConfig(options, tempDir) {
+  const proxy = validateSensitiveOption(options.proxy, 'proxy URL', { trim: true });
+  if (proxy) {
+    let parsedProxy;
+    try { parsedProxy = new URL(proxy); } catch { throw new Error('Invalid proxy URL.'); }
+    if (!['http:', 'https:', 'socks4:', 'socks5:', 'socks5h:'].includes(parsedProxy.protocol)) {
+      throw new Error('Proxy must use http, https, socks4, socks5, or socks5h.');
+    }
+  }
+  const username = validateSensitiveOption(options.username, 'username');
+  const password = validateSensitiveOption(options.password, 'password');
+  const videoPassword = validateSensitiveOption(options.videoPassword, 'video password');
+  const entries = [
+    ['--proxy', proxy],
+    ['--username', username],
+    ['--password', password],
+    ['--video-password', videoPassword],
+  ].filter(([, value]) => value);
+  if (entries.length === 0) return '';
+
+  if (typeof tempDir !== 'string' || !path.isAbsolute(tempDir)) {
+    throw new Error('Secure temporary storage is unavailable for credentials.');
+  }
+  const resolvedTemp = path.resolve(tempDir);
+  try {
+    if (!fs.statSync(resolvedTemp).isDirectory()) throw new Error();
+  } catch {
+    throw new Error('Secure temporary storage is unavailable for credentials.');
+  }
+  try { fs.chmodSync(resolvedTemp, 0o700); } catch {}
+  const configPath = path.join(resolvedTemp, 'private-auth.conf');
+  const content = entries.map(([flag, value]) => `${flag} ${quoteYtDlpConfigValue(value)}`).join('\n') + '\n';
+  fs.writeFileSync(configPath, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  try { fs.chmodSync(configPath, 0o600); } catch {}
+  return configPath;
+}
+
+function redactSensitiveText(value, options = {}) {
+  let redacted = String(value || '');
+  for (const secret of [options.proxy, options.username, options.password, options.videoPassword]) {
+    if (typeof secret === 'string' && secret) redacted = redacted.split(secret).join('[redacted]');
+  }
+  return redacted.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[redacted]@');
+}
+
 function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
   const args = [
     ...(pythonInfo.args || []),
     '-u',
     '-m', 'yt_dlp',
+    // User/global yt-dlp config could silently enable browser cookies, a proxy,
+    // or other network behavior that contradicts the visible app controls.
+    '--ignore-config',
     '--newline',
     '--no-color',
     '--progress',
@@ -510,21 +539,15 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
     args.push('--write-thumbnail');
   }
 
-  // Auth & Network
-  if (typeof options.proxy === 'string' && options.proxy.trim()) {
-    const proxy = options.proxy.trim();
-    if (/[\r\n\0]/.test(proxy) || proxy.length > 2000) throw new Error('Invalid proxy URL.');
-    args.push('--proxy', proxy);
+  // Authentication values never go on the child process command line. The IPC
+  // handler writes them to a private, short-lived yt-dlp config instead.
+  const hasRawSecrets = [options.proxy, options.username, options.password, options.videoPassword]
+    .some(value => typeof value === 'string' && value.length > 0);
+  if (hasRawSecrets && !options.authConfigPath) {
+    throw new Error('Secure temporary storage is required for authentication values.');
   }
-  const credentials = [
-    ['--username', options.username],
-    ['--password', options.password],
-    ['--video-password', options.videoPassword]
-  ];
-  for (const [flag, value] of credentials) {
-    if (typeof value !== 'string' || !value.trim()) continue;
-    if (value.length > 2000 || /[\r\n\0]/.test(value)) throw new Error('Invalid authentication value.');
-    args.push(flag, value.trim());
+  if (typeof options.authConfigPath === 'string' && path.isAbsolute(options.authConfigPath)) {
+    args.push('--config-locations', options.authConfigPath);
   }
   if (options.geoBypass) {
     args.push('--geo-bypass');
@@ -579,354 +602,92 @@ function describeYtDlpStage(line, modeLabel) {
   return '';
 }
 
-// Extension of a URL's path (lowercased, no query/hash), or '' when none.
-function urlPathExt(u) {
-  try {
-    const m = new URL(u).pathname.toLowerCase().match(/\.([a-z0-9]+)$/);
-    return m ? m[1] : '';
-  } catch {
-    return '';
-  }
-}
-
-// HLS (.m3u8) and DASH (.mpd) manifests are the preferred capture target —
-// they carry every quality and let yt-dlp mux audio + video.
-function isManifestUrl(u) {
-  const ext = urlPathExt(u);
-  return ext === 'm3u8' || ext === 'mpd';
-}
-
-async function sniffVideoUrl(url, win, timeoutMs = 15000, operation = null) {
-  if (win) {
-    sendToolProgress(win, {
-      tool: 'url-downloader',
-      url,
-      type: 'start',
-      progress: 0.05,
-      status: 'Universal fallback: Sniffing webpage for video streams...'
-    });
-  }
-
-  return new Promise((resolve, reject) => {
-    if (operation && operation.cancelled) { reject(cancelledError()); return; }
-    const candidates = [];
-    const candidateUrls = new Set();
-    const addCandidate = (candidateUrl, size = 0) => {
-      if (!candidateUrl || candidateUrls.has(candidateUrl) || candidates.length >= 500) return;
-      candidateUrls.add(candidateUrl);
-      candidates.push({ url: candidateUrl, size });
-    };
-    let isDone = false;
-    const finishTimers = new Set();
-
-    // Isolated, non-persistent session so the request listener and captured
-    // cookies never touch the app's default session or other concurrent sniffs.
-    const partition = `sniffer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const snifferWin = new BrowserWindow({
-      show: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        // This window deliberately loads untrusted (often hostile) pages and
-        // auto-clicks consent/play controls, so lock it down: sandbox the
-        // renderer and never expose Node.
-        sandbox: true,
-        backgroundThrottling: false,
-        offscreen: true,
-        partition
-      }
-    });
-    const snifferSession = snifferWin.webContents.session;
-
-    // The fallback loads untrusted pages only to observe media requests. It
-    // never needs device/location/notification access and must not save files
-    // as a side effect of the automated consent/play clicks below.
-    const denyPermissionRequest = (_webContents, _permission, callback) => callback(false);
-    const denyPermissionCheck = () => false;
-    const denyDevicePermission = () => false;
-    const blockDownload = (event, item) => {
-      event.preventDefault();
-      try { item.cancel(); } catch {}
-    };
-    try { snifferSession.setPermissionRequestHandler(denyPermissionRequest); } catch {}
-    try { snifferSession.setPermissionCheckHandler(denyPermissionCheck); } catch {}
-    try { snifferSession.setDevicePermissionHandler(denyDevicePermission); } catch {}
-    try { snifferSession.on('will-download', blockDownload); } catch {}
-
-    snifferWin.webContents.setWindowOpenHandler(() => {
-      return { action: 'deny' };
-    });
-
-    // Keep the sniffer on http(s) pages only. The page-driving script below
-    // clicks elements heuristically, which can trigger navigations to custom
-    // protocol handlers (e.g. an installed-app scheme) — block anything that
-    // isn't a normal web navigation.
-    const blockNonHttpNav = (e, navUrl) => {
-      if (!/^https?:\/\//i.test(navUrl)) e.preventDefault();
-    };
-    snifferWin.webContents.on('will-navigate', blockNonHttpNav);
-    snifferWin.webContents.on('will-redirect', blockNonHttpNav);
-
-    const standardUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
-    snifferWin.webContents.setUserAgent(standardUa);
-
-    const teardown = () => {
-      for (const timer of finishTimers) clearTimeout(timer);
-      finishTimers.clear();
-      try { snifferSession.removeListener('will-download', blockDownload); } catch {}
-      try { snifferSession.setPermissionRequestHandler(null); } catch {}
-      try { snifferSession.setPermissionCheckHandler(null); } catch {}
-      try { snifferSession.setDevicePermissionHandler(null); } catch {}
-      try { snifferSession.webRequest.onHeadersReceived(null); } catch {}
-      if (!snifferWin.isDestroyed()) snifferWin.destroy();
-    };
-
-    const abort = () => {
-      if (isDone) return;
-      isDone = true;
-      if (operation && operation.abortSniffer === abort) operation.abortSniffer = null;
-      teardown();
-      reject(cancelledError());
-    };
-    if (operation) operation.abortSniffer = abort;
-
-    const done = async () => {
-      if (isDone) return;
-      isDone = true;
-      if (operation && operation.abortSniffer === abort) operation.abortSniffer = null;
-
-      // Final DOM scrape: catch plain progressive players whose <video>/<source>
-      // src or og:video tag never surfaced as a sniffable network response.
-      try {
-        if (!snifferWin.isDestroyed()) {
-          const domUrls = await snifferWin.webContents.executeJavaScript(`
-            (() => {
-              const out = [];
-              const abs = (u) => { try { return new URL(u, location.href).href; } catch { return null; } };
-              document.querySelectorAll('video[src], video source[src], source[src]').forEach(el => {
-                const u = abs(el.getAttribute('src')); if (u) out.push(u);
-              });
-              document.querySelectorAll('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"]').forEach(m => {
-                const u = abs(m.getAttribute('content')); if (u) out.push(u);
-              });
-              return out;
-            })();
-          `).catch(() => []);
-          for (const u of (domUrls || [])) {
-            if (u && /^https?:/i.test(u)) addCandidate(u);
-          }
-        }
-      } catch {}
-
-      candidates.sort((a, b) => {
-        const am = isManifestUrl(a.url);
-        const bm = isManifestUrl(b.url);
-        if (am && !bm) return -1;
-        if (!am && bm) return 1;
-        return b.size - a.size;
-      });
-
-      if (candidates.length === 0) {
-        teardown();
-        reject(new Error('Universal downloader could not find any video streams on this page.'));
-        return;
-      }
-
-      let cookiesText;
-      const userAgent = snifferWin.webContents.getUserAgent();
-      try {
-        const cookies = await snifferSession.cookies.get({});
-        cookiesText = '# Netscape HTTP Cookie File\n';
-        for (const c of cookies) {
-          const domain = c.domain;
-          const includeSubDomain = domain.startsWith('.') ? 'TRUE' : 'FALSE';
-          const cookiePath = c.path || '/';
-          const secure = c.secure ? 'TRUE' : 'FALSE';
-          const expiration = c.expirationDate ? Math.round(c.expirationDate) : 0;
-          cookiesText += `${domain}\t${includeSubDomain}\t${cookiePath}\t${secure}\t${expiration}\t${c.name}\t${c.value}\n`;
-        }
-      } catch {}
-
-      teardown();
-      resolve({ url: candidates[0].url, cookiesText, userAgent });
-    };
-
-    const scheduleDone = (delay) => {
-      const timer = setTimeout(() => {
-        finishTimers.delete(timer);
-        done();
-      }, delay);
-      if (typeof timer.unref === 'function') timer.unref();
-      finishTimers.add(timer);
-    };
-
-    snifferSession.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, callback) => {
-      callback({ cancel: false });
-
-      const responseHeaders = details.responseHeaders || {};
-      const type = (responseHeaders['content-type'] || responseHeaders['Content-Type'] || [])[0] || '';
-      const sizeStr = (responseHeaders['content-length'] || responseHeaders['Content-Length'] || [])[0] || '0';
-      const size = parseInt(sizeStr, 10) || 0;
-      const ext = urlPathExt(details.url);
-
-      const isManifest = ext === 'm3u8' || ext === 'mpd';
-      const isVideoType = type.includes('video/') ||
-        type.includes('mpegurl') ||        // HLS: application/(vnd.apple.)?mpegurl
-        type.includes('dash+xml');         // DASH: application/dash+xml
-      const isVideoUrl = isManifest || ext === 'mp4' || ext === 'm4v' || ext === 'webm' || ext === 'mov';
-
-      // Skip obvious page/script/style assets that can share a video-ish MIME.
-      if ((isVideoType || isVideoUrl) && !['js', 'mjs', 'html', 'css'].includes(ext)) {
-        if (isManifest || size > 100000 || size === 0) {
-          addCandidate(details.url, size);
-          // A manifest is the ideal target — give late variants a brief window, then finish.
-          if (isManifest || candidates.length >= 5) {
-            scheduleDone(1500);
-          }
-        }
-      }
-    });
-
-    snifferWin.loadURL(url).catch(() => {});
-
-    snifferWin.webContents.on('did-finish-load', () => {
-      snifferWin.webContents.executeJavaScript(`
-        setInterval(() => {
-          window.scrollBy(0, 500);
-          document.querySelectorAll('video').forEach(el => {
-            if (el.paused) { try { el.play(); } catch(e) {} }
-          });
-          document.querySelectorAll('button, a, div[class*="play"], div[id*="play"]').forEach(el => {
-            const text = (el.innerText || '').trim().toLowerCase();
-            // Only act on short, button-like labels. Matching innerHTML or long
-            // text clicked unrelated containers (e.g. any block containing the
-            // word "play"), which could trip downloads or popups.
-            if (!text || text.length > 20) return;
-            if (text === 'play' || text === 'continue' || text === 'enter' || text === 'yes' ||
-                text.includes('agree') || text.includes('accept')) {
-              try { el.click(); } catch(e) {}
-            }
-          });
-          
-          const x = window.innerWidth / 2;
-          const y = window.innerHeight / 2;
-          const element = document.elementFromPoint(x, y);
-          if (element) {
-            try { element.click(); } catch(e) {}
-          }
-        }, 1000);
-      `).catch(() => {});
-    });
-
-    scheduleDone(timeoutMs);
-  });
-}
-
-// Fetch a remote thumbnail in the main process and return it as a data: URL.
-// The renderer's strict CSP (img-src 'self' data: file:) blocks remote https
-// images, so we proxy the bytes here and hand back an inline data URL it can
-// render. Many CDNs also gate thumbnails on a browser UA / page Referer, which
-// the renderer's <img> can't set — we can.
-function fetchThumbnailDataUrl(thumbUrl, referer, timeoutMs = 12000) {
-  return new Promise((resolve, reject) => {
-    const MAX_BYTES = 8 * 1024 * 1024; // thumbnails are small; cap to be safe
-    let request;
-    try {
-      request = net.request({ url: thumbUrl, redirect: 'follow' });
-    } catch (err) {
-      reject(err);
-      return;
-    }
-
-    let settled = false;
-    const finish = (fn, arg) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn(arg);
-    };
-    const timer = setTimeout(() => {
-      try { request.abort(); } catch {}
-      finish(reject, new Error('Thumbnail request timed out'));
-    }, timeoutMs);
-
-    try {
-      request.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
-      request.setHeader('Accept', 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8');
-      if (referer && isHttpUrl(referer) && !/[\r\n]/.test(referer)) request.setHeader('Referer', referer);
-    } catch (err) {
-      try { request.abort(); } catch {}
-      finish(reject, err);
-      return;
-    }
-
-    request.on('response', (response) => {
-      const status = response.statusCode || 0;
-      if (status < 200 || status >= 300) {
-        response.on('data', () => {});
-        response.on('end', () => finish(reject, new Error(`Thumbnail request failed (HTTP ${status})`)));
-        response.on('error', () => finish(reject, new Error(`Thumbnail request failed (HTTP ${status})`)));
-        return;
-      }
-
-      const declaredLength = Number(response.headers['content-length']);
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_BYTES) {
-        try { request.abort(); } catch {}
-        finish(reject, new Error('Thumbnail too large'));
-        return;
-      }
-
-      const chunks = [];
-      let total = 0;
-      response.on('data', (chunk) => {
-        if (settled) return;
-        total += chunk.length;
-        if (total > MAX_BYTES) {
-          try { request.abort(); } catch {}
-          finish(reject, new Error('Thumbnail too large'));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      response.on('end', () => {
-        if (settled) return;
-        const buf = Buffer.concat(chunks);
-        if (!buf.length) { finish(reject, new Error('Empty thumbnail')); return; }
-        const isJpeg = buf.length >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
-        const isPng = buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
-        const isGif = buf.length >= 6 && /^GIF8[79]a$/.test(buf.subarray(0, 6).toString('ascii'));
-        const isWebp = buf.length >= 12 && buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP';
-        const isAvif = buf.length >= 12 && buf.subarray(4, 8).toString('ascii') === 'ftyp' && ['avif', 'avis'].includes(buf.subarray(8, 12).toString('ascii'));
-        if (!isJpeg && !isPng && !isGif && !isWebp && !isAvif) {
-          finish(reject, new Error('Thumbnail content is not a recognized image'));
-          return;
-        }
-        const detectedMime = isJpeg ? 'image/jpeg' : isPng ? 'image/png' : isGif ? 'image/gif' : isWebp ? 'image/webp' : 'image/avif';
-        finish(resolve, `data:${detectedMime};base64,${buf.toString('base64')}`);
-      });
-      response.on('error', (err) => finish(reject, err));
-    });
-
-    request.on('error', (err) => finish(reject, err));
-    request.end();
-  });
-}
-
-function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
+function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null, jobRegistry = null) {
+  cleanupStalePrivateTempDirs();
   const activeDownloadsByWindow = new Map();
   const activeInfoByWindow = new Map();
   const MAX_CONCURRENT_INFO_REQUESTS = 3;
+  // Once a tree cleanup cannot be confirmed, keep the module fail-closed for
+  // the rest of the app session. The original operation may already have
+  // returned to its renderer, but Offline/maintenance transitions must still
+  // learn that files could be in use by an orphaned process.
+  let cleanupFailureLatch = null;
+  const assertJobStart = (label) => {
+    if (cleanupFailureLatch) throw cleanupFailureLatch;
+    jobRegistry?.assertCanStart?.(label);
+  };
+
+  const createOperation = (extra = {}) => {
+    let resolveDone;
+    const cleanupErrors = [];
+    const done = new Promise((resolve) => { resolveDone = resolve; });
+    return {
+      cancelled: false,
+      processes: new Set(),
+      cleanupErrors,
+      ...extra,
+      done,
+      finish: () => {
+        if (!cleanupFailureLatch && cleanupErrors.length > 0) {
+          cleanupFailureLatch = cleanupErrors[0];
+        }
+        resolveDone();
+      },
+    };
+  };
+
+  const cancelOperation = (operation) => {
+    if (!operation) return;
+    operation.cancelled = true;
+    for (const proc of operation.processes || []) terminateProcessTree(proc);
+  };
+
+  const cancelAllActive = async () => {
+    const operationsToWait = [];
+    const trackedOperations = [];
+    for (const operations of activeDownloadsByWindow.values()) {
+      for (const operation of operations) {
+        trackedOperations.push(operation);
+        operationsToWait.push(operation.done);
+        cancelOperation(operation);
+      }
+    }
+    for (const requests of activeInfoByWindow.values()) {
+      for (const operation of requests.values()) {
+        trackedOperations.push(operation);
+        operationsToWait.push(operation.done);
+        cancelOperation(operation);
+      }
+    }
+    await Promise.all(operationsToWait);
+    const deadline = Date.now() + 5000;
+    while (trackedOperations.some((operation) => operation.processes.size > 0)
+           && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (trackedOperations.some((operation) => operation.processes.size > 0)) {
+      throw new Error('Downloader processes did not stop in time.');
+    }
+    const cleanupFailures = trackedOperations.flatMap((operation) => operation.cleanupErrors);
+    if (!cleanupFailureLatch && cleanupFailures.length > 0) cleanupFailureLatch = cleanupFailures[0];
+    if (cleanupFailureLatch) throw cleanupFailureLatch;
+  };
+  if (jobRegistry && typeof jobRegistry.register === 'function') {
+    jobRegistry.register('url-downloader', cancelAllActive, { network: true });
+  }
 
   ipcMain.handle('url-downloader-download', async (event, options = {}) => {
+    assertJobStart('Online media download');
     const winId = event.sender.id;
     options = options && typeof options === 'object' ? options : {};
     const url = String(options.url || '').trim();
-    const operation = { cancelled: false, processes: new Set(), abortSniffer: null, cancelWaiters: new Set() };
+    const operation = createOperation();
 
     try {
       if (!isHttpUrl(url)) {
-        return { success: false, error: 'Enter a valid http or https URL.' };
+        return { success: false, error: 'Enter a valid http or https URL without embedded credentials.' };
       }
+      await assertNetworkAllowed(networkPolicy, 'url-downloader.download');
       let windowOperations = activeDownloadsByWindow.get(winId);
       if (!windowOperations) {
         windowOperations = new Set();
@@ -942,7 +703,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       const outDir = validateOutputDir(options.outputDir) || defaultOutputDir();
       fs.mkdirSync(outDir, { recursive: true });
       operation.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'muxmelt-ytdlp-'));
-      options = { ...options, tempDir: operation.tempDir };
+      try { fs.chmodSync(operation.tempDir, 0o700); } catch {}
+      const authConfigPath = writePrivateAuthConfig(options, operation.tempDir);
+      options = { ...options, tempDir: operation.tempDir, authConfigPath: authConfigPath || undefined };
       const downloadStartedAt = Date.now();
       const filesBeforeDownload = new Set();
       try {
@@ -1112,6 +875,12 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           if (processSettled) return;
           processSettled = true;
           operation.processes.delete(proc);
+          const cleanupError = supervisedCleanupError(proc, 'yt-dlp');
+          if (cleanupError) {
+            operation.cleanupErrors.push(cleanupError);
+            reject(cleanupError);
+            return;
+          }
           if (stdoutRemainder) handleLine(stdoutRemainder);
           if (stderrRemainder) handleLine(stderrRemainder);
           if (operation.cancelled) { reject(cancelledError()); return; }
@@ -1138,44 +907,18 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       const cookiesFile = options.cookiesFile && typeof options.cookiesFile === 'string' ? options.cookiesFile.trim() : '';
 
       // Build once before entering the network-retry block so malformed user
-      // options fail immediately instead of triggering installs and sniffer work.
+      // options fail immediately.
       const initialArgs = buildYtDlpArgs(pythonInfo, url, outDir, options);
       try {
         await runDownload(initialArgs);
       } catch (err) {
+        if (err?.code === 'PROCESS_CLEANUP_FAILED') throw err;
         if (operation.cancelled) throw cancelledError();
         const extractionFailure = isExtractionFailure(err);
-        // Universal fallback: don't give up on the first error. Whatever the
-        // failure (403/blocked, 404 "not found", geo, or an unrecognised error),
-        // fall through to browser-impersonation retries and then the in-app
-        // stream sniffer below — if the page plays in a browser, we try to grab
-        // it. (A genuinely dead link just fails a bit later, after we've tried.)
-        if (!extractionFailure && !(await hasPythonModule(pythonInfo, 'curl_cffi', operation))) {
-          if (operation.cancelled) throw cancelledError();
-          if (win) {
-            sendToolProgress(win, {
-              tool: 'url-downloader',
-              url,
-              type: 'start',
-              status: 'Installing browser impersonation support...'
-            });
-          }
-          try {
-            await installYtDlpImpersonationDeps(pythonInfo, operation);
-          } catch (installErr) {
-            if (operation.cancelled) throw cancelledError();
-            // No network or a read-only install — don't abort. Impersonation may
-            // already be available, or the retries will surface a clear error.
-            if (win) {
-              sendToolProgress(win, {
-                tool: 'url-downloader',
-                url,
-                type: 'start',
-                status: 'Could not install impersonation support; trying anyway...'
-              });
-            }
-          }
-        }
+        // Try only the available yt-dlp fallbacks. Dependency repair remains a
+        // signed Media Pack/app update action, never a download side effect.
+        const hasImpersonationSupport = !extractionFailure
+          && await hasPythonModule(pythonInfo, 'curl_cffi', operation);
 
         const baseConfig = {
           ...options,
@@ -1183,7 +926,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           cookiesFile: cookiesFile || undefined
         };
 
-        const retryConfigs = extractionFailure ? [] : orderedImpersonationAttempts(options).map((attempt) => {
+        const retryConfigs = hasImpersonationSupport ? orderedImpersonationAttempts(options).map((attempt) => {
           const label = attempt.cookiesFile
             ? 'Cookies mode'
             : (attempt.cookieBrowser ? `Browser mode (${attempt.cookieBrowser})` : 'Browser mode');
@@ -1193,10 +936,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
               ? `Retrying with ${attempt.cookieBrowser} browser cookies...`
               : 'Standard request blocked. Browser impersonation is active...');
           return { ...baseConfig, ...attempt, statusMsg, label };
-        });
+        }) : [];
 
-        // Seed with the original error so that when there are no impersonation
-        // attempts (extraction failure), the sniffer fallback below still runs.
+        // Seed with the original error for the no-impersonation case.
         let lastRetryErr = err;
         for (const config of retryConfigs) {
           if (win) {
@@ -1220,14 +962,13 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             lastRetryErr = null;
             break;
           } catch (e) {
+            if (e?.code === 'PROCESS_CLEANUP_FAILED') throw e;
             if (operation.cancelled) throw cancelledError();
             lastRetryErr = e;
           }
         }
-        // Before the (heavier) sniffer, try yt-dlp's GENERIC extractor on the
-        // original page with impersonation. This frequently rescues a video
-        // whose site-specific extractor returned 404/403 but whose page still
-        // exposes an m3u8/og:video — and it's much faster than the sniffer.
+        // Try yt-dlp's generic extractor on the original page. This can rescue
+        // media that a site-specific extractor does not recognize.
         if (lastRetryErr) {
           if (win) {
             sendToolProgress(win, {
@@ -1237,7 +978,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           }
           stdout = ''; stderr = ''; outputPath = '';
           try {
-            const genericArgs = buildYtDlpArgs(pythonInfo, url, outDir, { ...baseConfig, impersonate: true });
+            const genericArgs = buildYtDlpArgs(pythonInfo, url, outDir, {
+              ...baseConfig, impersonate: hasImpersonationSupport
+            });
             const gi = genericArgs.lastIndexOf(url);
             if (gi !== -1) genericArgs.splice(gi, 0, '--use-extractors', 'generic');
             await runDownload(genericArgs, {
@@ -1245,114 +988,17 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
             });
             lastRetryErr = null;
           } catch (e) {
+            if (e?.code === 'PROCESS_CLEANUP_FAILED') throw e;
             if (operation.cancelled) throw cancelledError();
             lastRetryErr = e;
           }
         }
 
         if (lastRetryErr) {
-          let sniffedData = null;
-          try {
-            sniffedData = await sniffVideoUrl(url, win, 30000, operation);
-          } catch (sniffErr) {
-            if (operation.cancelled) throw cancelledError();
-            throw lastRetryErr;
-          }
-          
-          if (sniffedData && sniffedData.url) {
-            if (win) {
-              sendToolProgress(win, {
-                tool: 'url-downloader', url, type: 'start', progress: 0.1,
-                status: 'Stream found! Downloading...'
-              });
-            }
-            stdout = ''; stderr = ''; outputPath = '';
-            
-            let tempCookieDir = '';
-            let tempCookieFile = '';
-            if (sniffedData.cookiesText) {
-              // Harvested session cookies are sensitive. Write them into a
-              // private, unpredictable temp dir with owner-only permissions
-              // rather than a predictably-named, world-readable file in the
-              // shared temp root (which also collided on concurrent downloads).
-              tempCookieDir = fs.mkdtempSync(path.join(os.tmpdir(), 'muxmelt-'));
-              tempCookieFile = path.join(tempCookieDir, 'cookies.txt');
-              fs.writeFileSync(tempCookieFile, sniffedData.cookiesText, { mode: 0o600 });
-            }
-
-            const sniffConfig = {
-              ...options,
-              format,
-              cookiesFile: tempCookieFile || cookiesFile || undefined,
-              userAgent: sniffedData.userAgent
-            };
-
-            // Build args for the captured stream, forcing the generic extractor
-            // so a site-specific extractor can't re-trigger the original failure.
-            let pageOrigin = '';
-            try { pageOrigin = new URL(url).origin; } catch {}
-            // `sendReferer` toggles the page Referer/Origin headers. Most CDNs
-            // *require* them (hotlink protection), but some do the inverse and
-            // reject a cross-origin Referer (404/403) while serving fine with
-            // none — so we must try both ways, not assume one.
-            const buildSniffedArgs = ({ impersonate, sendReferer }) => {
-              const args = buildYtDlpArgs(pythonInfo, sniffedData.url, outDir, {
-                ...sniffConfig,
-                impersonate,
-                referer: sendReferer ? url : undefined
-              });
-              const insert = ['--use-extractors', 'generic'];
-              // Many HLS/DASH CDNs gate segments on Origin (not just Referer).
-              if (sendReferer && pageOrigin) insert.push('--add-header', `Origin:${pageOrigin}`);
-              const urlIndex = args.lastIndexOf(sniffedData.url);
-              if (urlIndex !== -1) args.splice(urlIndex, 0, ...insert);
-              return args;
-            };
-
-            // Try the realistic combinations in order of likelihood: page
-            // Referer first (hotlink-protected CDNs), then without it (CDNs that
-            // reject a cross-origin Referer); each both plain and impersonated.
-            // Plain first within a pair — best for already-authenticated streams
-            // via the captured cookies; impersonation second for CDNs that
-            // demand a browser TLS fingerprint.
-            const sniffAttempts = [
-              { impersonate: false, sendReferer: true,  label: 'Universal' },
-              { impersonate: true,  sendReferer: true,  label: 'Universal+' },
-              { impersonate: false, sendReferer: false, label: 'Universal (no-referer)' },
-              { impersonate: true,  sendReferer: false, label: 'Universal+ (no-referer)' }
-            ];
-            try {
-              let sniffErr = null;
-              let downloaded = false;
-              for (let i = 0; i < sniffAttempts.length; i++) {
-                const attempt = sniffAttempts[i];
-                if (i > 0 && win) {
-                  sendToolProgress(win, {
-                    tool: 'url-downloader', url, type: 'start', progress: 0.1,
-                    status: `Stream blocked the previous request — retrying (${attempt.label})...`
-                  });
-                }
-                stdout = ''; stderr = ''; outputPath = '';
-                try {
-                  await runDownload(buildSniffedArgs(attempt), {
-                    statusPrefix: `${attempt.label} | `, modeLabel: `${attempt.label} | `, minProgress: 0.1
-                  });
-                  downloaded = true;
-                  break;
-                } catch (e) {
-                  if (operation.cancelled) throw cancelledError();
-                  sniffErr = e;
-                }
-              }
-              if (!downloaded) throw sniffErr || lastRetryErr;
-            } finally {
-              if (tempCookieDir) {
-                try { fs.rmSync(tempCookieDir, { recursive: true, force: true }); } catch(e) {}
-              }
-            }
-          } else {
-            throw lastRetryErr;
-          }
+          const originalMessage = redactSensitiveText(lastRetryErr.message || '', options);
+          const guardedError = new Error(originalMessage.trim());
+          guardedError.code = lastRetryErr.code;
+          throw guardedError;
         }
       }
 
@@ -1386,6 +1032,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       return { success: true, output: outputPath, outputDir: outDir };
     } catch (err) {
+      if (err?.code === 'PROCESS_CLEANUP_FAILED') {
+        return { success: false, error: err.message, code: err.code };
+      }
       if (operation.cancelled || (err && err.code === 'CANCELLED')) {
         return { success: false, cancelled: true, error: 'Download cancelled by user.' };
       }
@@ -1395,9 +1044,10 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       if ((err.message || '').toLowerCase().includes('impersonate') || (err.message || '').toLowerCase().includes('curl_cffi')) {
         return { success: false, error: 'This site blocks standard downloads. Install the bundled Python dependencies again so yt-dlp can use browser impersonation (curl_cffi).' };
       }
-      return { success: false, error: formatDownloadError(err, url) };
+      const safeError = new Error(redactSensitiveText(err && err.message ? err.message : err, options));
+      safeError.code = err && err.code;
+      return { success: false, error: formatDownloadError(safeError, url) };
     } finally {
-      operation.cancelWaiters.clear();
       if (operation.tempDir) {
         try { fs.rmSync(operation.tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
       }
@@ -1406,6 +1056,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         windowOperations.delete(operation);
         if (windowOperations.size === 0) activeDownloadsByWindow.delete(winId);
       }
+      operation.finish();
     }
   });
 
@@ -1413,18 +1064,19 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     const winId = event.sender.id;
     const operations = activeDownloadsByWindow.get(winId);
     if (operations && operations.size > 0) {
-      for (const operation of operations) {
-        operation.cancelled = true;
-        if (typeof operation.abortSniffer === 'function') operation.abortSniffer();
-        for (const cancelWaiter of [...operation.cancelWaiters]) cancelWaiter();
-        for (const proc of operation.processes) terminateProcessTree(proc);
-      }
-      return { success: true, cancelled: operations.size };
+      const targets = [...operations];
+      for (const operation of targets) cancelOperation(operation);
+      await Promise.all(targets.map((operation) => operation.done));
+      const failure = targets.flatMap((operation) => operation.cleanupErrors)[0]
+        || cleanupFailureLatch;
+      if (failure) throw failure;
+      return { success: true, cancelled: targets.length };
     }
     return { success: false, error: 'No active URL download to cancel' };
   });
 
   ipcMain.handle('url-downloader-info', async (event, options = {}) => {
+    assertJobStart('Online media metadata request');
     const winId = event.sender.id;
     options = options && typeof options === 'object' ? options : {};
     const url = String(options.url || '').trim();
@@ -1440,7 +1092,13 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       error: 'Video information request cancelled.'
     });
     if (!isHttpUrl(url)) {
-      return { success: false, requestId, error: 'Enter a valid http or https URL.' };
+      return { success: false, requestId, error: 'Enter a valid http or https URL without embedded credentials.' };
+    }
+
+    try {
+      await assertNetworkAllowed(networkPolicy, 'url-downloader.metadata');
+    } catch (err) {
+      return { success: false, requestId, error: err && err.message ? err.message : String(err) };
     }
 
     const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
@@ -1459,7 +1117,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     if (windowRequests.size >= MAX_CONCURRENT_INFO_REQUESTS) {
       return { success: false, requestId, error: 'Too many video information requests are running.' };
     }
-    const operation = { cancelled: false, processes: new Set(), cancelWaiters: new Set() };
+    const operation = createOperation();
     windowRequests.set(requestId, operation);
 
     try {
@@ -1469,6 +1127,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       let stdout = '';
       let stderr = '';
       let settled = false;
+      let terminationError = null;
       const proc = spawnProcessTree(pythonInfo.cmd, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
@@ -1478,25 +1137,23 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         windowsHide: true
       });
       operation.processes.add(proc);
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
+      const requestTermination = (error) => {
+        if (settled || terminationError) return;
+        terminationError = error;
+        clearTimeout(timer);
+        // Do not remove this process until the supervisor confirms that its
+        // entire yt-dlp/ffmpeg tree has closed.
         terminateProcessTree(proc);
-        operation.processes.delete(proc);
-        reject(new Error('Timed out while fetching video information.'));
+      };
+      const timer = setTimeout(() => {
+        requestTermination(new Error('Timed out while fetching video information.'));
       }, 60000);
       if (typeof timer.unref === 'function') timer.unref();
 
       const append = (current, chunk) => {
         const next = current + chunk.toString();
         if (next.length > MAX_INFO_OUTPUT) {
-          if (!settled) {
-            settled = true;
-            clearTimeout(timer);
-            terminateProcessTree(proc);
-            operation.processes.delete(proc);
-            reject(new Error('Video information response was too large.'));
-          }
+          requestTermination(new Error('Video information response was too large.'));
           return current;
         }
         return next;
@@ -1515,14 +1172,21 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         settled = true;
         clearTimeout(timer);
         operation.processes.delete(proc);
-        reject(operation.cancelled ? cancelledError() : err);
+        reject(operation.cancelled ? cancelledError() : (terminationError || err));
       });
       proc.once('close', (code) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         operation.processes.delete(proc);
+        const cleanupError = supervisedCleanupError(proc, 'yt-dlp metadata');
+        if (cleanupError) {
+          operation.cleanupErrors.push(cleanupError);
+          reject(cleanupError);
+          return;
+        }
         if (operation.cancelled) { reject(cancelledError()); return; }
+        if (terminationError) { reject(terminationError); return; }
         if (code === 0) {
           resolve(stdout);
         } else {
@@ -1538,6 +1202,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
         ...(pythonInfo.args || []),
         '-u',
         '-m', 'yt_dlp',
+        '--ignore-config',
         '--dump-json',
         '--no-playlist',
       ];
@@ -1567,6 +1232,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       const info = parseJsonFromStdout(stdout);
       return { success: true, requestId, info };
     } catch (err) {
+      if (err?.code === 'PROCESS_CLEANUP_FAILED') {
+        return { success: false, requestId, error: err.message, code: err.code };
+      }
       if (operation.cancelled || (err && err.code === 'CANCELLED')) {
         return cancelledInfoResponse();
       }
@@ -1576,14 +1244,11 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
 
       if (!(await hasPythonModule(pythonInfo, 'curl_cffi', operation))) {
         if (operation.cancelled) return cancelledInfoResponse();
-        try {
-          await installYtDlpImpersonationDeps(pythonInfo, operation);
-        } catch (e) {
-          if (operation.cancelled || (e && e.code === 'CANCELLED')) {
-            return cancelledInfoResponse();
-          }
-          console.error('Failed to install impersonation dependencies during info fetch:', e);
-        }
+        return {
+          success: false,
+          requestId,
+          error: 'Browser impersonation support is unavailable. Repair the Media Pack in Settings or update MuxMelt.'
+        };
       }
 
       const retryConfigs = orderedImpersonationAttempts(options);
@@ -1596,6 +1261,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
           const info = parseJsonFromStdout(stdout);
           return { success: true, requestId, info };
         } catch (e) {
+          if (e?.code === 'PROCESS_CLEANUP_FAILED') {
+            return { success: false, requestId, error: e.message, code: e.code };
+          }
           if (operation.cancelled || (e && e.code === 'CANCELLED')) {
             return cancelledInfoResponse();
           }
@@ -1606,17 +1274,20 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
       return { success: false, requestId, error: lastErr.message || 'Failed to fetch video info.' };
     }
     } catch (err) {
+      if (err?.code === 'PROCESS_CLEANUP_FAILED') {
+        return { success: false, requestId, error: err.message, code: err.code };
+      }
       if (operation.cancelled || (err && err.code === 'CANCELLED')) {
         return cancelledInfoResponse();
       }
       return { success: false, requestId, error: err.message || 'Failed to fetch video info.' };
     } finally {
-      operation.cancelWaiters.clear();
       const requests = activeInfoByWindow.get(winId);
       if (requests) {
         requests.delete(requestId);
         if (requests.size === 0) activeInfoByWindow.delete(winId);
       }
+      operation.finish();
     }
   });
 
@@ -1626,40 +1297,22 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo) {
     const requests = activeInfoByWindow.get(event.sender.id);
     const operation = requests && requests.get(id);
     if (!operation) return { success: false, error: 'Video information request is not active.' };
-    operation.cancelled = true;
-    for (const cancelWaiter of [...operation.cancelWaiters]) cancelWaiter();
-    for (const proc of operation.processes) terminateProcessTree(proc);
+    cancelOperation(operation);
+    await operation.done;
+    const failure = operation.cleanupErrors[0] || cleanupFailureLatch;
+    if (failure) throw failure;
     return { success: true, requestId: id };
   });
 
-  ipcMain.handle('url-downloader-thumbnail', async (event, options = {}) => {
-    options = options && typeof options === 'object' ? options : {};
-    const url = String(options.url || '').trim();
-    const referer = String(options.referer || '').trim();
-    if (!isHttpUrl(url)) {
-      return { success: false, error: 'Invalid thumbnail URL.' };
-    }
-    try {
-      const dataUrl = await fetchThumbnailDataUrl(url, referer);
-      return { success: true, dataUrl };
-    } catch (err) {
-      return { success: false, error: err && err.message ? err.message : String(err) };
-    }
-  });
-
-  ipcMain.handle('url-downloader-update-ytdlp', async (event) => {
-    const pythonInfo = typeof getPythonInfo === 'function' ? getPythonInfo() : null;
-    if (!pythonInfo || !pythonInfo.cmd) {
-      return { success: false, error: 'Python environment not found.' };
-    }
-
-    try {
-      const { stdout } = await installYtDlpImpersonationDeps(pythonInfo);
-      return { success: true, message: stdout.trim() };
-    } catch (err) {
-      return { success: false, error: err.message || String(err) };
-    }
-  });
 }
 
-module.exports = { registerIPC, buildYtDlpArgs, orderedImpersonationAttempts };
+module.exports = {
+  registerIPC,
+  buildYtDlpArgs,
+  orderedImpersonationAttempts,
+  __privacy: {
+    cleanupStalePrivateTempDirs,
+    writePrivateAuthConfig,
+    redactSensitiveText,
+  }
+};

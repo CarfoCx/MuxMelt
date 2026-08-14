@@ -162,6 +162,36 @@ for (const id of literalGetElementByIds(appSource)) {
   );
 }
 
+// Python-backed tools are cached for the lifetime of the renderer. They must
+// read the current backend port when reconnecting rather than retaining the
+// value from their one-time init call.
+const pythonToolPaths = [
+  'renderer/tools/bg-remover/bg-remover.js',
+  'renderer/tools/chat/chat.js',
+  'renderer/tools/upscaler/upscaler.js',
+  'renderer/tools/tts/tts.js',
+  'renderer/tools/stem-separator/stem-separator.js',
+];
+check(
+  appSource.includes('getPythonPort: () => pythonPort')
+    && appSource.includes('entry.module.onBackendStatus({ ...status, port: pythonPort })'),
+  'The app shell must give cached tools a live backend-port getter and status updates'
+);
+for (const relativePath of pythonToolPaths) {
+  const source = read(path.join(root, relativePath));
+  check(
+    source.includes("typeof ctx.getPythonPort === 'function'")
+      && source.includes('setTimeout(connectWebSocket, delay)')
+      && source.includes('onBackendStatus'),
+    `${relativePath} must reconnect through the live backend-port context`
+  );
+  check(
+    !source.includes('function connectWebSocket(port)')
+      && !source.includes('pythonPort = ctx.pythonPort;'),
+    `${relativePath} must not retain or close over its initialization-time backend port`
+  );
+}
+
 // A "Send to..." suggestion is only useful when the destination consumes the
 // paste-files event. Requiring active-tool gating also prevents cached tools
 // from all ingesting the same handoff.
@@ -355,6 +385,9 @@ if (fs.existsSync(processTreeSmokePath)) {
   );
 }
 
+const supervisorSmokePath = path.join(root, 'test', 'process-supervisor-smoke.js');
+check(fs.existsSync(supervisorSmokePath), 'External process supervisor smoke test is missing');
+
 const bulkImagerSource = read(path.join(root, 'node-tools', 'bulk-imager.js'));
 check(
   bulkImagerSource.includes("sharp(inputPath, { animated: true }).metadata()")
@@ -395,10 +428,56 @@ check(
 );
 
 const chatRendererSource = read(path.join(root, 'renderer', 'tools', 'chat', 'chat.js'));
+const chatHtmlSource = read(path.join(root, 'renderer', 'tools', 'chat', 'chat.html'));
+const chatBackendSource = read(path.join(root, 'python', 'modules', 'llm.py'));
+const setupManagerSource = read(path.join(root, 'src', 'main', 'setup-manager.js'));
 check(
   chatRendererSource.includes("isDownloading ? 'Cancel download'")
     && chatRendererSource.includes("ws.send(JSON.stringify({ action: 'cancel' }))"),
   'Chat model downloads must expose a cancellation control'
+);
+check(
+  chatBackendSource.includes("'--host', '127.0.0.1'")
+    && chatBackendSource.includes("'--offline'")
+    && chatBackendSource.includes("'--no-ui'")
+    && chatBackendSource.includes("'--api-key-file'")
+    && !chatBackendSource.includes("'--api-key',")
+    && chatBackendSource.includes('urllib.request.ProxyHandler({})'),
+  'Local Chat inference must keep its authentication secret out of argv and stay proxy-free, offline, and loopback-only'
+);
+check(
+  chatHtmlSource.includes('id="executionSelect"')
+    && chatHtmlSource.includes('id="profileSelect"')
+    && chatHtmlSource.includes('id="importModelBtn"')
+    && chatHtmlSource.includes('id="chatStopBtn"')
+    && chatHtmlSource.includes('id="modelQualityBadge"')
+    && chatHtmlSource.includes('id="modelFitBadge"')
+    && chatRendererSource.includes('QUALITY_GROUP_LABELS')
+    && chatRendererSource.includes('quality_tier'),
+  'Local Chat must expose controls and separate model-quality from hardware-fit guidance'
+);
+check(
+  (setupManagerSource.match(/sha256:\s*'[a-f0-9]{64}'/g) || []).length >= 12
+    && setupManagerSource.includes('hasCompleteLlamaSetup')
+    && setupManagerSource.includes('verifyLlamaAsset'),
+  'Every packaged llama.cpp backend asset must be checksum-pinned and manifest-validated'
+);
+check(
+  (chatBackendSource.match(/'sha256':\s*'[a-f0-9]{64}'/g) || []).length === 5,
+  'Every curated Local Chat model must have a pinned SHA-256 digest'
+);
+check(
+  !chatBackendSource.includes('/resolve/main/')
+    && (chatBackendSource.match(/\/resolve\/[a-f0-9]{40}\//g) || []).length === 5,
+  'Every curated Local Chat model URL must use an immutable repository revision'
+);
+check(
+  !chatBackendSource.includes("'qwen3.5-0.8b-instruct':")
+    && !chatBackendSource.includes("'qwen3.5-2b-instruct':")
+    && chatBackendSource.includes("PROFESSIONAL_MINIMUM_MODEL = 'qwen3.5-4b-instruct'")
+    && chatBackendSource.includes("'quality_tier': 'standard'")
+    && chatBackendSource.includes("'quality_tier': 'unverified'"),
+  'Local Chat catalog must enforce and disclose its professional quality floor'
 );
 
 if (failures.length > 0) {

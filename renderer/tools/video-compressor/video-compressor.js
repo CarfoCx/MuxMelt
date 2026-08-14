@@ -39,7 +39,8 @@ let dropZone, browseBtn, fileList, compressBtn, clearBtn, openOutputBtn, retryBt
 let lastOutputDir = persistedState.lastOutputDir || '';
 let outputDirBtn, statusText, processingIndicator, etaText;
 let footerProgress, footerProgressFill, progressPercent;
-let crfSlider, crfValue, preset, resolution, codec, customWidth, twoPassCheck;
+let compressionGoal, crfSlider, crfValue, preset, resolution, codec, customWidth, twoPassCheck;
+let applyingCompressionGoal = false;
 let _pasteHandler = null;
 
 async function init(ctx) {
@@ -59,6 +60,7 @@ async function init(ctx) {
   footerProgress = document.getElementById('footerProgress');
   footerProgressFill = document.getElementById('footerProgressFill');
   progressPercent = document.getElementById('progressPercent');
+  compressionGoal = document.getElementById('compressionGoal');
   crfSlider = document.getElementById('crfSlider');
   crfValue = document.getElementById('crfValue');
   preset = document.getElementById('preset');
@@ -112,13 +114,19 @@ function restoreViewState() {
 }
 
 function bindEvents() {
-  crfSlider.addEventListener('input', () => {
-    crfValue.textContent = crfSlider.value;
+  compressionGoal.addEventListener('change', () => {
+    applyCompressionGoal(compressionGoal.value);
     saveToolSettings();
   });
 
-  preset.addEventListener('change', () => { saveToolSettings(); });
-  codec.addEventListener('change', () => { saveToolSettings(); });
+  crfSlider.addEventListener('input', () => {
+    crfValue.textContent = crfSlider.value;
+    markCompressionGoalCustom();
+    saveToolSettings();
+  });
+
+  preset.addEventListener('change', () => { markCompressionGoalCustom(); saveToolSettings(); });
+  codec.addEventListener('change', () => { markCompressionGoalCustom(); saveToolSettings(); });
   resolution.addEventListener('change', () => {
     updateCustomWidthState();
     saveToolSettings();
@@ -127,7 +135,7 @@ function bindEvents() {
     updateCustomWidthState();
     saveToolSettings();
   });
-  twoPassCheck.addEventListener('change', () => { saveToolSettings(); });
+  twoPassCheck.addEventListener('change', () => { markCompressionGoalCustom(); saveToolSettings(); });
 
   outputDirBtn.addEventListener('click', async () => {
     if (isProcessing) return;
@@ -377,6 +385,36 @@ function normalizeProgress(data) {
   return 0;
 }
 
+const COMPRESSION_GOALS = Object.freeze({
+  quick: { crf: '24', preset: 'fast', codec: 'h264', twoPass: false },
+  balanced: { crf: '23', preset: 'medium', codec: 'h264', twoPass: false },
+  smaller: { crf: '28', preset: 'slow', codec: 'h265', twoPass: false },
+  quality: { crf: '19', preset: 'slow', codec: 'h264', twoPass: false }
+});
+
+function applyCompressionGoal(goal) {
+  const values = COMPRESSION_GOALS[goal];
+  if (!values) return;
+  applyingCompressionGoal = true;
+  crfSlider.value = values.crf;
+  crfValue.textContent = values.crf;
+  preset.value = values.preset;
+  codec.value = values.codec;
+  twoPassCheck.checked = values.twoPass;
+  applyingCompressionGoal = false;
+}
+
+function markCompressionGoalCustom() {
+  if (!applyingCompressionGoal && compressionGoal) compressionGoal.value = 'custom';
+}
+
+function identifyCompressionGoal() {
+  return Object.entries(COMPRESSION_GOALS).find(([, values]) =>
+    crfSlider.value === values.crf && preset.value === values.preset &&
+    codec.value === values.codec && twoPassCheck.checked === values.twoPass
+  )?.[0] || 'custom';
+}
+
 function setFooterProgress(progress, visible = true) {
   const pct = Math.max(0, Math.min(1, Number(progress) || 0));
   const label = `${Math.round(pct * 100)}%`;
@@ -559,7 +597,7 @@ function createFileElement(file, index) {
     <div class="file-progress-bar">
       <div class="file-progress-fill${progressClass}" style="width: ${Math.round(file.progress * 100)}%"></div>
     </div>
-    <button class="file-remove" data-index="${index}" title="Remove">\u00D7</button>`;
+    <button class="file-remove" data-index="${index}" title="Remove" aria-label="Remove ${window.escapeHtml(file.name)}">\u00D7</button>`;
 
   el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing) removeFile(index); });
 
@@ -582,6 +620,7 @@ async function loadToolSettings() {
     if (s.resolution) resolution.value = s.resolution;
     if (s.customWidth) customWidth.value = s.customWidth;
     if (s.twoPass) twoPassCheck.checked = s.twoPass;
+    compressionGoal.value = s.goal && (s.goal === 'custom' || COMPRESSION_GOALS[s.goal]) ? s.goal : identifyCompressionGoal();
     updateResolutionOptions();
     if (s.outputDir) {
       outputDir = persistedState.outputDir || s.outputDir;
@@ -599,7 +638,7 @@ function saveToolSettings() {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
     window.updateSettings(all => {
-      all['video-compressor'] = { crf: crfSlider.value, preset: preset.value, codec: codec.value, resolution: resolution.value, customWidth: customWidth.value, twoPass: twoPassCheck.checked, outputDir };
+      all['video-compressor'] = { goal: compressionGoal.value, crf: crfSlider.value, preset: preset.value, codec: codec.value, resolution: resolution.value, customWidth: customWidth.value, twoPass: twoPassCheck.checked, outputDir };
     }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }

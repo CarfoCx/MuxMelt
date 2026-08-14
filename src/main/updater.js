@@ -1,23 +1,16 @@
-const { autoUpdater } = require('electron-updater');
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const https = require('https');
 const { spawn } = require('child_process');
+const { pipeline } = require('stream/promises');
 
 const PLATFORM_INSTALLER_EXTS = {
   win32: new Set(['.exe']),
   darwin: new Set(['.dmg', '.pkg']),
   linux: new Set(['.appimage']),
 };
-
-let isUpdateReady = false;
-let updaterInitialized = false;
-
-// Configure autoUpdater
-autoUpdater.autoDownload = false;
-autoUpdater.autoInstallOnAppQuit = true;
 
 function localUpdatePreferencePath() {
   return path.join(app.getPath('userData'), 'local-update-source.json');
@@ -155,14 +148,24 @@ function resolveTrustedLocalInstaller(updateFolder, currentVersion) {
   };
 }
 
-function hashFile(filePath) {
+function hashFile(filePath, signal = null) {
   return new Promise((resolve, reject) => {
     const h = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
+    const stream = fs.createReadStream(filePath, signal ? { signal } : undefined);
     stream.on('error', reject);
     stream.on('data', (chunk) => h.update(chunk));
     stream.on('end', () => resolve(h.digest('hex')));
   });
+}
+
+async function copyFileAbortable(sourcePath, targetPath, signal = null) {
+  const readOptions = signal ? { signal } : undefined;
+  const writeOptions = { flags: 'wx', mode: 0o700 };
+  await pipeline(
+    fs.createReadStream(sourcePath, readOptions),
+    fs.createWriteStream(targetPath, writeOptions),
+    ...(signal ? [{ signal }] : []),
+  );
 }
 
 async function cleanupStaleUpdateDirectories() {
@@ -180,9 +183,22 @@ async function cleanupStaleUpdateDirectories() {
   }));
 }
 
-async function checkForUpdates(sendUpdateEvent) {
+async function checkForUpdates(sendUpdateEvent, networkPolicy = null, setActiveRequest = null) {
   const pkg = require('../../package.json');
   const currentVersion = pkg.version;
+
+  // Do not even resolve/stat a configured "local" source while Offline Mode
+  // is active: it may be a UNC path, mapped drive, or network mount whose
+  // filesystem metadata access itself emits SMB/NFS traffic.
+  if (networkPolicy && networkPolicy.isOffline()) {
+    return {
+      upToDate: false,
+      updateAvailable: false,
+      currentVersion,
+      offline: true,
+      message: 'Offline Mode is enabled; no update source was accessed.'
+    };
+  }
 
   try {
     const updateFolder = loadLocalUpdateFolder();
@@ -217,6 +233,8 @@ async function checkForUpdates(sendUpdateEvent) {
     console.warn('Failed to check local update folder:', err.message);
   }
 
+  if (networkPolicy) networkPolicy.assertAllowed('Online update checks');
+
   const repoUrl = pkg.repository && pkg.repository.url;
   if (!repoUrl) {
     return Promise.resolve({
@@ -238,6 +256,7 @@ async function checkForUpdates(sendUpdateEvent) {
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      if (typeof setActiveRequest === 'function') setActiveRequest(null);
       resolve(result);
     };
     const req = https.get(
@@ -295,6 +314,7 @@ async function checkForUpdates(sendUpdateEvent) {
         });
       }
     );
+    if (typeof setActiveRequest === 'function') setActiveRequest(req);
     req.on('error', (err) => finish({ error: err.message, upToDate: false, updateAvailable: false, currentVersion }));
     req.setTimeout(10000, () => {
       finish({ error: 'Update check timed out', upToDate: false, updateAvailable: false, currentVersion });
@@ -328,79 +348,110 @@ function emitManualUpdateResult(result, sendUpdateEvent) {
   }
 }
 
-function initAutoUpdater(sendUpdateEvent) {
-  if (updaterInitialized) return;
-  updaterInitialized = true;
-  autoUpdater.on('checking-for-update', () => sendUpdateEvent('update-status', 'Checking for updates...'));
-  autoUpdater.on('update-available', (info) => sendUpdateEvent('update-available', info));
-  autoUpdater.on('update-not-available', (info) => sendUpdateEvent('update-not-available', info));
-  autoUpdater.on('error', (err) => sendUpdateEvent('update-error', err.message));
-  autoUpdater.on('download-progress', (progressObj) => sendUpdateEvent('update-download-progress', progressObj));
-  autoUpdater.on('update-downloaded', (info) => {
-    isUpdateReady = true;
-    sendUpdateEvent('update-downloaded', info);
-  });
-}
-
-function registerUpdaterIpcHandlers(sendUpdateEvent) {
+function registerUpdaterIpcHandlers(sendUpdateEvent, networkPolicy = null, jobRegistry = null) {
+  let activeGithubRequest = null;
+  let activeCheckPromise = null;
+  const activeSourceOperations = new Set();
+  const activeSourceControllers = new Set();
+  const cancelUpdaterNetwork = async () => {
+    const pendingCheck = activeCheckPromise;
+    if (activeGithubRequest && !activeGithubRequest.destroyed) {
+      activeGithubRequest.destroy(new Error('Update network operation cancelled'));
+    }
+    activeGithubRequest = null;
+    for (const controller of activeSourceControllers) controller.abort();
+    await Promise.allSettled([
+      ...(pendingCheck ? [pendingCheck] : []),
+      ...activeSourceOperations,
+    ]);
+  };
+  jobRegistry?.register?.('app-updater', cancelUpdaterNetwork, { network: true });
   cleanupStaleUpdateDirectories().catch((err) => {
     console.warn('Failed to clean stale update files:', err.message);
   });
 
-  ipcMain.handle('check-for-updates', async () => {
+  function trackUpdateSourceOperation(label, operation) {
+    jobRegistry?.assertCanStart?.(label);
+    const controller = new AbortController();
+    activeSourceControllers.add(controller);
+    let pending;
+    pending = Promise.resolve()
+      .then(() => operation(controller.signal))
+      .finally(() => {
+        activeSourceControllers.delete(controller);
+        activeSourceOperations.delete(pending);
+      });
+    activeSourceOperations.add(pending);
+    return pending;
+  }
+
+  const performUpdateCheck = async () => {
     try {
+      jobRegistry?.assertCanStart?.('Update check');
       sendUpdateEvent('update-status', 'Checking for updates...');
 
-      const manualResult = await checkForUpdates(sendUpdateEvent);
+      const manualResult = await checkForUpdates(
+        sendUpdateEvent,
+        networkPolicy,
+        (request) => { activeGithubRequest = request; }
+      );
       if (manualResult.isLocal || !app.isPackaged || manualResult.error || !manualResult.updateAvailable) {
         emitManualUpdateResult(manualResult, sendUpdateEvent);
         return manualResult;
       }
 
-      try {
-        const electronUpdaterResult = await autoUpdater.checkForUpdates();
-        return {
-          ...manualResult,
-          provider: 'electron-updater',
-          updateInfo: electronUpdaterResult && electronUpdaterResult.updateInfo
-        };
-      } catch (err) {
-        console.warn('electron-updater check failed, using GitHub release check:', err.message);
-        const fallbackResult = {
-          ...manualResult,
-          manualOnly: true
-        };
-        emitManualUpdateResult(fallbackResult, sendUpdateEvent);
-        return {
-          ...fallbackResult,
-          warning: err.message
-        };
-      }
+      const releaseResult = {
+        ...manualResult,
+        manualOnly: true
+      };
+      emitManualUpdateResult(releaseResult, sendUpdateEvent);
+      return releaseResult;
     } catch (err) {
       console.error('Update check failed:', err);
       const result = { error: err.message, upToDate: false, updateAvailable: false };
       emitManualUpdateResult(result, sendUpdateEvent);
       return result;
     }
+  };
+
+  ipcMain.handle('check-for-updates', () => {
+    // Deduplicate concurrent clicks/renderer calls so every online request is
+    // represented by the one cancellable operation held by the registry.
+    if (activeCheckPromise) return activeCheckPromise;
+    const operation = performUpdateCheck().finally(() => {
+      if (activeCheckPromise === operation) activeCheckPromise = null;
+    });
+    activeCheckPromise = operation;
+    return operation;
   });
 
-  ipcMain.handle('get-local-update-folder', () => loadLocalUpdateFolder());
-
-  ipcMain.handle('select-local-update-folder', async (event) => {
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    const options = {
-      title: 'Select Local Update Source',
-      properties: ['openDirectory'],
-    };
-    const result = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths || !result.filePaths[0]) {
-      return { cancelled: true, path: '' };
-    }
-    const folder = saveLocalUpdateFolder(result.filePaths[0]);
-    return { cancelled: false, path: folder };
+  ipcMain.handle('get-local-update-folder', () => {
+    if (networkPolicy?.isOffline?.()) return '';
+    try { jobRegistry?.assertCanStart?.('Reading an update source'); }
+    catch { return ''; }
+    return loadLocalUpdateFolder();
   });
+
+  ipcMain.handle('select-local-update-folder', (event) => trackUpdateSourceOperation(
+    'Selecting an update source',
+    async (signal) => {
+      if (networkPolicy) networkPolicy.assertAllowed('Selecting an update source');
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const options = {
+        title: 'Select Local Update Source',
+        properties: ['openDirectory'],
+      };
+      const result = owner
+        ? await dialog.showOpenDialog(owner, options)
+        : await dialog.showOpenDialog(options);
+      if (result.canceled || !result.filePaths || !result.filePaths[0]) {
+        return { cancelled: true, path: '' };
+      }
+      if (signal.aborted) throw new Error('Update-source selection was cancelled');
+      const folder = saveLocalUpdateFolder(result.filePaths[0]);
+      return { cancelled: false, path: folder };
+    },
+  ));
 
   ipcMain.handle('clear-local-update-folder', () => {
     fs.rmSync(localUpdatePreferencePath(), { force: true });
@@ -408,23 +459,19 @@ function registerUpdaterIpcHandlers(sendUpdateEvent) {
   });
 
   ipcMain.handle('download-update', async () => {
-    try {
-      isUpdateReady = false;
-      return await autoUpdater.downloadUpdate();
-    } catch (err) {
-      console.error('Update download failed:', err);
-      sendUpdateEvent('update-error', err.message);
-      return { error: err.message };
-    }
+    return {
+      error: 'Online updates are installed from the signed GitHub release page. Use Check for updates to open it.'
+    };
   });
 
   ipcMain.handle('restart-to-update', () => {
-    if (!isUpdateReady) return false;
-    autoUpdater.quitAndInstall();
-    return true;
+    return false;
   });
 
-  ipcMain.handle('download-and-update', async (event, requestedPath) => {
+  ipcMain.handle('download-and-update', (event, requestedPath) => trackUpdateSourceOperation(
+    'Installing from an update source',
+    async (signal) => {
+      if (networkPolicy) networkPolicy.assertAllowed('Installing from an update source');
     const pkg = require('../../package.json');
     const updateFolder = loadLocalUpdateFolder();
 
@@ -448,10 +495,10 @@ function registerUpdaterIpcHandlers(sendUpdateEvent) {
     const tempDir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'muxmelt-update-'));
     const targetPath = path.join(tempDir, path.basename(installerPath));
     try {
-      await fs.promises.copyFile(installerPath, targetPath);
+      await copyFileAbortable(installerPath, targetPath, signal);
 
       if (sha256) {
-        const actual = (await hashFile(targetPath)).toLowerCase();
+        const actual = (await hashFile(targetPath, signal)).toLowerCase();
         if (actual !== sha256) {
           throw new Error('Installer failed integrity check (SHA-256 mismatch).');
         }
@@ -474,11 +521,14 @@ function registerUpdaterIpcHandlers(sendUpdateEvent) {
       const confirmation = owner
         ? await dialog.showMessageBox(owner, confirmationOptions)
         : await dialog.showMessageBox(confirmationOptions);
+      if (signal.aborted) throw new Error('Local update installation was cancelled');
       if (confirmation.response !== 1) {
         await fs.promises.rm(tempDir, { recursive: true, force: true });
         return false;
       }
 
+      jobRegistry?.assertCanStart?.('Launching a local update');
+      if (networkPolicy) networkPolicy.assertAllowed('Launching a local update');
       if (process.platform === 'win32') {
         await new Promise((resolve, reject) => {
           const child = spawn(targetPath, [], {
@@ -503,23 +553,20 @@ function registerUpdaterIpcHandlers(sendUpdateEvent) {
       throw err;
     }
 
-    app.quit();
+    // Let this tracked promise leave the registry before before-quit asks the
+    // same registry to settle every active updater operation.
+    setImmediate(() => app.quit());
     return true;
-  });
-}
-
-function getIsUpdateReady() {
-  return isUpdateReady;
+    },
+  ));
 }
 
 module.exports = {
-  autoUpdater,
   checkForUpdates,
   emitManualUpdateResult,
-  initAutoUpdater,
-  getIsUpdateReady,
   registerUpdaterIpcHandlers,
   resolveTrustedLocalInstaller,
   hashFile,
+  copyFileAbortable,
   compareVersions
 };

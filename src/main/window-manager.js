@@ -17,8 +17,10 @@ function installPermissionHandler() {
   });
 }
 
-function openExternalUrl(url) {
+function openExternalUrl(url, networkPolicy = null) {
   if (!/^https?:\/\//i.test(url)) return;
+  try { networkPolicy?.assertAllowed?.('Opening external links'); }
+  catch { return; }
   shell.openExternal(url).catch((err) => {
     console.warn(`Failed to open external URL: ${err.message}`);
   });
@@ -125,7 +127,7 @@ function closeSplash() {
   splashWindow = null;
 }
 
-async function createWindow(appDir) {
+async function createWindow(appDir, networkPolicy = null) {
   installPermissionHandler();
   const createdWindow = new BrowserWindow({
     width: 1200,
@@ -164,7 +166,7 @@ async function createWindow(appDir) {
   // so injected markup or a stray link can't repoint the app or spawn a
   // node-less child window. External http(s) links open in the real browser.
   createdWindow.webContents.setWindowOpenHandler(({ url }) => {
-    openExternalUrl(url);
+    openExternalUrl(url, networkPolicy);
     return { action: 'deny' };
   });
   const blockRendererNavigation = (event, url) => {
@@ -172,7 +174,7 @@ async function createWindow(appDir) {
     // navigation is therefore unexpected, including navigation to another
     // local file which would otherwise retain this window's privileged preload.
     event.preventDefault();
-    openExternalUrl(url);
+    openExternalUrl(url, networkPolicy);
   };
   createdWindow.webContents.on('will-navigate', blockRendererNavigation);
   createdWindow.webContents.on('will-redirect', blockRendererNavigation);

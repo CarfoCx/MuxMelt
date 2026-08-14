@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 echo "============================================"
 echo "  MuxMelt - Setup Script (macOS / Linux)"
@@ -53,28 +53,18 @@ else
   echo ""
 fi
 
-# Install Python dependencies
+# Install exact direct dependency versions from the controlled package index.
+# Packaged builds use an app-managed component; this is for source development.
 echo "Installing Python dependencies..."
 echo "This may take several minutes (PyTorch dependencies are large)."
 echo ""
-
-# Detect platform for PyTorch install
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  # macOS: use default PyTorch (MPS acceleration on Apple Silicon)
-  $PYTHON_CMD -m pip install torch torchvision torchaudio
-else
-  # Linux: try CUDA first, fallback to CPU
-  if command -v nvidia-smi &>/dev/null; then
-    echo "NVIDIA GPU detected, installing PyTorch with CUDA..."
-    $PYTHON_CMD -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-  else
-    echo "No NVIDIA GPU detected, installing CPU-only PyTorch..."
-    $PYTHON_CMD -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-  fi
-fi
-
-$PYTHON_CMD -m pip install -r python/requirements.txt \
-  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+PIP_CONFIG_FILE=/dev/null \
+PIP_INDEX_URL=https://pypi.org/simple \
+PIP_DISABLE_PIP_VERSION_CHECK=1 \
+PIP_NO_INPUT=1 \
+PYTHONNOUSERSITE=1 \
+  "$PYTHON_CMD" -m pip --isolated --disable-pip-version-check --no-input \
+  install --index-url https://pypi.org/simple -r python/requirements.txt \
   --prefer-binary
 
 echo ""
@@ -82,8 +72,8 @@ echo "[OK] Python dependencies installed"
 echo ""
 
 # Install Node.js dependencies
-echo "Installing Node.js dependencies..."
-npm install
+echo "Installing locked Node.js dependencies..."
+npm ci
 echo ""
 echo "[OK] Node.js dependencies installed"
 echo ""
@@ -98,7 +88,7 @@ echo "  - Stem Separator (vocals/drums/bass separation)"
 echo "  - Format Converter, Video Compressor"
 echo "  - Audio Extractor, GIF Maker"
 echo "  - Background Remover, Bulk Imager"
-echo "  - PDF Toolkit, QR Studio, Text to Speech"
+echo "  - Image Editor, QR Studio, Text to Speech"
 echo ""
 echo "GPU acceleration:"
 echo "  macOS: Apple Silicon (MPS) supported automatically"

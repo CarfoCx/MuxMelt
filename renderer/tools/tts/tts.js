@@ -7,7 +7,8 @@
 let outputDir = '';
 let isProcessing = false;
 let ws = null;
-let pythonPort = null;
+let getPythonPort = () => null;
+let connectedPythonPort = null;
 let pythonToken = null;
 let log = null;
 
@@ -31,34 +32,8 @@ let savedLanguage = '';
 let savedVoice = '';
 let _saveTimer = null;
 
-const ENGLISH_VOICE_PRESETS = [
-  { id: 'en-US-AvaNeural', label: 'Soothing - Ava', detail: 'US female, calm and polished', group: 'Soft and warm' },
-  { id: 'en-US-EmmaNeural', label: 'Warm - Emma', detail: 'US female, friendly and natural', group: 'Soft and warm' },
-  { id: 'en-US-JennyNeural', label: 'Gentle - Jenny', detail: 'US female, smooth narration', group: 'Soft and warm' },
-  { id: 'en-GB-SoniaNeural', label: 'Relaxed - Sonia', detail: 'UK female, rounded and steady', group: 'Soft and warm' },
-  { id: 'en-AU-NatashaNeural', label: 'Clean - Natasha', detail: 'AU female, clear and easygoing', group: 'Soft and warm' },
-
-  { id: 'en-US-BrianNeural', label: 'Grounded - Brian', detail: 'US male, warm and conversational', group: 'Natural male' },
-  { id: 'en-US-AndrewNeural', label: 'Clear - Andrew', detail: 'US male, balanced and modern', group: 'Natural male' },
-  { id: 'en-US-ChristopherNeural', label: 'Narrator - Christopher', detail: 'US male, deeper presentation voice', group: 'Natural male' },
-  { id: 'en-GB-RyanNeural', label: 'Direct - Ryan', detail: 'UK male, crisp and confident', group: 'Natural male' },
-  { id: 'en-CA-LiamNeural', label: 'Bright - Liam', detail: 'CA male, open and approachable', group: 'Natural male' },
-
-  { id: 'en-US-AriaNeural', label: 'Expressive - Aria', detail: 'US female, lively and versatile', group: 'Sharper and brighter' },
-  { id: 'en-US-MichelleNeural', label: 'Precise - Michelle', detail: 'US female, focused and articulate', group: 'Sharper and brighter' },
-  { id: 'en-US-SteffanNeural', label: 'Sharp - Steffan', detail: 'US male, firm and polished', group: 'Sharper and brighter' },
-  { id: 'en-US-RogerNeural', label: 'Bold - Roger', detail: 'US male, strong announcer tone', group: 'Sharper and brighter' },
-  { id: 'en-GB-LibbyNeural', label: 'Bright UK - Libby', detail: 'UK female, crisp and upbeat', group: 'Sharper and brighter' },
-
-  { id: 'en-IN-NeerjaExpressiveNeural', label: 'Expressive - Neerja', detail: 'IN female, animated preview voice', group: 'Regional English' },
-  { id: 'en-IN-PrabhatNeural', label: 'Clear - Prabhat', detail: 'IN male, steady and articulate', group: 'Regional English' },
-  { id: 'en-IE-EmilyNeural', label: 'Soft - Emily', detail: 'IE female, gentle and light', group: 'Regional English' },
-  { id: 'en-NZ-MollyNeural', label: 'Natural - Molly', detail: 'NZ female, relaxed and clear', group: 'Regional English' },
-  { id: 'en-ZA-LeahNeural', label: 'Smooth - Leah', detail: 'ZA female, even and pleasant', group: 'Regional English' }
-];
-
 async function init(ctx) {
-  pythonPort = ctx.pythonPort;
+  getPythonPort = typeof ctx.getPythonPort === 'function' ? ctx.getPythonPort : () => ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
 
@@ -83,7 +58,7 @@ async function init(ctx) {
 
   await loadToolSettings();
   bindEvents();
-  connectWebSocket(pythonPort);
+  connectWebSocket();
   // log('Text-to-Speech initialized'); // Removed as per request to clean logs
 }
 
@@ -91,18 +66,24 @@ function cleanup() {
   releasePreviewFile();
   stopTtsPlayback();
   _ttsAudio = null;
+  if (spellcheckToggle) spellcheckToggle.checked = false;
+  if (ttsText) ttsText.spellcheck = false;
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  connectedPythonPort = null;
 }
 
 // ---- WebSocket ----
-function connectWebSocket(port) {
+function connectWebSocket() {
+  const port = getPythonPort();
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  connectedPythonPort = port;
   ws = new WebSocket(`ws://127.0.0.1:${port}/tts/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
     reconnectTimerId = null;
-    if (!isProcessing && statusText) statusText.textContent = ttsText.value.trim() ? 'Text Entered' : 'Waiting for Text';
+    if (!isProcessing && statusText) statusText.textContent = 'Checking installed voices...';
     // if (statusText) statusText.textContent = 'Connected to backend';
     // log('WebSocket connected', 'success'); // Removed technical log
     // Request voice list
@@ -115,15 +96,25 @@ function connectWebSocket(port) {
     handleWSMessage(data);
   };
   ws.onclose = () => {
+    ws = null;
+    connectedPythonPort = null;
     if (!statusText) return;
     statusText.textContent = 'Disconnected - reconnecting...';
     if (isProcessing) resetProcessingState('Synthesis interrupted by backend disconnect');
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
     // log(`WebSocket disconnected...`, 'warn'); // Simplified log
-    reconnectTimerId = setTimeout(() => connectWebSocket(port), delay);
+    reconnectTimerId = setTimeout(connectWebSocket, delay);
   };
   ws.onerror = () => { if (statusText) statusText.textContent = 'Connection error'; };
+}
+
+function onBackendStatus(status = {}) {
+  const nextPort = status.port;
+  if (status.state !== 'ready' || !Number.isInteger(nextPort) || nextPort === connectedPythonPort) return;
+  if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (ws) ws.close();
+  else connectWebSocket();
 }
 
 function handleWSMessage(data) {
@@ -134,6 +125,9 @@ function handleWSMessage(data) {
         ? data.voices.filter(voice => voice && typeof voice.id === 'string' && typeof voice.locale === 'string')
         : [];
       populateLanguages();
+      if (allVoices.length && statusText) {
+        statusText.textContent = ttsText.value.trim() ? 'Text Entered' : 'Ready - fully offline';
+      }
       break;
     case 'log':
       // Filter out technical logs from backend
@@ -148,7 +142,18 @@ function handleWSMessage(data) {
       handleComplete(data);
       break;
     case 'error':
-      resetProcessingState(typeof data.error === 'string' ? data.error : 'Text-to-speech failed');
+      if (!isProcessing && allVoices.length === 0) {
+        const message = typeof data.error === 'string' ? data.error : 'No offline voices are available';
+        languageSelect.disabled = true;
+        voiceSelect.disabled = true;
+        previewBtn.disabled = true;
+        generateBtn.disabled = true;
+        statusText.textContent = 'Offline speech unavailable';
+        resultArea.innerHTML = `<div class="empty-state" style="color: var(--error);">${window.escapeHtml(message)}</div>`;
+        log(`TTS unavailable: ${message}`, 'error');
+      } else {
+        resetProcessingState(typeof data.error === 'string' ? data.error : 'Text-to-speech failed');
+      }
       break;
   }
 }
@@ -238,13 +243,30 @@ function populateLanguages() {
   const languages = new Set();
   allVoices.forEach(v => {
     if (v.locale) {
-      const lang = v.locale.split('-')[0];
+      const lang = v.locale.replace('_', '-').split('-')[0].toLowerCase();
       languages.add(lang);
     }
   });
 
   languageSelect.innerHTML = '';
   const sortedLangs = Array.from(languages).sort();
+
+  if (sortedLangs.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No local voices installed';
+    languageSelect.appendChild(option);
+    voiceSelect.innerHTML = '<option value="">No local voices installed</option>';
+    languageSelect.disabled = true;
+    voiceSelect.disabled = true;
+    previewBtn.disabled = true;
+    generateBtn.disabled = true;
+    return;
+  }
+  languageSelect.disabled = false;
+  voiceSelect.disabled = false;
+  previewBtn.disabled = false;
+  generateBtn.disabled = false;
   
   // Try to find full language names
   const langNames = {
@@ -278,70 +300,36 @@ function populateLanguages() {
 
 function populateVoices() {
   const lang = languageSelect.value;
-  const filtered = allVoices.filter(v => v && typeof v.locale === 'string' && v.locale.startsWith(lang));
+  const filtered = allVoices.filter(v => v && typeof v.locale === 'string'
+    && v.locale.replace('_', '-').toLowerCase().split('-')[0] === lang);
 
   voiceSelect.innerHTML = '';
-
-  if (lang === 'en') {
-    const byId = new Map(filtered.map(v => [v.id, v]));
-    const groups = new Map();
-
-    ENGLISH_VOICE_PRESETS.forEach(preset => {
-      const providerVoice = byId.get(preset.id);
-      if (!providerVoice) return;
-      if (!groups.has(preset.group)) groups.set(preset.group, []);
-      groups.get(preset.group).push({ ...preset, providerVoice });
-    });
-
-    groups.forEach((presets, groupName) => {
-      const group = document.createElement('optgroup');
-      group.label = groupName;
-      presets.forEach(preset => {
-        const opt = document.createElement('option');
-        opt.value = preset.id;
-        opt.textContent = `${preset.label} (${preset.detail})`;
-        group.appendChild(opt);
-      });
-      voiceSelect.appendChild(group);
-    });
-
-    const remaining = filtered
-      .filter(v => !ENGLISH_VOICE_PRESETS.some(p => p.id === v.id))
-      .sort((a, b) => a.id.localeCompare(b.id));
-
-    if (remaining.length) {
-      const group = document.createElement('optgroup');
-      group.label = 'More English voices';
-      remaining.forEach(v => {
-        const opt = document.createElement('option');
-        opt.value = v.id;
-        opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${String(v.gender || 'unknown').toLowerCase()})`;
-        group.appendChild(opt);
-      });
-      voiceSelect.appendChild(group);
-    }
-
-    if (savedVoice && byId.has(savedVoice)) voiceSelect.value = savedVoice;
-    else if (byId.has('en-US-AvaNeural')) voiceSelect.value = 'en-US-AvaNeural';
-    return;
-  }
-
-  filtered.forEach(v => {
+  filtered.sort((a, b) => cleanVoiceName(a).localeCompare(cleanVoiceName(b))).forEach(v => {
     const opt = document.createElement('option');
     opt.value = v.id;
-    opt.textContent = `${cleanVoiceName(v)} (${v.locale}, ${String(v.gender || 'unknown').toLowerCase()})`;
+    const details = [v.locale, v.gender, v.engine].filter(Boolean).join(', ');
+    opt.textContent = details ? `${cleanVoiceName(v)} (${details})` : cleanVoiceName(v);
     voiceSelect.appendChild(opt);
   });
   if (savedVoice && filtered.some(v => v.id === savedVoice)) voiceSelect.value = savedVoice;
+  savedVoice = voiceSelect.value;
+  updatePitchAvailability();
 }
 
 function cleanVoiceName(voice) {
-  return (voice.name || voice.id)
-    .replace(/^Microsoft\s+/i, '')
-    .replace(/\s+Online\s+\(Natural\)/i, '')
-    .replace(/\s+-\s+English.*$/i, '')
-    .replace(/\s+\(Preview\)$/i, '')
-    .trim();
+  return String(voice.name || voice.id || '').trim();
+}
+
+function updatePitchAvailability() {
+  const selected = allVoices.find(voice => voice.id === voiceSelect.value);
+  const supportsPitch = !!selected && selected.supports_pitch !== false;
+  pitchSlider.disabled = !supportsPitch;
+  pitchSlider.title = supportsPitch ? 'Adjust the local voice pitch' : 'This local speech engine does not expose pitch control';
+  if (!supportsPitch) pitchValue.textContent = 'Unavailable';
+  else {
+    const pitch = parseInt(pitchSlider.value, 10) || 0;
+    pitchValue.textContent = `${pitch > 0 ? '+' : ''}${pitch}Hz`;
+  }
 }
 
 function updateProgress(progress, status) {
@@ -407,7 +395,11 @@ function bindEvents() {
   });
 
   if (spellcheckToggle) {
-    ttsText.spellcheck = spellcheckToggle.checked;
+    // Keep platform spellcheck session-only and fail closed. Chromium or the
+    // operating system may manage dictionaries outside this tool, so it must
+    // never turn on merely because an old setting was restored at startup.
+    spellcheckToggle.checked = false;
+    ttsText.spellcheck = false;
     spellcheckToggle.addEventListener('change', () => {
       ttsText.spellcheck = spellcheckToggle.checked;
       // Chromium only re-evaluates spellcheck on the next edit/focus, so nudge
@@ -428,6 +420,7 @@ function bindEvents() {
   });
   voiceSelect.addEventListener('change', () => {
     savedVoice = voiceSelect.value;
+    updatePitchAvailability();
     saveToolSettings();
   });
 
@@ -542,7 +535,9 @@ function startSynthesis(isPreview) {
   const synthesisText = isPreview ? text.slice(0, PREVIEW_MAX_CHARS) : text;
   const voice = voiceSelect.value;
   const speed = parseFloat(speedSlider.value);
-  const pitchHz = parseInt(pitchSlider.value, 10);
+  const selectedVoice = allVoices.find(item => item.id === voiceSelect.value);
+  const pitchHz = selectedVoice && selectedVoice.supports_pitch !== false
+    ? parseInt(pitchSlider.value, 10) : 0;
   const format = outputFormat.value;
 
   const ratePercent = Math.round((speed - 1.0) * 100);
@@ -550,7 +545,7 @@ function startSynthesis(isPreview) {
   const pitch = pitchHz >= 0 ? `+${pitchHz}Hz` : `${pitchHz}Hz`;
 
   if (!isPreview) {
-    log(`Generating TTS: ${text.length} chars, voice=${voice}, speed=${speed}x`);
+    log(`Generating offline TTS: ${text.length} chars, voice=${voice}, speed=${speed}x`);
   }
 
   try {
@@ -591,7 +586,6 @@ async function loadToolSettings() {
     pitchValue.textContent = `${pitchValueNumber > 0 ? '+' : ''}${pitchValueNumber}Hz`;
 
     if (settings.outputFormat === 'mp3' || settings.outputFormat === 'wav') outputFormat.value = settings.outputFormat;
-    if (typeof settings.spellcheck === 'boolean') spellcheckToggle.checked = settings.spellcheck;
     savedLanguage = typeof settings.language === 'string' ? settings.language : '';
     savedVoice = typeof settings.voice === 'string' ? settings.voice : '';
   } catch (err) {
@@ -609,13 +603,12 @@ function saveToolSettings() {
         voice: voiceSelect.value || savedVoice,
         speed: Number(speedSlider.value),
         pitch: Number(pitchSlider.value),
-        outputFormat: outputFormat.value,
-        spellcheck: !!spellcheckToggle.checked
+        outputFormat: outputFormat.value
       };
     }).catch(err => log(`Could not save TTS settings: ${err.message}`, 'warn'));
   }, 250);
 }
 
-window.registerTool('tts', { init, cleanup, deactivate: stopTtsPlayback });
+window.registerTool('tts', { init, cleanup, deactivate: stopTtsPlayback, onBackendStatus });
 
 })();

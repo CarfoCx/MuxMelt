@@ -11,7 +11,8 @@ let files = [];
 let outputDir = '';
 let isProcessing = false;
 let ws = null;
-let pythonPort = null;
+let getPythonPort = () => null;
+let connectedPythonPort = null;
 let pythonToken = null;
 let log = null;
 let batchStartTime = 0;
@@ -38,7 +39,7 @@ let _pasteHandler = null;
 let _currentAudio = null; // active stem preview, so cleanup() can stop it
 
 async function init(ctx) {
-  pythonPort = ctx.pythonPort;
+  getPythonPort = typeof ctx.getPythonPort === 'function' ? ctx.getPythonPort : () => ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
 
@@ -63,7 +64,7 @@ async function init(ctx) {
   bindEvents();
   _pasteHandler = (e) => { if (window.isToolActive('stem-separator') && e.detail && e.detail.length > 0) addFilesDirect(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
-  connectWebSocket(pythonPort);
+  connectWebSocket();
   log('Stem Separator initialized');
 }
 
@@ -73,10 +74,14 @@ function cleanup() {
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  connectedPythonPort = null;
 }
 
 // ---- WebSocket ----
-function connectWebSocket(port) {
+function connectWebSocket() {
+  const port = getPythonPort();
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  connectedPythonPort = port;
   ws = new WebSocket(`ws://127.0.0.1:${port}/stem-separator/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
@@ -90,6 +95,8 @@ function connectWebSocket(port) {
     handleWSMessage(data);
   };
   ws.onclose = () => {
+    ws = null;
+    connectedPythonPort = null;
     if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     if (!statusText) return;
     if (isProcessing) {
@@ -110,9 +117,17 @@ function connectWebSocket(port) {
     reconnectAttempts++;
     const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
     log(`WebSocket disconnected, reconnecting in ${(delay / 1000).toFixed(1)}s...`, 'warn');
-    reconnectTimerId = setTimeout(() => connectWebSocket(port), delay);
+    reconnectTimerId = setTimeout(connectWebSocket, delay);
   };
   ws.onerror = () => { if (statusText) statusText.textContent = 'Connection error'; };
+}
+
+function onBackendStatus(status = {}) {
+  const nextPort = status.port;
+  if (status.state !== 'ready' || !Number.isInteger(nextPort) || nextPort === connectedPythonPort) return;
+  if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (ws) ws.close();
+  else connectWebSocket();
 }
 
 function handleWSMessage(data) {
@@ -609,6 +624,6 @@ function saveToolSettings() {
   }, 300);
 }
 
-window.registerTool('stem-separator', { init, cleanup, deactivate: stopCurrentAudio });
+window.registerTool('stem-separator', { init, cleanup, deactivate: stopCurrentAudio, onBackendStatus });
 
 })();

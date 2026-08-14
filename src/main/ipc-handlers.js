@@ -64,7 +64,8 @@ function registerIpcHandlers(options) {
     getPythonToken,
     loadSettings,
     saveSettings,
-    restartPythonCallback
+    restartPythonCallback,
+    networkPolicy,
   } = options;
 
   let clipboardTempDir = null;
@@ -81,9 +82,15 @@ function registerIpcHandlers(options) {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  // Tools use this as a sensible default output location so downloads can
+  // start without first forcing the user through a folder picker.
+  ipcMain.handle('get-downloads-dir', () => {
+    try { return app.getPath('downloads'); } catch { return ''; }
+  });
+
   ipcMain.handle('select-files', async (event, opts) => {
     const defaultFilters = [
-      { name: 'Images & Videos', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif', 'avif', 'gif', 'svg', 'heic', 'heif', 'mp4', 'avi', 'mkv', 'mov', 'webm'] }
+      { name: 'Images & Videos', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'tif', 'avif', 'gif', 'svg', 'heic', 'heif', 'tim', 'mp4', 'avi', 'mkv', 'mov', 'webm'] }
     ];
     const requestedFilters = Array.isArray(opts && opts.filters)
       ? opts.filters.slice(0, 20).map((filter) => {
@@ -153,6 +160,7 @@ function registerIpcHandlers(options) {
   ipcMain.handle('open-external', async (event, url) => {
     if (typeof url !== 'string' || url.length > 4096) return false;
     try {
+      networkPolicy?.assertAllowed?.('Opening external links');
       const parsed = new URL(url);
       if (!['https:', 'http:'].includes(parsed.protocol) || !parsed.hostname) return false;
       await shell.openExternal(parsed.href);
@@ -212,6 +220,10 @@ function registerIpcHandlers(options) {
   ipcMain.handle('load-settings', () => loadSettings());
 
   ipcMain.handle('save-settings', (event, settings) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      return false;
+    }
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
       return false;
     }
@@ -219,9 +231,17 @@ function registerIpcHandlers(options) {
     // provenance for native-code launch paths. Local update sources are owned
     // by updater.js and can only be changed through its native folder picker.
     const sanitized = { ...settings };
-    if (settings.global && typeof settings.global === 'object' && !Array.isArray(settings.global)) {
-      sanitized.global = { ...settings.global };
-      delete sanitized.global.updateFolderPath;
+    const incomingGlobal = settings.global && typeof settings.global === 'object'
+      && !Array.isArray(settings.global) ? settings.global : {};
+    sanitized.global = { ...incomingGlobal };
+    delete sanitized.global.updateFolderPath;
+    // Offline Mode changes restart the Python backend and cancel active
+    // network jobs. Keep that setting authoritative to its dedicated IPC even
+    // when a malformed/legacy payload omits the whole global section.
+    const current = loadSettings();
+    sanitized.global.offlineMode = !!(current.global && current.global.offlineMode);
+    if (sanitized.global.rememberRecentFiles !== true) {
+      sanitized.global.recentFiles = [];
     }
     return saveSettings(sanitized);
   });
@@ -371,14 +391,30 @@ function registerIpcHandlers(options) {
 
   ipcMain.handle('show-notification', async (event, opts) => {
     opts = (opts && typeof opts === 'object') ? opts : {};
+    const settings = loadSettings();
+    const globalSettings = settings.global && typeof settings.global === 'object'
+      ? settings.global : {};
+    if (globalSettings.notificationsEnabled === false) return false;
+    const mainWindow = getMainWindow();
+    if (globalSettings.notificationsOnlyWhenBackgrounded !== false
+        && mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) {
+      return false;
+    }
     if (Notification.isSupported()) {
+      const detailed = globalSettings.notificationDetail === 'detailed';
       const notification = new Notification({
-        title: typeof opts.title === 'string' ? opts.title.slice(0, 200) : 'MuxMelt',
-        body: typeof opts.body === 'string' ? opts.body.slice(0, 2000) : '',
+        title: detailed && typeof opts.title === 'string'
+          ? opts.title.slice(0, 200)
+          : 'MuxMelt task complete',
+        body: detailed && typeof opts.body === 'string'
+          ? opts.body.slice(0, 2000)
+          : 'Your local media task finished successfully.',
         silent: false
       });
       notification.show();
+      return true;
     }
+    return false;
   });
 
   ipcMain.handle('restart-python', async () => {

@@ -1,12 +1,43 @@
 'use strict';
 
-const { spawn, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const {
+  spawnSupervised,
+  terminateSupervisedProcess,
+  supervisedCleanupError,
+} = require('../src/main/process-supervisor');
 
 const LOOKUP_TIMEOUT_MS = 5000;
 const PROBE_TIMEOUT_MS = 15000;
 const MAX_PROBE_OUTPUT = 1024 * 1024;
+// Local media tools never need FFmpeg networking. Restrict nested manifests,
+// playlists, filters, and output URLs as well as the top-level file path so a
+// crafted local input cannot make FFmpeg fetch HTTP/SMB-adjacent resources.
+const LOCAL_PROTOCOLS = 'file,pipe,fd,crypto,data,concat,concatf,subfile,async,cache';
+const LOCAL_PROTOCOL_ARGS = ['-protocol_whitelist', LOCAL_PROTOCOLS];
+let cleanupFailureLatch = null;
+
+function rememberCleanupFailure(error) {
+  if (!cleanupFailureLatch && error?.code === 'PROCESS_CLEANUP_FAILED') {
+    cleanupFailureLatch = error;
+  }
+  return error;
+}
+
+function throwIfCleanupFailed() {
+  if (cleanupFailureLatch) throw cleanupFailureLatch;
+}
+
+function restrictEveryInput(args) {
+  const restricted = [];
+  for (const argument of args) {
+    if (argument === '-i') restricted.push(...LOCAL_PROTOCOL_ARGS);
+    restricted.push(argument);
+  }
+  return restricted;
+}
 
 function findBundledTool(tool) {
   const executable = process.platform === 'win32' ? `${tool}.exe` : tool;
@@ -88,9 +119,9 @@ function findFfmpegAsync() {
       resolve(val);
     };
     try {
-      const proc = spawn('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
+      const proc = spawnSupervised('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
       timer = setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch {}
+        terminateSupervisedProcess(proc, 0);
         finish(null);
       }, LOOKUP_TIMEOUT_MS);
       if (typeof timer.unref === 'function') timer.unref();
@@ -162,6 +193,7 @@ function probeDuration(filePath) {
     const probeCmd = findBundledTool('ffprobe') || ffmpegCmd.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1');
     const args = [
       '-v', 'error',
+      ...LOCAL_PROTOCOL_ARGS,
       '-show_entries', 'format=duration',
       '-of', 'default=noprint_wrappers=1:nokey=1',
       filePath
@@ -169,7 +201,7 @@ function probeDuration(filePath) {
 
     let proc;
     try {
-      proc = spawn(probeCmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      proc = spawnSupervised(probeCmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     } catch {
       resolveViaFfmpeg(ffmpegCmd, filePath, resolve);
       return;
@@ -181,7 +213,7 @@ function probeDuration(filePath) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      try { proc.kill('SIGKILL'); } catch {}
+      terminateSupervisedProcess(proc, 0);
       resolveViaFfmpeg(ffmpegCmd, filePath, resolve);
     };
     timer = setTimeout(fallback, PROBE_TIMEOUT_MS);
@@ -218,6 +250,7 @@ function probeVideoInfo(filePath) {
     const probeCmd = findBundledTool('ffprobe') || ffmpegCmd.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1');
     const args = [
       '-v', 'error',
+      ...LOCAL_PROTOCOL_ARGS,
       '-select_streams', 'v:0',
       '-show_entries', 'stream=width,height,duration:format=duration',
       '-of', 'json',
@@ -226,7 +259,7 @@ function probeVideoInfo(filePath) {
 
     let proc;
     try {
-      proc = spawn(probeCmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      proc = spawnSupervised(probeCmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     } catch {
       resolveViaFfmpeg(ffmpegCmd, filePath, (duration) => resolve({ duration, width: 0, height: 0 }));
       return;
@@ -238,7 +271,7 @@ function probeVideoInfo(filePath) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      try { proc.kill('SIGKILL'); } catch {}
+      terminateSupervisedProcess(proc, 0);
       resolveViaFfmpeg(ffmpegCmd, filePath, (duration) => resolve({ duration, width: 0, height: 0 }));
     };
     timer = setTimeout(fallback, PROBE_TIMEOUT_MS);
@@ -279,7 +312,7 @@ function probeVideoInfo(filePath) {
 function resolveViaFfmpeg(ffmpegCmd, filePath, resolve) {
   let proc;
   try {
-    proc = spawn(ffmpegCmd, ['-i', filePath], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    proc = spawnSupervised(ffmpegCmd, [...LOCAL_PROTOCOL_ARGS, '-i', filePath], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   } catch {
     resolve(0);
     return;
@@ -300,7 +333,7 @@ function resolveViaFfmpeg(ffmpegCmd, filePath, resolve) {
     }
   };
   timer = setTimeout(() => {
-    try { proc.kill('SIGKILL'); } catch {}
+    terminateSupervisedProcess(proc, 0);
     finish();
   }, PROBE_TIMEOUT_MS);
   if (typeof timer.unref === 'function') timer.unref();
@@ -324,6 +357,11 @@ function resolveViaFfmpeg(ffmpegCmd, filePath, resolve) {
  */
 function run(options = {}) {
   const { args, onProgress, durationSeconds } = options;
+  try {
+    throwIfCleanupFailed();
+  } catch (error) {
+    return { promise: Promise.reject(error), cancel: async () => { throw error; } };
+  }
   if (!Array.isArray(args) || !args.every(arg => typeof arg === 'string')) {
     return {
       promise: Promise.reject(new Error('ffmpeg arguments must be an array of strings')),
@@ -341,11 +379,11 @@ function run(options = {}) {
   }
 
   // Always overwrite without asking
-  const fullArgs = ['-y', ...args];
+  const fullArgs = ['-y', ...restrictEveryInput(args)];
 
   let proc;
   try {
-    proc = spawn(ffmpegCmd, fullArgs, {
+    proc = spawnSupervised(ffmpegCmd, fullArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
     });
@@ -359,7 +397,7 @@ function run(options = {}) {
   let stderrBuf = '';
   let cancelled = false;
   let settled = false;
-  let forceKillTimer = null;
+  let cancelPromise = null;
   let progressRemainder = '';
 
   const emitProgress = (line) => {
@@ -405,7 +443,6 @@ function run(options = {}) {
     proc.once('error', (err) => {
       if (settled) return;
       settled = true;
-      if (forceKillTimer) clearTimeout(forceKillTimer);
       reject(cancelled
         ? new Error('ffmpeg process was cancelled')
         : new Error(`Failed to launch ffmpeg: ${err.message}`));
@@ -414,9 +451,12 @@ function run(options = {}) {
     proc.once('close', (code) => {
       if (settled) return;
       settled = true;
-      if (forceKillTimer) clearTimeout(forceKillTimer);
       if (progressRemainder) emitProgress(progressRemainder);
-      if (cancelled) {
+      const cleanupError = supervisedCleanupError(proc, 'FFmpeg');
+      if (cleanupError) {
+        rememberCleanupFailure(cleanupError);
+        reject(cleanupError);
+      } else if (cancelled) {
         reject(new Error('ffmpeg process was cancelled'));
       } else if (code === 0) {
         resolve({ code, stderr: stderrBuf, stdout: stdoutBuf });
@@ -432,11 +472,17 @@ function run(options = {}) {
   function cancel() {
     if (!settled && !cancelled) {
       cancelled = true;
-      try { proc.kill('SIGTERM'); } catch {}
-      // Force-kill after 3 s if it hasn't stopped
-      forceKillTimer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 3000);
-      if (typeof forceKillTimer.unref === 'function') forceKillTimer.unref();
+      // The watchdog sends TERM to the complete tree, escalates to KILL after
+      // three seconds, and exits only after that cleanup is complete.
+      terminateSupervisedProcess(proc, 3000);
     }
+    if (!cancelPromise) {
+      cancelPromise = proc.cleanupPromise.then(() => {
+        const cleanupError = supervisedCleanupError(proc, 'FFmpeg');
+        if (cleanupError) throw rememberCleanupFailure(cleanupError);
+      });
+    }
+    return cancelPromise;
   }
 
   return { promise, cancel };
@@ -446,7 +492,10 @@ module.exports = {
   findFfmpeg,
   findFfmpegAsync,
   parseProgress,
+  LOCAL_PROTOCOLS,
+  restrictEveryInput,
   probeDuration,
   probeVideoInfo,
-  run
+  run,
+  throwIfCleanupFailed,
 };

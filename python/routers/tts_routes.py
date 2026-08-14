@@ -1,5 +1,9 @@
 import asyncio
 import os
+import re
+import secrets
+import tempfile
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -8,6 +12,43 @@ from routers.validation import next_output_path, validate_choice, validate_outpu
 
 router = APIRouter()
 _job_lock = asyncio.Lock()
+_PREVIEW_DIR = os.path.join(tempfile.gettempdir(), 'muxmelt-tts-previews')
+_PREVIEW_NAME_RE = re.compile(r'^preview-[0-9a-f]{16}\.(?:mp3|wav)$')
+_PREVIEW_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def _ensure_preview_dir():
+    os.makedirs(_PREVIEW_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(_PREVIEW_DIR, 0o700)
+    except OSError:
+        # Windows protects the per-user temp directory with ACLs rather than
+        # POSIX mode bits.
+        pass
+    return _PREVIEW_DIR
+
+
+def cleanup_stale_previews(now=None):
+    """Remove only old, opaque preview files from MuxMelt's private temp dir."""
+    preview_dir = _ensure_preview_dir()
+    cutoff = (time.time() if now is None else now) - _PREVIEW_MAX_AGE_SECONDS
+    try:
+        entries = list(os.scandir(preview_dir))
+    except OSError:
+        return
+    for entry in entries:
+        if not _PREVIEW_NAME_RE.fullmatch(entry.name):
+            continue
+        try:
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            if entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                os.remove(entry.path)
+        except OSError:
+            continue
+
+
+cleanup_stale_previews()
 
 
 def _cleanup_previews(preview_paths, requested_path=None):
@@ -47,7 +88,7 @@ async def _run_synthesis(ws, data, preview_paths=None):
             raise ValueError(
                 f'Text too long ({len(text)} chars). Maximum is 50,000 characters.'
             )
-        voice = data.get('voice', 'en-US-AriaNeural')
+        voice = data.get('voice', '')
         if not isinstance(voice, str) or not voice:
             raise ValueError('A voice must be selected')
         output_format = validate_choice(
@@ -60,30 +101,19 @@ async def _run_synthesis(ws, data, preview_paths=None):
             raise ValueError('is_preview must be true or false')
 
         output_dir = data.get('output_dir', '')
-        if is_preview and output_dir == 'TEMP':
-            import tempfile
-            output_dir = tempfile.gettempdir()
+        if is_preview:
+            # Previews are always confined to this connection's private temp
+            # area, regardless of renderer input.
+            output_dir = _ensure_preview_dir()
         elif not output_dir:
             output_dir = os.path.join(os.path.expanduser('~'), 'Desktop')
         else:
             output_dir = validate_output_dir(output_dir)
         os.makedirs(output_dir, exist_ok=True)
 
-        words = text.strip().split()[:5]
-        safe_name = '_'.join(word[:10] for word in words) if words else 'speech'
-        safe_name = ''.join(
-            character for character in safe_name
-            if character.isalnum() or character in ('_', '-')
-        ) or 'speech'
-        windows_reserved = {
-            'CON', 'PRN', 'AUX', 'NUL',
-            *(f'COM{i}' for i in range(1, 10)),
-            *(f'LPT{i}' for i in range(1, 10)),
-        }
-        if safe_name.upper() in windows_reserved:
-            safe_name = f'speech_{safe_name}'
-        if is_preview:
-            safe_name = f'preview_{safe_name}_{os.urandom(4).hex()}'
+        # Never copy private text into filenames, notifications, recent-file
+        # history, cloud sync metadata, or crash remnants.
+        safe_name = f'preview-{secrets.token_hex(8)}' if is_preview else 'speech'
         output_path = next_output_path(output_dir, safe_name, f'.{output_format}')
 
         async def on_progress(pct, status):

@@ -12,8 +12,10 @@ let isStarting = false;
 const activeDownloads = Object.create(null);
 const pendingProgress = Object.create(null);
 
-let magnetInput, dropZone, fileCount, outputDirBtn, outputDirText;
-let startBtn, openOutputBtn, cancelAllBtn, footerStatus, footerCount;
+let magnetInput, dropZone, dropHint, fileRow, fileCount, clearFileBtn;
+let outputDirBtn, outputDirText;
+let startBtn, startBtnLabel, startHint, openOutputBtn, cancelAllBtn, footerStatus, footerCount;
+let privacyConsent;
 let downloadsContainer, emptyState;
 
 async function init(ctx) {
@@ -21,24 +23,36 @@ async function init(ctx) {
 
   magnetInput = document.getElementById('magnetInput');
   dropZone = document.getElementById('dropZone');
+  dropHint = document.getElementById('dropHint');
+  fileRow = document.getElementById('fileRow');
   fileCount = document.getElementById('fileCount');
+  clearFileBtn = document.getElementById('clearFileBtn');
   outputDirBtn = document.getElementById('outputDirBtn');
   outputDirText = document.getElementById('outputDirText');
   downloadsContainer = document.getElementById('downloadsContainer');
   emptyState = document.getElementById('emptyState');
 
   startBtn = document.getElementById('startBtn');
+  startBtnLabel = document.getElementById('startBtnLabel');
+  startHint = document.getElementById('startHint');
   openOutputBtn = document.getElementById('openOutputBtn');
   cancelAllBtn = document.getElementById('cancelAllBtn');
   footerStatus = document.getElementById('footerStatus');
   footerCount = document.getElementById('footerCount');
+  privacyConsent = document.getElementById('torrentPrivacyConsent');
 
   await loadToolSettings();
   if (!outputDir && window.getDefaultOutputDir) {
     outputDir = window.getDefaultOutputDir();
-    updateOutputButton();
   }
+  // Fall back to the OS Downloads folder so a download can start immediately
+  // instead of surprising the user with a folder picker on their first click.
+  if (!outputDir && window.api.system.getDownloadsDir) {
+    try { outputDir = (await window.api.system.getDownloadsDir()) || ''; } catch {}
+  }
+  updateOutputButton();
   bindEvents();
+  updateStartReady();
   updateFooter();
   log('Torrent Downloader initialized');
 }
@@ -59,16 +73,17 @@ function bindEvents() {
     }
   });
 
-  dropZone.addEventListener('click', async () => {
-    const files = await window.api.system.selectFiles({
-      title: 'Select Torrent File',
-      filters: [{ name: 'Torrent Files', extensions: ['torrent'] }]
-    });
-    if (files && files.length > 0) {
-      torrentFile = files[0];
-      magnetInput.value = '';
-      updateFileText();
+  dropZone.addEventListener('click', browseForTorrentFile);
+  dropZone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      browseForTorrentFile();
     }
+  });
+
+  clearFileBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setTorrentFile(null);
   });
 
   dropZone.addEventListener('dragover', (e) => {
@@ -83,18 +98,18 @@ function bindEvents() {
       const file = e.dataTransfer.files[0];
       const filePath = window.api.system.getPathForFile(file);
       if (filePath && file.name.toLowerCase().endsWith('.torrent')) {
-        torrentFile = filePath;
-        magnetInput.value = '';
-        updateFileText();
+        setTorrentFile(filePath);
+      } else {
+        window.showCompletionToast('Only .torrent files can be dropped here.', true);
       }
     }
   });
 
   magnetInput.addEventListener('input', () => {
-    if (magnetInput.value.trim().length > 0) {
-      torrentFile = null;
-      updateFileText();
+    if (magnetInput.value.trim().length > 0 && torrentFile) {
+      setTorrentFile(null);
     }
+    updateStartReady();
   });
 
   // Allow Enter key to start download
@@ -106,9 +121,14 @@ function bindEvents() {
   });
 
   startBtn.addEventListener('click', startDownload);
+  privacyConsent.addEventListener('change', () => {
+    saveToolSettings();
+    updateStartReady();
+  });
 
   openOutputBtn.addEventListener('click', () => {
     if (outputDir) window.api.system.openFolder(outputDir);
+    else window.showCompletionToast('No output folder selected yet.', true);
   });
 
   cancelAllBtn.addEventListener('click', async () => {
@@ -133,13 +153,50 @@ function updateOutputButton() {
   outputDirText.title = outputDir || '';
 }
 
+// Open the OS file picker for a .torrent file. Returns true if one was chosen.
+async function browseForTorrentFile() {
+  const files = await window.api.system.selectFiles({
+    title: 'Select Torrent File',
+    filters: [{ name: 'Torrent Files', extensions: ['torrent'] }]
+  });
+  if (files && files.length > 0) {
+    setTorrentFile(files[0]);
+    return true;
+  }
+  return false;
+}
+
+function setTorrentFile(filePath) {
+  torrentFile = filePath || null;
+  if (torrentFile) magnetInput.value = '';
+  updateFileText();
+  updateStartReady();
+}
+
 function updateFileText() {
   if (torrentFile) {
-    fileCount.textContent = 'Selected: ' + torrentFile.split(/[/\\]/).pop();
-    fileCount.style.display = 'block';
+    dropZone.classList.add('has-file');
+    fileCount.textContent = torrentFile.split(/[/\\]/).pop();
+    fileCount.title = torrentFile;
+    fileRow.style.display = '';
+    dropHint.textContent = 'Click to choose a different file';
   } else {
-    fileCount.style.display = 'none';
+    dropZone.classList.remove('has-file');
+    fileRow.style.display = 'none';
+    dropHint.textContent = 'Drop a .torrent file here or click to browse';
   }
+}
+
+// Highlight the Start button as the next step once a source is present.
+function updateStartReady() {
+  const ready = !!torrentFile || magnetInput.value.trim().length > 0;
+  const consented = !!(privacyConsent && privacyConsent.checked);
+  startBtn.classList.toggle('ready', ready);
+  startBtn.disabled = isStarting || !consented;
+  startHint.textContent = consented
+    ? 'Ready — click Start Download'
+    : 'Review and accept the peer-to-peer privacy notice first';
+  startHint.style.display = (ready || !consented) && !isStarting ? '' : 'none';
 }
 
 function updateFooter() {
@@ -155,7 +212,7 @@ function updateFooter() {
     footerCount.textContent = '';
     cancelAllBtn.style.display = 'none';
   } else {
-    footerStatus.textContent = activeCount > 0 ? 'Downloading' : 'Idle';
+    footerStatus.textContent = activeCount > 0 ? 'Downloading' : 'Ready';
     footerCount.textContent = activeCount > 0
       ? `${activeCount} active / ${totalCount} total`
       : `${totalCount} torrent${totalCount !== 1 ? 's' : ''}`;
@@ -220,6 +277,8 @@ function createDownloadCard(id) {
   const pauseBtn = document.createElement('button');
   pauseBtn.className = 'btn btn-secondary';
   pauseBtn.textContent = 'Pause';
+  pauseBtn.disabled = true; // enabled once metadata arrives and downloading begins
+  pauseBtn.title = 'Available once the download starts';
   pauseBtn.onclick = () => togglePause(id);
 
   const cancelBtn = document.createElement('button');
@@ -372,7 +431,16 @@ function finalizeCard(id, label, onclick) {
 // ── Progress handler ───────────────────────────────────────────────────
 
 function handleProgress(data) {
-  if (!data || typeof data !== 'object' || typeof data.id !== 'string') return;
+  if (!data || typeof data !== 'object') return;
+  if (typeof data.id !== 'string') {
+    // Client-level errors (no torrent id) would otherwise vanish silently.
+    if (data.status === 'error') {
+      const msg = data.message || 'Torrent client error';
+      log(msg, 'error');
+      window.showCompletionToast(msg, true);
+    }
+    return;
+  }
   const id = data.id;
   const dl = activeDownloads[id];
   if (!dl) {
@@ -442,6 +510,8 @@ function handleProgress(data) {
     dl.title.classList.remove('loading');
     dl.state = 'downloading';
     dl.dot.className = 'torrent-state-dot downloading';
+    dl.pauseBtn.disabled = false;
+    dl.pauseBtn.title = '';
     dl.totalLength = data.length || 0;
 
     if (data.length) dl.elSize.textContent = formatBytes(data.length);
@@ -485,25 +555,40 @@ function handleProgress(data) {
 
 async function startDownload() {
   if (isStarting) return;
-  const source = torrentFile || magnetInput.value.trim();
-  if (!source) {
-    log('Please provide a magnet link or select a .torrent file.', 'warn');
+  if (!privacyConsent || !privacyConsent.checked) {
+    window.showCompletionToast('Acknowledge the peer-to-peer privacy notice before starting.', true);
+    if (privacyConsent) privacyConsent.focus();
     return;
   }
-
   isStarting = true;
   startBtn.disabled = true;
-  const originalLabel = startBtn.textContent;
-  startBtn.textContent = 'Starting...';
+  updateStartReady();
   try {
+    let source = torrentFile || magnetInput.value.trim();
+    if (!source) {
+      // Never a dead end: with nothing selected, the button itself offers
+      // the .torrent file picker.
+      const picked = await browseForTorrentFile();
+      if (!picked) {
+        window.showCompletionToast('Paste a magnet link or choose a .torrent file first.', true);
+        magnetInput.focus();
+        return;
+      }
+      source = torrentFile;
+    }
+
     if (!outputDir) {
       const dir = await window.api.system.selectOutputDir();
-      if (!dir) return;
+      if (!dir) {
+        window.showCompletionToast('Download not started — choose an output folder first.', true);
+        return;
+      }
       outputDir = dir;
       updateOutputButton();
       await saveToolSettings();
     }
 
+    startBtnLabel.textContent = 'Starting…';
     log('Starting torrent download…');
     const result = await window.api.tools.torrentDownloader.downloadTorrent({ source, outputDir });
     if (!result || !result.success || !result.id) {
@@ -511,16 +596,15 @@ async function startDownload() {
     }
 
     createDownloadCard(result.id);
-    torrentFile = null;
+    setTorrentFile(null);
     magnetInput.value = '';
-    updateFileText();
   } catch (err) {
     log(`Error: ${err.message}`, 'error');
     window.showCompletionToast(err.message, true);
   } finally {
     isStarting = false;
-    startBtn.disabled = false;
-    startBtn.textContent = originalLabel;
+    startBtnLabel.textContent = 'Start Download';
+    updateStartReady();
   }
 }
 
@@ -531,6 +615,7 @@ async function loadToolSettings() {
     const settings = await window.loadAllSettings();
     const saved = settings['torrent-downloader'] || settings.torrentDownloader || {};
     outputDir = typeof saved.outputDir === 'string' ? saved.outputDir : '';
+    if (privacyConsent) privacyConsent.checked = saved.privacyAcknowledged === true;
     updateOutputButton();
   } catch (err) {
     log(`Could not load torrent settings: ${err.message}`, 'warn');
@@ -539,7 +624,10 @@ async function loadToolSettings() {
 
 function saveToolSettings() {
   return window.updateSettings(settings => {
-    settings['torrent-downloader'] = { outputDir };
+    settings['torrent-downloader'] = {
+      outputDir,
+      privacyAcknowledged: !!(privacyConsent && privacyConsent.checked),
+    };
     delete settings.torrentDownloader;
   }).catch(err => {
     log(`Could not save torrent settings: ${err.message}`, 'warn');

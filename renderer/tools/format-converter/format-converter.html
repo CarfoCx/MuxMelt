@@ -5,31 +5,31 @@
   </div>
 
   <!-- Drop zone -->
-  <div class="drop-zone" id="dropZone">
+  <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-describedby="formatDropHint">
     <div class="drop-zone-icon">&#128257;</div>
     <div class="drop-zone-text">
       Drag &amp; drop images or videos to convert
     </div>
     <div class="drop-zone-actions">
-      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <button type="button" class="drop-zone-link" id="browseBtn">browse files</button>
       <span class="drop-zone-sep">|</span>
-      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+      <button type="button" class="drop-zone-link" id="browseFolderBtn">browse folder</button>
     </div>
-    <div class="drop-zone-hint">
-      Images: PNG, JPG, WebP, BMP... &bull; Videos: MP4, MKV, AVI... &bull; Audio: MP3, WAV, FLAC...
+    <div class="drop-zone-hint" id="formatDropHint">
+      Images: PNG, JPG, WebP, BMP, TIM... &bull; Videos: MP4, MKV, AVI... &bull; Audio: MP3, WAV, FLAC...
     </div>
   </div>
 
   <!-- Settings -->
   <div class="settings-bar">
     <div class="setting-group format-setting" id="formatGroup" hidden>
-      <label>Format:</label>
+      <label for="outputFormat">Format:</label>
       <select id="outputFormat">
       </select>
     </div>
 
     <div class="setting-group">
-      <label>Quality:</label>
+      <label for="qualitySlider">Quality:</label>
       <input type="range" id="qualitySlider" min="1" max="100" value="90">
       <span class="range-value" id="qualityValue">90</span>
       <span class="range-hint">/ 100</span>
@@ -42,8 +42,8 @@
     </div>
 
     <div class="setting-group">
-      <label>Output:</label>
-      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+      <label for="outputDirBtn">Output:</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
         Same as source
       </button>
     </div>
@@ -63,7 +63,7 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Waiting for File</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for File</span>
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>

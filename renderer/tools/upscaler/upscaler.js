@@ -31,7 +31,8 @@ let ws = null;
 let isProcessing = !!persistedState.isProcessing;
 let isPreparing = false;
 let cancelRequested = false;
-let pythonPort = null;
+let getPythonPort = () => null;
+let connectedPythonPort = null;
 let pythonToken = null;
 let log = null;
 
@@ -62,9 +63,21 @@ let _mouseMoveHandler = null;
 let _mouseUpHandler = null;
 let _keyDownHandler = null;
 let _resizeHandler = null;
+let previewReturnFocus = null;
+let overwriteReturnFocus = null;
+
+function trapDialogFocus(event, dialog) {
+  const focusable = Array.from(dialog.querySelectorAll('button, [href], input, select, [tabindex]:not([tabindex="-1"])'))
+    .filter(element => !element.disabled && element.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
 
 async function init(ctx) {
-  pythonPort = ctx.pythonPort;
+  getPythonPort = typeof ctx.getPythonPort === 'function' ? ctx.getPythonPort : () => ctx.pythonPort;
   pythonToken = ctx.pythonToken;
   log = ctx.log;
 
@@ -106,7 +119,7 @@ async function init(ctx) {
   await loadSettings();
   bindEvents();
   restoreViewState();
-  connectWebSocket(pythonPort);
+  connectWebSocket();
 
   _pasteHandler = (e) => { if (window.isToolActive('upscaler') && e.detail && e.detail.length > 0) addFiles(e.detail); };
   document.addEventListener('paste-files', _pasteHandler);
@@ -122,6 +135,7 @@ function cleanup() {
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
   if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  connectedPythonPort = null;
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
   if (_mouseMoveHandler) document.removeEventListener('mousemove', _mouseMoveHandler);
   if (_mouseUpHandler) document.removeEventListener('mouseup', _mouseUpHandler);
@@ -183,7 +197,9 @@ async function loadSettings() {
       scale = s.scale;
       persistedState.scale = scale;
       document.querySelectorAll('.scale-btn').forEach(b => {
-        b.classList.toggle('active', parseInt(b.dataset.scale) === scale);
+        const active = parseInt(b.dataset.scale) === scale;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-pressed', String(active));
       });
     }
     if (s.outputFormat && !persistedState.outputFormat) {
@@ -222,7 +238,7 @@ async function checkFfmpeg() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4000);
   try {
-    const response = await fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal });
+    const response = await fetch(`http://127.0.0.1:${getPythonPort()}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal });
     if (!response.ok) throw new Error(`Health request failed (${response.status})`);
     const data = await response.json();
     if (!data.ffmpeg) {
@@ -244,8 +260,12 @@ function bindEvents() {
   document.querySelectorAll('.scale-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       if (isProcessing || isPreparing) return;
-      document.querySelectorAll('.scale-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.scale-btn').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-pressed', 'false');
+      });
       btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
       scale = parseInt(btn.dataset.scale);
       persistedState.scale = scale;
       if (modelProfile === 'anime' && scale === 2) {
@@ -479,14 +499,19 @@ function bindEvents() {
   previewClose.addEventListener('click', closePreview);
   previewOverlay.addEventListener('click', closePreview);
   previewSlider.addEventListener('mousedown', (e) => { e.preventDefault(); previewDragging = true; });
+  previewSlider.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const current = Number(previewSlider.getAttribute('aria-valuenow')) || 50;
+    setPreviewPosition(e.key === 'Home' ? 2 : e.key === 'End' ? 98 : current + (e.key === 'ArrowRight' ? 5 : -5));
+  });
 
   _mouseMoveHandler = (e) => {
     if (!previewDragging) return;
     const rect = previewContainer.getBoundingClientRect();
     let x = (e.clientX - rect.left) / rect.width;
     x = Math.max(0.02, Math.min(0.98, x));
-    previewBeforeClip.style.width = `${x * 100}%`;
-    previewSlider.style.left = `${x * 100}%`;
+    setPreviewPosition(x * 100);
   };
   document.addEventListener('mousemove', _mouseMoveHandler);
 
@@ -494,7 +519,9 @@ function bindEvents() {
   document.addEventListener('mouseup', _mouseUpHandler);
 
   _keyDownHandler = (e) => {
-    if (e.key === 'Escape' && previewModal.classList.contains('active')) closePreview();
+    if (!previewModal.classList.contains('active')) return;
+    if (e.key === 'Escape') closePreview();
+    if (e.key === 'Tab') trapDialogFocus(e, previewModal.querySelector('.preview-dialog'));
   };
   document.addEventListener('keydown', _keyDownHandler);
 
@@ -508,7 +535,10 @@ function bindEvents() {
 }
 
 // ---- WebSocket ----
-function connectWebSocket(port) {
+function connectWebSocket() {
+  const port = getPythonPort();
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  connectedPythonPort = port;
   ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(pythonToken || '')}`);
   ws.onopen = () => {
     reconnectDelay = 1000; reconnectAttempts = 0;
@@ -523,6 +553,8 @@ function connectWebSocket(port) {
     handleWSMessage(data);
   };
   ws.onclose = () => {
+    ws = null;
+    connectedPythonPort = null;
     if (cancelWatchdog) { clearTimeout(cancelWatchdog); cancelWatchdog = null; }
     if (!statusText) return; // tool was unloaded
     if (isProcessing) {
@@ -563,15 +595,23 @@ function connectWebSocket(port) {
         }
       });
     }
-    reconnectTimerId = setTimeout(() => connectWebSocket(port), delay);
+    reconnectTimerId = setTimeout(connectWebSocket, delay);
   };
   ws.onerror = () => { if (statusText) statusText.textContent = 'Connection error'; };
+}
+
+function onBackendStatus(status = {}) {
+  const nextPort = status.port;
+  if (status.state !== 'ready' || !Number.isInteger(nextPort) || nextPort === connectedPythonPort) return;
+  if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
+  if (ws) ws.close();
+  else connectWebSocket();
 }
 
 function backendReachable() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
-  return fetch(`http://127.0.0.1:${pythonPort}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal })
+  return fetch(`http://127.0.0.1:${getPythonPort()}/health?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal })
     .then(r => r.ok)
     .catch(() => false)
     .finally(() => clearTimeout(timeout));
@@ -796,6 +836,8 @@ async function confirmExistingOutput(filePath) {
       overwriteAlwaysBtn.removeEventListener('click', onAlways);
       overwriteConfirmBtn.removeEventListener('click', onCreateCopy);
       document.removeEventListener('keydown', onKeyDown);
+      if (overwriteReturnFocus?.isConnected) overwriteReturnFocus.focus();
+      overwriteReturnFocus = null;
 
       if (result.always) {
         try {
@@ -815,8 +857,10 @@ async function confirmExistingOutput(filePath) {
     const onKeyDown = (e) => {
       if (e.key === 'Escape') finish({ proceed: false });
       if (e.key === 'Enter') finish({ proceed: true });
+      if (e.key === 'Tab') trapDialogFocus(e, overwriteModal.querySelector('.upscaler-overwrite-dialog'));
     };
 
+    overwriteReturnFocus = document.activeElement;
     overwriteFileName.textContent = getFileName(filePath);
     overwriteFileName.title = filePath;
     overwriteSkipBtn.addEventListener('click', onSkip);
@@ -998,30 +1042,42 @@ function setBusyControls(busy) {
 // ---- Preview ----
 async function openPreview(file) {
   if (!file.output || file.type !== 'image') return;
+  previewReturnFocus = document.activeElement;
   previewTitle.textContent = file.name;
   previewModal.classList.add('active');
+  previewModal.setAttribute('aria-hidden', 'false');
+  previewClose.focus();
   const [beforeData, afterData] = await Promise.all([
     window.api.system.readImagePreview(file.path),
     window.api.system.readImagePreview(file.output)
   ]);
-  if (!beforeData || !afterData) { log('Failed to load preview images', 'error'); previewModal.classList.remove('active'); return; }
+  if (!beforeData || !afterData) { log('Failed to load preview images', 'error'); closePreview(); return; }
   previewBefore.src = beforeData;
   previewAfter.src = afterData;
-  previewBeforeClip.style.width = '50%';
-  previewSlider.style.left = '50%';
+  setPreviewPosition(50);
   requestAnimationFrame(() => {
     previewBefore.style.width = previewContainer.offsetWidth + 'px';
     previewBefore.style.height = previewContainer.offsetHeight + 'px';
   });
 }
 
+function setPreviewPosition(percent) {
+  const value = Math.max(2, Math.min(98, Number(percent) || 50));
+  previewBeforeClip.style.width = `${value}%`;
+  previewSlider.style.left = `${value}%`;
+  previewSlider.setAttribute('aria-valuenow', String(Math.round(value)));
+}
+
 function closePreview() {
   previewModal.classList.remove('active');
+  previewModal.setAttribute('aria-hidden', 'true');
   previewBefore.src = '';
   previewAfter.src = '';
+  if (previewReturnFocus?.isConnected) previewReturnFocus.focus();
+  previewReturnFocus = null;
 }
 
 // ---- Register ----
-window.registerTool('upscaler', { init, cleanup });
+window.registerTool('upscaler', { init, cleanup, onBackendStatus });
 
 })();

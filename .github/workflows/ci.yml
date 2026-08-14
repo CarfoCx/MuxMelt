@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Install lightweight Python smoke dependency
+        run: python -m pip install --disable-pip-version-check numpy==2.4.4
+
+      - name: Audit production dependencies
+        if: runner.os == 'Linux'
+        run: npm run audit:prod
+
+      - name: Run all smoke tests
+        run: npm test
+
+      - name: Build unpacked Windows app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node build/prepare-python.js slim --arch=x64
+          & .\node_modules\.bin\electron-builder.cmd `
+            --dir --win --x64 --config build/slim.json --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath 'dist/win-unpacked/MuxMelt.exe')) {
+            throw 'Packaging smoke did not produce MuxMelt.exe'
+          }
+
+  live-backend:
+    name: Live backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: build/backend-ci-requirements.txt
+
+      - name: Install live-backend dependencies
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check \
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.6.0+cpu
+          python -m pip install --disable-pip-version-check \
+            -r build/backend-ci-requirements.txt
+
+      - name: Run live backend smoke (skip is a failure)
+        run: node scripts/verify-live-backend.js

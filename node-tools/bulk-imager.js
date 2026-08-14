@@ -206,11 +206,18 @@ function escapeXml(str) {
     .replace(/'/g, '&apos;');
 }
 
-function registerIPC(ipcMain, getMainWindow) {
+function registerIPC(ipcMain, getMainWindow, jobRegistry = null) {
+  const assertJobStart = () => jobRegistry?.assertCanStart?.('Bulk image processing');
   const cancelledWindows = new Set();
   const activeWindows = new Set();
+  if (jobRegistry && typeof jobRegistry.register === 'function') {
+    jobRegistry.register('bulk-imager', () => {
+      for (const winId of activeWindows) cancelledWindows.add(winId);
+    });
+  }
 
   ipcMain.handle('bulk-imager-process', async (event, options = {}) => {
+    assertJobStart();
     options = options && typeof options === 'object' ? options : {};
     const {
       files,            // array of file paths
@@ -319,6 +326,7 @@ function registerIPC(ipcMain, getMainWindow) {
   });
 
   ipcMain.handle('bulk-imager-process-chain', async (event, options = {}) => {
+    assertJobStart();
     options = options && typeof options === 'object' ? options : {};
     const {
       files,            // array of file paths
@@ -467,6 +475,7 @@ function registerIPC(ipcMain, getMainWindow) {
   });
 
   ipcMain.handle('bulk-imager-info', async (event, filePath) => {
+    assertJobStart();
     try {
       if (typeof filePath !== 'string' || !isRegularFile(filePath)) {
         return { success: false, error: 'Image file was not found.' };

@@ -13,16 +13,29 @@ const AUDIO_CODECS = {
   ogg:  ['-c:a', 'libvorbis', '-b:a', '192k']
 };
 
-function registerIPC(ipcMain, getMainWindow) {
+function registerIPC(ipcMain, getMainWindow, jobRegistry = null) {
+  const assertJobStart = () => {
+    ffmpeg.throwIfCleanupFailed();
+    jobRegistry?.assertCanStart?.('Audio extraction');
+  };
   const activeCancels = new Map();
   const activeWindows = new Set();
   const cancelledWindows = new Set();
+  if (jobRegistry && typeof jobRegistry.register === 'function') {
+    jobRegistry.register('audio-extractor', async () => {
+      for (const winId of activeWindows) cancelledWindows.add(winId);
+      const cancellations = [...activeCancels.values()].map((cancel) => Promise.resolve().then(cancel));
+      await Promise.all(cancellations);
+      ffmpeg.throwIfCleanupFailed();
+    });
+  }
 
   const throwIfCancelled = (winId) => {
     if (cancelledWindows.has(winId)) throw new Error('Audio extraction cancelled by user.');
   };
 
   ipcMain.handle('audio-extractor-extract', async (event, options = {}) => {
+    assertJobStart();
     const winId = event.sender.id;
     options = options && typeof options === 'object' ? options : {};
     const {
@@ -201,11 +214,13 @@ function registerIPC(ipcMain, getMainWindow) {
     }
     cancelledWindows.add(winId);
     const cancel = activeCancels.get(winId);
-    if (cancel) cancel();
+    if (cancel) await cancel();
+    ffmpeg.throwIfCleanupFailed();
     return { success: true };
   });
 
   ipcMain.handle('audio-extractor-probe', async (event, filePath) => {
+    assertJobStart();
     try {
       if (typeof filePath !== 'string' || !filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
         return { success: false, error: 'Input media file was not found.' };

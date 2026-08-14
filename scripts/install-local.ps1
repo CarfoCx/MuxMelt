@@ -4,8 +4,77 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $defaultTarget = Join-Path $env:LOCALAPPDATA 'Programs\MuxMelt'
+
+function Get-NormalizedPath {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  return [System.IO.Path]::GetFullPath(
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+  ).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+}
+
+function Test-PathsOverlap {
+  param(
+    [Parameter(Mandatory = $true)][string]$First,
+    [Parameter(Mandatory = $true)][string]$Second
+  )
+
+  $separator = [System.IO.Path]::DirectorySeparatorChar
+  return $First.Equals($Second, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $First.StartsWith("$Second$separator", [System.StringComparison]::OrdinalIgnoreCase) -or
+    $Second.StartsWith("$First$separator", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-NoReparsePointsUnder {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $pending = [System.Collections.Generic.Stack[string]]::new()
+  $pending.Push($Path)
+  while ($pending.Count -gt 0) {
+    $current = $pending.Pop()
+    foreach ($item in Get-ChildItem -LiteralPath $current -Force) {
+      if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to replace a tree containing a symbolic link or junction: $($item.FullName)"
+      }
+      if ($item.PSIsContainer) {
+        $pending.Push($item.FullName)
+      }
+    }
+  }
+}
+
+function Assert-SafeInstallTarget {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $normalized = Get-NormalizedPath -Path $Path
+  $root = [System.IO.Path]::GetPathRoot($normalized).TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+  )
+
+  if ($normalized.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to install to a drive root: $normalized"
+  }
+  if (-not (Split-Path -Leaf $normalized).Equals('MuxMelt', [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "The install directory must end in 'MuxMelt': $normalized"
+  }
+  if (Test-PathsOverlap -First $normalized -Second (Get-NormalizedPath -Path $repoRoot)) {
+    throw 'The install directory cannot contain or be inside the source repository.'
+  }
+  if (Test-Path -LiteralPath $normalized) {
+    $targetItem = Get-Item -LiteralPath $normalized -Force
+    if (($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Refusing to replace a symbolic link or junction: $normalized"
+    }
+    if (-not $targetItem.PSIsContainer) {
+      throw "Install target exists and is not a directory: $normalized"
+    }
+    Assert-NoReparsePointsUnder -Path $normalized
+  }
+  return $normalized
+}
 
 function Select-InstallDirectory {
   param([string]$DefaultPath)
@@ -43,30 +112,68 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
   $InstallDir = Select-InstallDirectory -DefaultPath $defaultTarget
 }
 
-$target = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallDir)
+$target = Assert-SafeInstallTarget -Path $InstallDir
 $electron = Join-Path $target 'node_modules\electron\dist\electron.exe'
 
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'node_modules\electron\dist\electron.exe'))) {
-  throw 'Electron runtime is missing. Run npm install before installing locally.'
+  throw 'Electron runtime is missing. Run npm ci before installing locally.'
 }
 
-Get-Process MuxMelt,electron -ErrorAction SilentlyContinue |
-  Where-Object {
-    $_.Path -like "$target*" -or $_.Path -like "$repoRoot*"
-  } |
-  Stop-Process -Force -ErrorAction SilentlyContinue
+$targetParent = Split-Path -Parent $target
+New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
+$operationId = [guid]::NewGuid().ToString('N')
+$staging = Join-Path $targetParent ".MuxMelt.install-$operationId"
+$backup = Join-Path $targetParent ".MuxMelt.previous-$operationId"
 
-if (Test-Path -LiteralPath $target) {
-  Remove-Item -LiteralPath $target -Recurse -Force
-}
-New-Item -ItemType Directory -Path $target | Out-Null
+try {
+  New-Item -ItemType Directory -Path $staging | Out-Null
+  $excludeDirs = @(
+    (Join-Path $repoRoot '.git'),
+    (Join-Path $repoRoot 'dist'),
+    (Join-Path $repoRoot 'build\bundle')
+  )
+  & robocopy $repoRoot $staging /E /COPY:DAT /DCOPY:DAT /XJ /R:2 /W:1 /XD $excludeDirs | Out-Null
+  if ($LASTEXITCODE -ge 8) {
+    throw "Copy failed with robocopy exit code $LASTEXITCODE"
+  }
+  Assert-NoReparsePointsUnder -Path $staging
 
-$excludeDirs = @('.git')
-robocopy $repoRoot $target /E /XD $excludeDirs | Out-Null
-if ($LASTEXITCODE -ge 8) {
-  throw "Copy failed with robocopy exit code $LASTEXITCODE"
+  Get-Process MuxMelt,electron -ErrorAction SilentlyContinue |
+    Where-Object {
+      try {
+        $processPath = Get-NormalizedPath -Path $_.Path
+        return $processPath.StartsWith(
+          "$target$([System.IO.Path]::DirectorySeparatorChar)",
+          [System.StringComparison]::OrdinalIgnoreCase
+        ) -or $processPath.StartsWith(
+          "$(Get-NormalizedPath -Path $repoRoot)$([System.IO.Path]::DirectorySeparatorChar)",
+          [System.StringComparison]::OrdinalIgnoreCase
+        )
+      } catch {
+        return $false
+      }
+    } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+  if (Test-Path -LiteralPath $target) {
+    Move-Item -LiteralPath $target -Destination $backup
+  }
+  try {
+    Move-Item -LiteralPath $staging -Destination $target
+  } catch {
+    if (Test-Path -LiteralPath $backup) {
+      Move-Item -LiteralPath $backup -Destination $target
+    }
+    throw
+  }
+  if (Test-Path -LiteralPath $backup) {
+    Remove-Item -LiteralPath $backup -Recurse -Force
+  }
+} finally {
+  if (Test-Path -LiteralPath $staging) {
+    Remove-Item -LiteralPath $staging -Recurse -Force
+  }
 }
-Remove-Item -LiteralPath (Join-Path $target 'dist') -Recurse -Force -ErrorAction SilentlyContinue
 
 Get-ChildItem -LiteralPath $target -Recurse -Force |
   Unblock-File -ErrorAction SilentlyContinue

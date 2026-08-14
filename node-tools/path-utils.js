@@ -61,6 +61,9 @@ function validateOutputName(outputName) {
 /**
  * Common file extension sets used across tools for input validation.
  */
+// Note: '.tim' is intentionally absent. Only the format converter can read
+// PlayStation TIM files (it decodes them itself); the sharp- and PIL-backed
+// tools cannot, so this shared set must not advertise support for them.
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tiff', '.tif', '.bmp', '.avif', '.gif', '.svg', '.heic', '.heif']);
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov']);
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.aac', '.m4a', '.wma']);
@@ -124,6 +127,7 @@ const MAGIC_BYTES = {
   '.bmp':  [0x42, 0x4D],
   '.tiff': [[0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A]],
   '.tif':  [[0x49, 0x49, 0x2A, 0x00], [0x4D, 0x4D, 0x00, 0x2A]],
+  '.tim':  null, // PSX header tag + pixel mode checked specially
   '.webp': null, // RIFF header checked specially
   '.avif': null, // ISO BMFF ftyp checked specially
   '.svg':  null, // XML text checked specially
@@ -206,6 +210,12 @@ function validateMagicBytes(filePath) {
   if (ext === '.mp3') {
     if (bytesRead >= 3 && header.slice(0, 3).toString('ascii') === 'ID3') return true;
     return bytesRead >= 2 && header[0] === 0xFF && (header[1] & 0xE0) === 0xE0;
+  }
+  if (ext === '.tim') {
+    // Required lazily: tim-decoder is only needed when a TIM is actually seen,
+    // and this keeps path-utils cheap to require for every other tool.
+    const { isTimBuffer } = require('./tim-decoder');
+    return bytesRead >= 8 && isTimBuffer(header.subarray(0, bytesRead));
   }
 
   if (sigs === null) return true;

@@ -1,6 +1,6 @@
 {
   "name": "muxmelt",
-  "version": "1.2.11",
+  "version": "1.3.0",
   "description": "All-in-one media toolkit",
   "main": "main.js",
   "author": "Carfo Industries",
@@ -8,10 +8,15 @@
     "type": "git",
     "url": "https://github.com/CarfoCx/MuxMelt.git"
   },
+  "funding": {
+    "type": "ko-fi",
+    "url": "https://ko-fi.com/carfo"
+  },
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node test/static-smoke.js && node test/smoke.js",
+    "test": "node test/static-smoke.js && node test/job-registry-smoke.js && node test/process-supervisor-smoke.js && node test/component-offline-transition-smoke.js && node test/component-async-validation-smoke.js && node test/python-lock-smoke.js && node test/ffmpeg-local-protocol-smoke.js && node test/tim-decoder-smoke.js && node test/torrent-lifecycle-smoke.js && node test/url-downloader-process-tree-smoke.js && node test/url-downloader-privacy-smoke.js && node test/updater-offline-smoke.js && node test/updater-lifecycle-smoke.js && node test/backend-readiness-smoke.js && node scripts/run-python-test.js test/backend-boundary-smoke.py && node scripts/run-python-test.js test/backend-smoke.py && node scripts/run-python-test.js test/llm-readiness-smoke.py && node scripts/run-python-test.js test/stem-offline-boundary-smoke.py && node scripts/run-python-test.js test/model-download-boundary-smoke.py && node scripts/run-python-test.js test/tts-offline-privacy-smoke.py && node scripts/run-python-test.js test/upscaler-memory-smoke.py && node test/build-supply-chain-smoke.js",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
     "build:full:win": "node build/prepare-python.js full && electron-builder --win --publish never",
     "build:full:mac": "node build/prepare-python.js full && electron-builder --mac --publish never",
     "build:slim:win": "node build/prepare-python.js slim && electron-builder --win --config build/slim.json --publish never",
@@ -25,68 +30,23 @@
     "build:linux:x64": "node build/prepare-python.js slim --arch=x64 && electron-builder --linux --x64 --config build/slim.json --publish never"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9",
-    "jsqr": "^1.4.0",
-    "qrcode": "^1.5.4",
-    "sharp": "^0.34.5",
-    "webtorrent": "^3.0.16"
+    "jsqr": "1.4.0",
+    "qrcode": "1.5.4",
+    "sharp": "0.35.3",
+    "webtorrent": "3.0.21"
   },
   "devDependencies": {
-    "electron": "^41.3.0",
-    "electron-builder": "^26.8.1",
-    "ffmpeg-static": "^5.3.0",
-    "ffprobe-static": "^3.1.0"
+    "electron": "41.10.5",
+    "electron-builder": "26.15.3",
+    "js-yaml": "4.3.1"
+  },
+  "overrides": {
+    "ip": "npm:neoip@2.1.0",
+    "ip-address": "10.5.0"
   },
   "build": {
-    "appId": "com.carfocx.muxmelt",
-    "productName": "MuxMelt",
-    "directories": {
-      "output": "dist"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "CarfoCx",
-        "repo": "MuxMelt"
-      }
-    ],
-    "files": [
-      "main.js",
-      "preload.js",
-      "setup-preload.js",
-      "package.json",
-      "build/icon.png",
-      "src/**/*",
-      "renderer/**/*",
-      "node-tools/**/*",
-      "python/**/*",
-      "!python/weights/**",
-      "!python/**/__pycache__/**",
-      "!**/*.pyc"
-    ],
-    "asarUnpack": [
-      "node_modules/sharp/**",
-      "node_modules/@img/**",
-      "python/**"
-    ],
-    "extraResources": [
-      {
-        "from": "build/bundle/python-env",
-        "to": "python-env",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "build/bundle/ffmpeg",
-        "to": "ffmpeg",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
+    "extends": "build/base.json",
     "win": {
-      "signAndEditExecutable": false,
       "target": "nsis",
       "icon": "build/icon.png"
     },

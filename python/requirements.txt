@@ -1,23 +1,20 @@
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=2.0.0
-opencv-python>=4.8.0
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-numpy>=1.24.0
-Pillow>=10.0.0
-pynvml>=11.0.0
-demucs>=4.0.0
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+opencv-python==4.13.0.92
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+numpy==2.4.4
+Pillow==12.2.0
+nvidia-ml-py==13.610.43
+demucs==4.1.0
 # rembg's GPU extra intentionally has no ONNX dependency on macOS. Install the
 # CPU backend there so the package cannot be present while every operation
 # fails at import time. The GPU runtime also provides a CPU execution fallback
 # on supported Windows/Linux hosts.
-rembg[cpu]; sys_platform == 'darwin'
-rembg[gpu]; sys_platform != 'darwin'
-edge-tts>=6.1.0
-yt-dlp[default,curl-cffi]>=2024.8.6
-# Pinned to the newest version with prebuilt CPU wheels on the abetlen index
-# (covers cp313 win_amd64 / macosx arm64 / linux x86_64). The build/setup
-# scripts add `--extra-index-url .../whl/cpu --prefer-binary` so this installs
-# from a wheel instead of compiling from source (no C++ toolchain needed).
-llama-cpp-python==0.3.19
+rembg[cpu]==2.0.75; sys_platform == 'darwin'
+onnxruntime==1.26.0; sys_platform == 'darwin'
+rembg[gpu]==2.0.75; sys_platform != 'darwin'
+onnxruntime-gpu==1.26.0; sys_platform != 'darwin'
+yt-dlp[default,curl-cffi]==2026.7.4
+curl-cffi==0.14.0

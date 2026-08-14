@@ -1,18 +1,14 @@
 name: Release Build (Windows)
 
-# Windows-only release pipeline. Other platforms are paused until the app is
-# stabilised. When ready to port, add more jobs back (see git history for the
-# previous multi-OS matrix).
-#
-# Code signing is wired in but OPTIONAL: the build runs unsigned until the
-# SignPath credentials below are configured, then it signs automatically with
-# no further changes.
-#
-# Required to enable signing (set in repo Settings):
-#   Secret  SIGNPATH_API_TOKEN          - SignPath API user token
-#   Variable SIGNPATH_ORGANIZATION_ID   - your SignPath organization id (GUID)
-#   Variable SIGNPATH_PROJECT_SLUG       - SignPath project slug (default: muxmelt)
-#   Variable SIGNPATH_POLICY_SLUG        - signing policy slug (default: release-signing)
+# Releases are intentionally gated on two-stage Authenticode signing: the app
+# executable is signed before NSIS packages it, then the completed installer is
+# signed. Configure these repository secrets/variables before running a release:
+#   Secret   SIGNPATH_API_TOKEN
+#   Variable SIGNPATH_ORGANIZATION_ID
+#   Variable SIGNPATH_PROJECT_SLUG
+#   Variable SIGNPATH_POLICY_SLUG
+#   Variable SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG
+#   Variable SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG
 
 on:
   push:
@@ -21,128 +17,295 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to upload assets to
+        description: Existing v-prefixed tag to release (must match package.json)
         required: true
+        type: string
 
 permissions:
+  actions: read
   contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    name: Windows x64
+    name: Windows x64 (signed)
     runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Check out the tagged source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
+          cache: npm
 
-      - name: Install dependencies
-        run: npm install
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: build/backend-ci-requirements.txt
 
-      - name: Clean build output
+      - name: Validate release tag and commit
         shell: bash
-        run: rm -rf dist build/bundle
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          expected="v${version}"
+          if [ "$RELEASE_TAG" != "$expected" ]; then
+            echo "::error::Release tag $RELEASE_TAG does not match package.json ($expected)"
+            exit 1
+          fi
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG" || {
+            echo "::error::Tag $RELEASE_TAG does not exist"
+            exit 1
+          }
+          tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
+          head_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$head_commit" ]; then
+            echo "::error::Checked-out commit $head_commit is not tagged by $RELEASE_TAG ($tag_commit)"
+            exit 1
+          fi
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Build (slim Windows installer)
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npm run build:slim:win:x64
-
-      # Detect whether SignPath is configured. Secrets cannot be used directly
-      # in step `if:` conditions, so surface a boolean output instead.
-      - name: Detect signing configuration
-        id: signing
-        shell: bash
+      - name: Require complete SignPath configuration
+        shell: pwsh
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          SIGNPATH_APP_CONFIG: ${{ vars.SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG }}
+          SIGNPATH_INSTALLER_CONFIG: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
         run: |
-          if [ -n "$SIGNPATH_API_TOKEN" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "SignPath signing: ENABLED"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "SignPath signing: disabled (no SIGNPATH_API_TOKEN) - shipping unsigned"
-          fi
+          $required = @(
+            'SIGNPATH_API_TOKEN',
+            'SIGNPATH_ORGANIZATION_ID',
+            'SIGNPATH_PROJECT_SLUG',
+            'SIGNPATH_POLICY_SLUG',
+            'SIGNPATH_APP_CONFIG',
+            'SIGNPATH_INSTALLER_CONFIG'
+          )
+          $missing = $required | Where-Object {
+            [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+          }
+          if ($missing) {
+            throw "Release signing is mandatory. Missing configuration: $($missing -join ', ')"
+          }
 
-      - name: Upload unsigned installer for signing
-        id: unsigned
-        if: steps.signing.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm run audit:prod
+
+      - name: Install minimal live-backend test dependencies
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check \
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.6.0+cpu
+          python -m pip install --disable-pip-version-check \
+            -r build/backend-ci-requirements.txt
+
+      - name: Run all smoke tests
+        run: npm test
+
+      - name: Prove the live backend layer did not skip
+        run: node scripts/verify-live-backend.js
+
+      - name: Prepare the deterministic slim bundle
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath dist -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath build/bundle -Recurse -Force -ErrorAction SilentlyContinue
+          node build/prepare-python.js slim --arch=x64
+
+      - name: Build unpacked application
+        shell: pwsh
+        run: |
+          & .\node_modules\.bin\electron-builder.cmd `
+            --dir --win --x64 --config build/slim.json --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath 'dist/win-unpacked/MuxMelt.exe')) {
+            throw 'electron-builder did not produce dist/win-unpacked/MuxMelt.exe'
+          }
+
+      - name: Upload unpacked app executable for signing
+        id: unsigned_app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-app-executable
+          path: dist/win-unpacked/MuxMelt.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign unpacked app executable
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned_app.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/signed-app
+
+      - name: Install and verify signed app executable
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem -LiteralPath dist/signed-app -Recurse -File -Filter MuxMelt.exe)
+          if ($signed.Count -ne 1) {
+            throw "Expected exactly one signed MuxMelt.exe, found $($signed.Count)"
+          }
+          Copy-Item -LiteralPath $signed[0].FullName `
+            -Destination dist/win-unpacked/MuxMelt.exe -Force
+          $signature = Get-AuthenticodeSignature -LiteralPath dist/win-unpacked/MuxMelt.exe
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "App executable signature is not valid: $($signature.Status) $($signature.StatusMessage)"
+          }
+          if (-not $signature.SignerCertificate) {
+            throw 'App executable has no signer certificate'
+          }
+          "APP_SIGNER_THUMBPRINT=$($signature.SignerCertificate.Thumbprint)" >> $env:GITHUB_ENV
+
+      - name: Package signed app into unsigned installer
+        shell: pwsh
+        run: |
+          & .\node_modules\.bin\electron-builder.cmd `
+            --win nsis --x64 `
+            --prepackaged dist/win-unpacked `
+            --config build/slim.json --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installers = @(Get-ChildItem -LiteralPath dist -File `
+            -Filter 'MuxMelt-*-windows-x64-setup.exe')
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one installer, found $($installers.Count)"
+          }
+
+      - name: Upload installer for signing
+        id: unsigned_installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unsigned-installer
           path: dist/MuxMelt-*-windows-x64-setup.exe
           if-no-files-found: error
+          retention-days: 1
 
-      - name: Submit to SignPath for signing
-        id: signpath
-        if: steps.signing.outputs.enabled == 'true'
-        uses: signpath/github-action-submit-signing-request@v1
+      - name: Sign installer
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'muxmelt' }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
-          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned_installer.outputs.artifact-id }}
           wait-for-completion: true
-          output-artifact-directory: dist/signed
+          output-artifact-directory: dist/signed-installer
 
-      - name: Swap in signed installer and refresh update feed
-        if: steps.signing.outputs.enabled == 'true'
+      - name: Install and verify signed installer
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem -LiteralPath dist/signed-installer -Recurse -File `
+            -Filter 'MuxMelt-*-windows-x64-setup.exe')
+          if ($signed.Count -ne 1) {
+            throw "Expected exactly one signed installer, found $($signed.Count)"
+          }
+          $destination = Join-Path (Resolve-Path dist) $signed[0].Name
+          Copy-Item -LiteralPath $signed[0].FullName -Destination $destination -Force
+
+          $installerSignature = Get-AuthenticodeSignature -LiteralPath $destination
+          if ($installerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Installer signature is not valid: $($installerSignature.Status) $($installerSignature.StatusMessage)"
+          }
+          if ($installerSignature.SignerCertificate.Thumbprint -ne $env:APP_SIGNER_THUMBPRINT) {
+            throw 'Installer and app executable were not signed by the same certificate'
+          }
+          $appSignature = Get-AuthenticodeSignature -LiteralPath dist/win-unpacked/MuxMelt.exe
+          if ($appSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Packaged app executable signature became invalid: $($appSignature.Status)"
+          }
+
+          Remove-Item -Path dist/*.blockmap -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path dist/latest*.yml -Force -ErrorAction SilentlyContinue
+
+      - name: Generate CycloneDX dependency SBOM
         shell: bash
         run: |
-          # SignPath returns the signed exe with its original name. Move it back
-          # over dist/, drop the now-stale blockmap, and rehash latest.yml so the
-          # auto-updater's integrity check matches the signed bytes.
-          signed=$(find dist/signed -name 'MuxMelt-*-windows-x64-setup.exe' | head -n1)
-          if [ -z "$signed" ]; then
-            echo "::error::SignPath did not return a signed installer"; exit 1
-          fi
-          mv -f "$signed" dist/
-          rm -f dist/*.blockmap
-          npm install js-yaml --no-save
-          node .github/scripts/patch-latest-yml.js dist/latest.yml dist
+          set -euo pipefail
+          sbom="dist/MuxMelt-${PACKAGE_VERSION}-sbom.cdx.json"
+          npm sbom --sbom-format cyclonedx > "$sbom"
+          node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" "$sbom"
+          echo "SBOM_FILE=$sbom" >> "$GITHUB_ENV"
 
-      - name: Create release if needed
+      - name: Create SHA-256 checksums
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -LiteralPath dist -File `
+            -Filter 'MuxMelt-*-windows-x64-setup.exe')
+          if ($installer.Count -ne 1) {
+            throw "Expected exactly one release installer, found $($installer.Count)"
+          }
+          $checksum = "dist/MuxMelt-$env:PACKAGE_VERSION-windows-x64.sha256.txt"
+          $releaseFiles = @(
+            $installer[0].FullName,
+            (Resolve-Path $env:SBOM_FILE).Path
+          )
+          $lines = foreach ($file in $releaseFiles) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path -Leaf $file)"
+          }
+          $lines | Set-Content -LiteralPath $checksum -Encoding ascii
+          "CHECKSUM_FILE=$checksum" >> $env:GITHUB_ENV
+          "INSTALLER_FILE=dist/$($installer[0].Name)" >> $env:GITHUB_ENV
+
+      - name: Create or reuse a draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
         shell: bash
         run: |
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            is_draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+            if [ "$is_draft" != "true" ]; then
+              echo "::error::Release $RELEASE_TAG is already published; refusing to overwrite assets"
+              exit 1
+            fi
+          else
             gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
+              --verify-tag \
+              --draft \
+              --target "$(git rev-parse HEAD)" \
               --title "MuxMelt $RELEASE_TAG" \
-              --notes "Windows build."
+              --notes "Signed Windows x64 build."
+          fi
 
-      - name: Create checksum
-        shell: bash
-        run: |
-          version=$(node -p "require('./package.json').version")
-          checksum_file="dist/MuxMelt-${version}-windows-x64.sha256.txt"
-          echo "CHECKSUM_FILE=$checksum_file" >> "$GITHUB_ENV"
-          : > "$checksum_file"
-          hash_cmd="sha256sum"
-          command -v shasum >/dev/null 2>&1 && hash_cmd="shasum -a 256"
-          for f in dist/MuxMelt-*-windows-x64-setup.exe; do
-            [ -f "$f" ] && $hash_cmd "$f" >> "$checksum_file"
-          done
-
-      - name: Upload assets to release
+      - name: Upload immutable release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
         shell: bash
         run: |
-          # Upload the installer, update feed, checksum, and blockmap if present
-          # (the blockmap is removed when the artifact was re-signed).
-          for f in \
-            dist/MuxMelt-*-windows-x64-setup.exe \
-            dist/MuxMelt-*-windows-x64-setup.exe.blockmap \
-            dist/latest.yml \
-            "$CHECKSUM_FILE"; do
-            [ -f "$f" ] && gh release upload "$RELEASE_TAG" "$f" --clobber
-          done
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            "$INSTALLER_FILE" \
+            "$CHECKSUM_FILE" \
+            "$SBOM_FILE"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$env:RELEASE_TAG" --draft=false --latest

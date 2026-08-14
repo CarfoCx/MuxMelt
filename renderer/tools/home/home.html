@@ -1,0 +1,71 @@
+<div class="tool-body home-page">
+  <section class="home-hero" aria-labelledby="homeTitle">
+    <div>
+      <p class="home-eyebrow">PRIVATE MEDIA WORKBENCH</p>
+      <h2 id="homeTitle">What would you like to make?</h2>
+      <p class="home-intro">Drop almost any image, video, or audio file. MuxMelt will suggest useful next steps without uploading it.</p>
+    </div>
+    <div class="home-trust" aria-label="Privacy summary">
+      <span>No account</span><span>No ads</span><span>No analytics</span>
+    </div>
+  </section>
+
+  <section class="home-drop-zone" id="dropZone" role="button" tabindex="0" aria-describedby="homeDropHint">
+    <div class="home-drop-icon" aria-hidden="true">+</div>
+    <div class="home-drop-copy">
+      <strong>Drop files here</strong>
+      <span>or <button type="button" class="drop-zone-link" id="browseBtn">choose files</button></span>
+    </div>
+    <p id="homeDropHint">Images, video, and audio stay on this device unless you choose a network tool.</p>
+  </section>
+
+  <section class="home-suggestions" id="homeSuggestions" aria-labelledby="suggestionsTitle" hidden>
+    <div class="home-section-heading">
+      <div>
+        <h3 id="suggestionsTitle">Good options for these files</h3>
+        <p id="selectedFileSummary" aria-live="polite"></p>
+      </div>
+      <button type="button" class="home-clear-btn" id="clearSelectionBtn">Clear</button>
+    </div>
+    <div class="home-action-grid" id="suggestionGrid"></div>
+  </section>
+
+  <section class="home-quick" aria-labelledby="quickToolsTitle">
+    <div class="home-section-heading">
+      <div>
+        <h3 id="quickToolsTitle">Start with a tool</h3>
+        <p>Common jobs, ready when you are.</p>
+      </div>
+    </div>
+    <div class="home-tool-grid">
+      <button type="button" class="home-tool-card" data-home-tool="format-converter"><span aria-hidden="true">&#8644;</span><strong>Convert format</strong><small>Image, video, or audio</small></button>
+      <button type="button" class="home-tool-card" data-home-tool="video-compressor"><span aria-hidden="true">&#8681;</span><strong>Shrink a video</strong><small>Keep it easy to share</small></button>
+      <button type="button" class="home-tool-card" data-home-tool="bulk-imager"><span aria-hidden="true">&#9638;</span><strong>Edit an image</strong><small>Crop, resize, and adjust</small></button>
+      <button type="button" class="home-tool-card" data-home-tool="stem-separator"><span aria-hidden="true">&#9835;</span><strong>Split a song</strong><small>Vocals, drums, bass, and more</small></button>
+    </div>
+  </section>
+
+  <section class="home-recent" id="homeRecentSection" aria-labelledby="homeRecentTitle" hidden>
+    <div class="home-section-heading">
+      <div><h3 id="homeRecentTitle">Recent outputs</h3><p>Stored only on this device.</p></div>
+      <button type="button" class="home-clear-btn" id="clearRecentHomeBtn">Clear history</button>
+    </div>
+    <div class="home-recent-list" id="homeRecentList"></div>
+  </section>
+
+  <aside class="home-support" id="homeSupportCard" aria-labelledby="homeSupportTitle" hidden>
+    <div>
+      <h3 id="homeSupportTitle">MuxMelt has been useful</h3>
+      <p>You have finished quite a few files. If it has saved you time, an optional donation helps keep it free, private, and ad-free.</p>
+    </div>
+    <div class="home-support-actions">
+      <button type="button" class="btn btn-donate" id="homeDonateBtn">Support development</button>
+      <button type="button" class="btn btn-secondary" id="dismissSupportBtn">No thanks</button>
+    </div>
+  </aside>
+
+  <footer class="home-privacy-note">
+    <span>Local tools, including Text to Speech, do not upload your media. Downloaders, update checks, torrents, and optional installs use the network.</span>
+    <button type="button" id="homePrivacyBtn">Review privacy controls</button>
+  </footer>
+</div>

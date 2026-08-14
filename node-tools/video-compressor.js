@@ -52,16 +52,29 @@ function publishTempFile(tempPath, desiredPath) {
   throw new Error('Could not reserve a unique output filename.');
 }
 
-function registerIPC(ipcMain, getMainWindow) {
+function registerIPC(ipcMain, getMainWindow, jobRegistry = null) {
+  const assertJobStart = () => {
+    ffmpeg.throwIfCleanupFailed();
+    jobRegistry?.assertCanStart?.('Video compression');
+  };
   const activeCancels = new Map();
   const activeWindows = new Set();
   const cancelledWindows = new Set();
+  if (jobRegistry && typeof jobRegistry.register === 'function') {
+    jobRegistry.register('video-compressor', async () => {
+      for (const winId of activeWindows) cancelledWindows.add(winId);
+      const cancellations = [...activeCancels.values()].map((cancel) => Promise.resolve().then(cancel));
+      await Promise.all(cancellations);
+      ffmpeg.throwIfCleanupFailed();
+    });
+  }
 
   const throwIfCancelled = (winId) => {
     if (cancelledWindows.has(winId)) throw new Error('Video compression cancelled by user.');
   };
 
   ipcMain.handle('video-compressor-compress', async (event, options = {}) => {
+    assertJobStart();
     const winId = event.sender.id;
     options = options && typeof options === 'object' ? options : {};
     const {
@@ -444,11 +457,13 @@ function registerIPC(ipcMain, getMainWindow) {
     }
     cancelledWindows.add(winId);
     const cancel = activeCancels.get(winId);
-    if (cancel) cancel();
+    if (cancel) await cancel();
+    ffmpeg.throwIfCleanupFailed();
     return { success: true };
   });
 
   ipcMain.handle('video-compressor-estimate', async (event, options) => {
+    assertJobStart();
     // Rough size estimate based on CRF and duration
     try {
       options = options && typeof options === 'object' ? options : {};
@@ -478,6 +493,7 @@ function registerIPC(ipcMain, getMainWindow) {
   });
 
   ipcMain.handle('video-compressor-probe', async (event, filePath) => {
+    assertJobStart();
     try {
       if (!isRegularFile(filePath)) return { success: false, error: 'Input video was not found.' };
       const info = await ffmpeg.probeVideoInfo(filePath);

@@ -32,6 +32,7 @@ let cropAspectRatio = null;
 
 let flipH = false;
 let flipV = false;
+let editorReturnFocus = null;
 
 async function init(ctx) {
   log = ctx.log;
@@ -162,12 +163,28 @@ async function browseForImage() {
 function bindEditorEvents() {
   document.getElementById('editorClose').addEventListener('click', closeEditor);
   editorOverlay.addEventListener('click', closeEditor);
+  editorModal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeEditor();
+    }
+    if (event.key === 'Tab') {
+      const focusable = Array.from(editorModal.querySelectorAll('button, [tabindex]:not([tabindex="-1"])'))
+        .filter(element => !element.disabled && element.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  });
 
   document.querySelectorAll('.editor-tool').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.editor-tool').forEach(item => item.classList.remove('active'));
       document.querySelectorAll('.editor-option-panel').forEach(panel => panel.classList.remove('active'));
       btn.classList.add('active');
+      document.querySelectorAll('.editor-tool').forEach(item => item.setAttribute('aria-pressed', String(item === btn)));
       editorTool = btn.dataset.tool;
       const panel = document.getElementById(`opt-${editorTool}`);
       if (panel) panel.classList.add('active');
@@ -187,6 +204,7 @@ function bindEditorEvents() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.aspect-btn').forEach(item => item.classList.remove('active'));
       btn.classList.add('active');
+      document.querySelectorAll('.aspect-btn').forEach(item => item.setAttribute('aria-pressed', String(item === btn)));
       const ratio = btn.dataset.ratio;
       if (ratio === 'free') {
         cropAspectRatio = null;
@@ -314,6 +332,7 @@ function updateFlipInfo() {
 }
 
 function openEditor(fileIndex) {
+  editorReturnFocus = document.activeElement;
   currentEditorFile = fileIndex;
   const file = files[fileIndex];
   document.getElementById('editorTitle').textContent = `Edit: ${file.name}`;
@@ -340,14 +359,19 @@ function openEditor(fileIndex) {
 
   editorOverlay.classList.add('active');
   editorModal.classList.add('active');
+  editorModal.setAttribute('aria-hidden', 'false');
+  document.getElementById('editorClose').focus();
 }
 
 function closeEditor() {
   if (isProcessing) return;
   if (editorOverlay) editorOverlay.classList.remove('active');
   if (editorModal) editorModal.classList.remove('active');
+  if (editorModal) editorModal.setAttribute('aria-hidden', 'true');
   if (cropOverlay) cropOverlay.style.display = 'none';
   currentEditorFile = null;
+  if (editorReturnFocus?.isConnected) editorReturnFocus.focus();
+  editorReturnFocus = null;
 }
 
 function drawEditor() {

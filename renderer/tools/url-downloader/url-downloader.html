@@ -20,7 +20,7 @@
 
 <div class="tool-body">
   <div class="module-banner">
-    <strong>Online Video Downloader.</strong> Download videos and audio from virtually any website. Supports automated cookie extraction, playlists, and post-processing.
+    <strong>Online Video Downloader.</strong> The URLs you enter are contacted to fetch metadata and media. A chosen site can direct yt-dlp to redirects or resources at other addresses, including private-network addresses, so use only sources you trust. Browser cookies are accessed only when you explicitly select a browser below.
   </div>
   
   <div class="url-download-panel">
@@ -29,12 +29,6 @@
         <h2>Universal Downloader</h2>
         <p>Paste video pages, channel URLs, or playlists to download media. Files will be saved in your selected folder.</p>
       </div>
-      <button class="update-ytdlp-btn" id="updateYtDlpBtn" title="Force update yt-dlp dependency to the latest version">
-        <svg class="update-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-        </svg>
-        <span>Update Downloader (yt-dlp)</span>
-      </button>
     </div>
 
     <!-- Main Settings Panel -->
@@ -61,8 +55,8 @@
       </div>
 
       <div class="setting-group">
-        <label>Browser Cookies:</label>
-        <select id="cookieBrowserSelect" class="settings-select url-quality-select" title="Auto-extract cookies from browser sessions for logins / premium sites">
+        <label for="cookieBrowserSelect">Browser Cookies:</label>
+        <select id="cookieBrowserSelect" class="settings-select url-quality-select" title="Use cookies only from the selected browser for login-required sites">
           <option value="">None (Default)</option>
           <option value="chrome">Chrome</option>
           <option value="edge">Edge</option>
@@ -72,6 +66,7 @@
           <option value="vivaldi">Vivaldi</option>
           <option value="safari">Safari</option>
         </select>
+        <p class="setting-desc">None never reads any browser profile. Selecting a browser lets yt-dlp read that browser's cookies for the requested site. The choice is not saved.</p>
       </div>
 
       <div class="setting-group">
@@ -79,6 +74,7 @@
         <button class="output-dir-btn" id="cookiesFileBtn" title="Upload a custom netscape cookies.txt file (Right-click to clear)">
           None (optional)
         </button>
+        <p class="setting-desc">Used only for this tool session. The private path and cookies are not copied into MuxMelt settings.</p>
       </div>
     </div>
 
@@ -190,18 +186,20 @@
           
           <div class="adv-setting-item">
             <label>Proxy URL:</label>
-            <input type="text" id="proxyInput" class="adv-text-input" placeholder="http://user:pass@ip:port">
+            <input type="text" id="proxyInput" class="adv-text-input" placeholder="https://proxy.example:8080" autocomplete="off" spellcheck="false">
+            <p class="setting-desc">Session only. Proxy credentials, if included, are never saved or placed in the process command line.</p>
           </div>
 
           <div class="adv-setting-item">
             <label>Account Credentials:</label>
-            <input type="text" id="usernameInput" class="adv-text-input" placeholder="Username" style="margin-bottom: 4px;">
-            <input type="password" id="passwordInput" class="adv-text-input" placeholder="Password">
+            <input type="text" id="usernameInput" class="adv-text-input" placeholder="Username" autocomplete="off" spellcheck="false" style="margin-bottom: 4px;">
+            <input type="password" id="passwordInput" class="adv-text-input" placeholder="Password" autocomplete="off">
+            <p class="setting-desc">Credentials stay in memory for this tool session and are removed after the batch.</p>
           </div>
 
           <div class="adv-setting-item">
             <label>Video Password:</label>
-            <input type="password" id="videoPasswordInput" class="adv-text-input" placeholder="For protected videos">
+            <input type="password" id="videoPasswordInput" class="adv-text-input" placeholder="For protected videos" autocomplete="off">
           </div>
 
           <div class="adv-setting-item">
@@ -211,6 +209,7 @@
               Geo-Bypass (Fake IP)
             </label>
           </div>
+
         </div>
 
         <!-- Section 4: Metadata & Extra Options -->

@@ -65,6 +65,7 @@ function init(ctx) {
   qrGeoLon = document.getElementById('qrGeoLon');
 
   bindEvents();
+  switchTemplate(activeTemplate, false);
   log('QR Studio initialized');
 }
 
@@ -145,7 +146,10 @@ function switchTemplate(name, refreshPreview = true) {
 
   // Update tabs
   document.querySelectorAll('.qr-template-tab').forEach(tab => {
-    tab.classList.toggle('active', tab.dataset.template === name);
+    const selected = tab.dataset.template === name;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
   });
 
   // Show/hide field panels
@@ -157,7 +161,10 @@ function switchTemplate(name, refreshPreview = true) {
     geo: 'tmplGeo'
   };
   Object.entries(panels).forEach(([key, id]) => {
-    document.getElementById(id).style.display = key === name ? '' : 'none';
+    const panel = document.getElementById(id);
+    const selected = key === name;
+    panel.style.display = selected ? '' : 'none';
+    panel.setAttribute('aria-hidden', String(!selected));
   });
 
   if (refreshPreview) schedulePreview();
@@ -196,6 +203,16 @@ function bindEvents() {
   // Template tab clicks
   document.querySelectorAll('.qr-template-tab').forEach(tab => {
     tab.addEventListener('click', () => switchTemplate(tab.dataset.template));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = Array.from(document.querySelectorAll('.qr-template-tab'));
+      const current = tabs.indexOf(tab);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 :
+        (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      tabs[next].focus();
+      switchTemplate(tabs[next].dataset.template);
+    });
   });
 
   // Auto-preview for all template inputs
@@ -261,6 +278,7 @@ function bindEvents() {
     const visible = scanPanel.style.display !== 'none';
     scanPanel.style.display = visible ? 'none' : 'block';
     scanToggle.textContent = visible ? 'Scan existing QR code' : 'Hide scanner';
+    scanToggle.setAttribute('aria-expanded', String(!visible));
   });
 
   // Scan drop zone

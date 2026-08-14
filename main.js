@@ -1,9 +1,9 @@
-const { app, ipcMain, dialog } = require('electron');
+const { app, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
-const { initAutoUpdater, registerUpdaterIpcHandlers } = require('./src/main/updater');
+const { registerUpdaterIpcHandlers } = require('./src/main/updater');
 const { registerIpcHandlers } = require('./src/main/ipc-handlers');
 const {
   createSplashWindow,
@@ -17,12 +17,25 @@ const {
   isPortAvailable,
   findAvailablePort,
   startPythonServer,
+  waitForServer,
   killPython,
   getPythonPort,
-  getPythonInfo
+  getPythonInfo,
+  isPythonRunning,
+  getBackendLogPath,
+  flushBackendLogs,
 } = require('./src/main/python-manager');
-const { runSlimSetup, needsSlimSetup } = require('./src/main/setup-manager');
+const {
+  runSlimSetup,
+  needsSlimSetup,
+  ensureLlamaServer,
+  hasCompleteLlamaSetup,
+  hasCurrentSetupMarker,
+} = require('./src/main/setup-manager');
 const { scanFolder } = require('./src/main/folder-scan');
+const { createNetworkPolicy } = require('./src/main/network-policy');
+const { createComponentManager } = require('./src/main/component-manager');
+const { createJobRegistry } = require('./src/main/job-registry');
 
 const SHUTDOWN_TOKEN = crypto.randomBytes(32).toString('hex');
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
@@ -86,6 +99,8 @@ const SLIM_PYTHON_EXE = IS_WIN
   ? path.join(SLIM_PYTHON_DIR, 'python.exe')
   : path.join(SLIM_PYTHON_DIR, 'bin', 'python3');
 const SLIM_SETUP_MARKER = path.join(SLIM_PYTHON_DIR, '.setup-complete');
+const LLAMA_DIR = path.join(app.getPath('userData'), 'llama');
+const REQUIREMENTS_PATH = path.join(PYTHON_APP_DIR, 'python', 'requirements.txt');
 
 const FFMPEG_PATH = BUNDLED_FFMPEG && fs.existsSync(BUNDLED_FFMPEG)
   ? BUNDLED_FFMPEG
@@ -94,13 +109,21 @@ if (FFMPEG_PATH) {
   process.env.PATH = [FFMPEG_PATH, process.env.PATH].filter(Boolean).join(path.delimiter);
 }
 
-function loadSettings() {
+function loadSettings({ strict = false } = {}) {
+  const failClosedSettings = () => ({ global: { offlineMode: true } });
   try {
-    if (fs.statSync(SETTINGS_PATH).size > 5 * 1024 * 1024) return {};
+    if (fs.statSync(SETTINGS_PATH).size > 5 * 1024 * 1024) {
+      if (strict) throw new Error('Settings file exceeds the 5 MB safety limit');
+      return failClosedSettings();
+    }
     const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
-    return settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
-  } catch {
-    return {};
+    if (settings && typeof settings === 'object' && !Array.isArray(settings)) return settings;
+    if (strict) throw new Error('Settings file must contain a JSON object');
+    return failClosedSettings();
+  } catch (err) {
+    if (err?.code === 'ENOENT') return {};
+    if (strict) throw err;
+    return failClosedSettings();
   }
 }
 
@@ -146,15 +169,140 @@ function sendUpdateEvent(channel, payload) {
   if (mw && !mw.isDestroyed()) mw.webContents.send(channel, payload);
 }
 
-let pythonRestartInProgress = false;
-async function restartPythonCallback() {
-  if (pythonRestartInProgress) {
-    return { success: false, error: 'Restart already in progress' };
+const networkPolicy = createNetworkPolicy(() => loadSettings({ strict: true }));
+const jobRegistry = createJobRegistry();
+let componentManager = null;
+let backendStatus = {
+  state: 'stopped',
+  detail: 'The optional media backend is not running.',
+  port: getPythonPort(),
+};
+
+function setBackendStatus(state, detail = '') {
+  backendStatus = { state, detail, port: getPythonPort() };
+  const mw = getMainWindow();
+  if (mw && !mw.isDestroyed()) {
+    mw.webContents.send('python-status', backendStatus);
   }
-  pythonRestartInProgress = true;
-  // Force-kill right away — a restart usually means the backend is wedged.
-  killPython(SHUTDOWN_TOKEN, true);
+  if (componentManager) componentManager.emitStatus();
+}
+
+function getBackendStatus() {
+  return { ...backendStatus };
+}
+
+function pythonStartOptions(startupSignal = null) {
+  return {
+    BUNDLED_PYTHON,
+    DEV_PYTHON,
+    SLIM_PYTHON_EXE,
+    isPackaged: IS_PACKAGED,
+    appDir: PYTHON_APP_DIR,
+    userDataDir: app.getPath('userData'),
+    offline: networkPolicy.isOffline(),
+    startupSignal,
+    onExit: ({ code, signal }) => {
+      const reason = signal ? `signal ${signal}` : `code ${code}`;
+      setBackendStatus('error', `The local media backend stopped unexpectedly (${reason}).`);
+    },
+  };
+}
+
+let backendLifecycleQueue = Promise.resolve();
+let applicationQuitting = false;
+let backendStartController = null;
+
+function cancelBackendStart() {
+  if (backendStartController && !backendStartController.signal.aborted) {
+    backendStartController.abort();
+  }
+}
+
+function enqueueBackendLifecycle(operation) {
+  const pending = backendLifecycleQueue.catch(() => {}).then(operation);
+  backendLifecycleQueue = pending.catch(() => {});
+  return pending;
+}
+
+async function startBackendInternal(allowDuringMaintenance = false) {
+  if (applicationQuitting) {
+    return { success: false, error: 'MuxMelt is shutting down.' };
+  }
+  if (!allowDuringMaintenance) {
+    try { jobRegistry.assertCanStart('Local media backend'); }
+    catch (err) { return { success: false, error: err.message, code: err.code || null }; }
+  }
+  if (isPythonRunning()) {
+    try {
+      await waitForServer(SHUTDOWN_TOKEN, 1);
+      setBackendStatus('ready', getPythonInfo()?.version || 'Media backend is running.');
+      return { success: true, alreadyRunning: true, port: getPythonPort() };
+    } catch {
+      const stopped = await killPython(SHUTDOWN_TOKEN, true);
+      if (!stopped.exited) {
+        const error = 'The unhealthy local media backend could not be stopped safely.';
+        setBackendStatus('error', error);
+        return { success: false, error };
+      }
+    }
+  }
+  setBackendStatus('starting', 'Starting the optional local media backend...');
+  const startupController = new AbortController();
+  backendStartController = startupController;
   try {
+    const port = await findAvailablePort(getPythonPort());
+    if (applicationQuitting || startupController.signal.aborted) {
+      throw Object.assign(new Error('Python startup was cancelled'), { code: 'BACKEND_START_CANCELLED' });
+    }
+    require('./src/main/python-manager').setPythonPort(port);
+    setBackendStatus('starting', `Starting the optional local media backend on port ${port}...`);
+    await flushBackendLogs();
+    await startPythonServer(pythonStartOptions(startupController.signal), SHUTDOWN_TOKEN, getMainWindow);
+    setBackendStatus('ready', getPythonInfo()?.version || `Ready on port ${port}`);
+    return { success: true, port };
+  } catch (err) {
+    setBackendStatus('error', err.message);
+    return { success: false, error: err.message };
+  } finally {
+    if (backendStartController === startupController) backendStartController = null;
+  }
+}
+
+function startBackendCallback() {
+  return enqueueBackendLifecycle(() => startBackendInternal(false));
+}
+
+function startBackendForMaintenance() {
+  return enqueueBackendLifecycle(() => startBackendInternal(true));
+}
+
+async function stopBackendInternal() {
+  const stopped = await killPython(SHUTDOWN_TOKEN, true);
+  if (!stopped.exited) {
+    const error = 'The local media backend did not stop in time.';
+    setBackendStatus('error', error);
+    return { success: false, error };
+  }
+  setBackendStatus('stopped', 'The optional media backend is stopped.');
+  return { success: true };
+}
+
+function stopBackendCallback() {
+  cancelBackendStart();
+  return enqueueBackendLifecycle(stopBackendInternal);
+}
+
+async function restartBackendInternal(allowDuringMaintenance = false) {
+  if (applicationQuitting) return { success: false, error: 'MuxMelt is shutting down.' };
+  if (!allowDuringMaintenance) {
+    try { jobRegistry.assertCanStart('Backend restart'); }
+    catch (err) { return { success: false, error: err.message, code: err.code || null }; }
+  }
+  setBackendStatus('restarting', 'Restarting the local media backend...');
+  // Force-kill right away — a restart usually means the backend is wedged.
+  const stopped = await killPython(SHUTDOWN_TOKEN, true);
+  try {
+    if (!stopped.exited) throw new Error('The previous backend process did not stop in time');
     // Wait for the old process to actually release the port before respawning
     // (taskkill is async). Keep the same port: the renderer caches it.
     for (let i = 0; i < 20 && !(await isPortAvailable(getPythonPort())); i++) {
@@ -163,15 +311,22 @@ async function restartPythonCallback() {
     if (!(await isPortAvailable(getPythonPort()))) {
       throw new Error(`Backend port ${getPythonPort()} is still in use after stopping the old process`);
     }
-    await startPythonServer({
-      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: PYTHON_APP_DIR, userDataDir: app.getPath('userData')
-    }, SHUTDOWN_TOKEN, getMainWindow);
-    return { success: true };
+    const result = await startBackendInternal(allowDuringMaintenance);
+    return result;
   } catch (err) {
+    setBackendStatus('error', err.message);
     return { success: false, error: err.message };
-  } finally {
-    pythonRestartInProgress = false;
   }
+}
+
+function restartPythonCallback() {
+  cancelBackendStart();
+  return enqueueBackendLifecycle(() => restartBackendInternal(false));
+}
+
+function restartBackendForMaintenance() {
+  cancelBackendStart();
+  return enqueueBackendLifecycle(() => restartBackendInternal(true));
 }
 
 // Only allow a single running instance. A second launch would spawn a second
@@ -195,7 +350,8 @@ registerIpcHandlers({
   getPythonToken: () => SHUTDOWN_TOKEN,
   loadSettings,
   saveSettings,
-  restartPythonCallback
+  restartPythonCallback,
+  networkPolicy,
 });
 
 // Tools that only need (ipcMain, getMainWindow). Loaded in a loop so a single
@@ -210,17 +366,61 @@ for (const name of [
   'torrent-downloader'
 ]) {
   try {
-    require(`./node-tools/${name}`).registerIPC(ipcMain, getMainWindow);
+    const toolModule = require(`./node-tools/${name}`);
+    if (name === 'torrent-downloader') {
+      toolModule.registerIPC(ipcMain, getMainWindow, networkPolicy, jobRegistry);
+    } else {
+      toolModule.registerIPC(ipcMain, getMainWindow, jobRegistry);
+    }
   } catch (e) {
     console.error(`Failed to load ${name}:`, e.message);
   }
 }
 // url-downloader additionally needs the resolved Python interpreter.
 try {
-  require('./node-tools/url-downloader').registerIPC(ipcMain, getMainWindow, () => getPythonInfo());
+  require('./node-tools/url-downloader').registerIPC(
+    ipcMain,
+    getMainWindow,
+    () => getPythonInfo(),
+    networkPolicy,
+    jobRegistry
+  );
 } catch (e) {
   console.error('Failed to load url-downloader:', e.message);
 }
+
+componentManager = createComponentManager({
+  ipcMain,
+  app,
+  shell,
+  dialog,
+  getMainWindow,
+  loadSettings,
+  saveSettings,
+  networkPolicy,
+  runSlimSetup,
+  ensureLlamaServer,
+  hasCompleteLlamaSetup,
+  hasCurrentSetupMarker,
+  needsSlimSetup,
+  startBackend: startBackendForMaintenance,
+  restartBackend: restartBackendForMaintenance,
+  stopBackend: stopBackendCallback,
+  getBackendStatus,
+  isSlim: IS_SLIM,
+  appDir: APP_DIR,
+  pythonAppDir: PYTHON_APP_DIR,
+  slimPythonDir: SLIM_PYTHON_DIR,
+  slimPythonExe: SLIM_PYTHON_EXE,
+  slimSetupMarker: SLIM_SETUP_MARKER,
+  llamaDir: LLAMA_DIR,
+  isWin: IS_WIN,
+  isPackaged: IS_PACKAGED,
+  backendLogPath: getBackendLogPath,
+  flushBackendLogs,
+  cancelActiveJobs: () => jobRegistry.cancelAll(5000),
+  jobRegistry,
+});
 
 app.whenReady().then(async () => {
   try {
@@ -236,39 +436,36 @@ app.whenReady().then(async () => {
       clearChromiumGpuCaches();
     }
 
-    if (needsSlimSetup(IS_SLIM, SLIM_PYTHON_EXE, SLIM_SETUP_MARKER)) {
-      updateSplash(15, 'Preparing first-time setup');
-      await runSlimSetup({
-        appDir: APP_DIR,
-        pythonAppDir: PYTHON_APP_DIR,
-        SLIM_PYTHON_DIR,
-        SLIM_PYTHON_EXE,
-        SLIM_SETUP_MARKER,
-        IS_WIN,
-        IS_PACKAGED
+    // Register update IPC before loading renderer code. GitHub checks are
+    // opt-in and every external action is guarded by Offline Mode.
+    registerUpdaterIpcHandlers(sendUpdateEvent, networkPolicy, jobRegistry);
+
+    // The Core workspace opens before Python or Local Chat. Node/FFmpeg tools
+    // remain useful even if the optional media pack is absent or broken.
+    updateSplash(45, 'Loading private media workspace');
+    await createWindow(APP_DIR, networkPolicy);
+    componentManager.emitStatus();
+    componentManager.clearStaleTemporaryFiles().catch((err) => {
+      console.warn('Failed to clean stale MuxMelt temporary files:', err.message);
+    });
+
+    const canStartSlimBackend = !IS_SLIM || hasCurrentSetupMarker(
+      SLIM_PYTHON_EXE,
+      SLIM_SETUP_MARKER,
+      REQUIREMENTS_PATH
+    );
+    if (!canStartSlimBackend) {
+      setBackendStatus(
+        'setup-required',
+        'Install the optional local media pack to use AI media tools.'
+      );
+    } else {
+      // Start in the background after the shell is responsive. A failure is
+      // surfaced as a repairable capability error rather than quitting Core.
+      startBackendCallback().then((result) => {
+        if (!result.success) console.warn(`Optional media backend unavailable: ${result.error}`);
       });
     }
-
-    updateSplash(35, 'Finding an available backend port');
-    const port = await findAvailablePort(getPythonPort());
-    require('./src/main/python-manager').setPythonPort(port);
-    
-    updateSplash(55, 'Starting media backend', `Port ${port}`);
-    await startPythonServer({ 
-      BUNDLED_PYTHON, DEV_PYTHON, SLIM_PYTHON_EXE, isPackaged: IS_PACKAGED, appDir: PYTHON_APP_DIR, userDataDir: app.getPath('userData')
-    }, SHUTDOWN_TOKEN, getMainWindow);
-
-    // Register updater IPC before loading renderer code. The renderer checks
-    // for updates during its own initialization and can invoke immediately.
-    if (app.isPackaged) {
-      initAutoUpdater(sendUpdateEvent);
-    } else {
-      console.log('Skipping auto-updater in development mode.');
-    }
-    registerUpdaterIpcHandlers(sendUpdateEvent);
-
-    updateSplash(82, 'Loading workspace');
-    await createWindow(APP_DIR);
 
     // Warm the ffmpeg lookup off the UI thread so the first convert/probe
     // doesn't block on a synchronous PATH probe when the user clicks.
@@ -277,13 +474,13 @@ app.whenReady().then(async () => {
   } catch (err) {
     if (err && err.code === 'SETUP_CANCELLED') {
       closeSplash();
-      killPython(SHUTDOWN_TOKEN, true);
+      await killPython(SHUTDOWN_TOKEN, true);
       app.quit();
       return;
     }
     console.error('Startup failed:', err.message);
     closeSplash();
-    killPython(SHUTDOWN_TOKEN, true);
+    await killPython(SHUTDOWN_TOKEN, true);
     dialog.showErrorBox(
       'Startup Error',
       'MuxMelt could not finish starting.\n\n' +
@@ -296,10 +493,28 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  killPython(SHUTDOWN_TOKEN, true);
-  app.quit();
+  if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
-  killPython(SHUTDOWN_TOKEN, true);
+app.on('activate', () => {
+  if (!getMainWindow()) {
+    createWindow(APP_DIR, networkPolicy).then(() => componentManager.emitStatus()).catch((err) => {
+      console.error('Failed to recreate the main window:', err.message);
+    });
+  }
+});
+
+let shutdownInProgress = false;
+let shutdownComplete = false;
+app.on('before-quit', (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownInProgress) return;
+  shutdownInProgress = true;
+  applicationQuitting = true;
+  cancelBackendStart();
+  jobRegistry.shutdownAll(10000).then(() => stopBackendCallback()).finally(() => {
+    shutdownComplete = true;
+    app.quit();
+  });
 });

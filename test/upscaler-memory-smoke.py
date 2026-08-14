@@ -176,6 +176,20 @@ def _make_engine(fake_torch, tile=3, tile_pad=1):
 
 
 class TiledMemoryTests(unittest.TestCase):
+    def test_ffmpeg_inputs_are_restricted_to_local_protocols(self):
+        source = SOURCE_PATH.read_text(encoding='utf-8')
+        self.assertIn("'-protocol_whitelist', FFMPEG_LOCAL_PROTOCOLS", source)
+        protocol_node = next(
+            node for node in ast.parse(source).body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name)
+                    and target.id == 'FFMPEG_LOCAL_PROTOCOLS'
+                    for target in node.targets)
+        )
+        protocols = set(ast.literal_eval(protocol_node.value).split(','))
+        self.assertTrue({'file', 'pipe', 'crypto', 'concat'}.issubset(protocols))
+        self.assertTrue({'http', 'https', 'tcp', 'udp'}.isdisjoint(protocols))
+
     def test_scale_aware_admission_rejects_multi_gigabyte_host_canvases(self):
         upscaler_class = _load_upscaler_class()
         upscaler = object.__new__(upscaler_class)

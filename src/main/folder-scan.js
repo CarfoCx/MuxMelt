@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 
 const SUPPORTED_EXTS = new Set([
-  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif',
+  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif', '.tim',
   '.mp4', '.m4v', '.avi', '.mkv', '.mov', '.webm', '.flv', '.wmv', '.mpg', '.mpeg',
   '.mp3', '.wav', '.flac', '.m4a', '.mka', '.ogg', '.aac', '.wma', '.opus'
 ]);

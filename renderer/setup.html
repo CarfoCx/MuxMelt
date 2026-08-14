@@ -66,7 +66,8 @@
       font-size: 13px;
       display: none;
     }
-    .retry-btn {
+    .retry-btn,
+    .cancel-btn {
       margin-top: 16px;
       padding: 8px 24px;
       background: #7b73ff;
@@ -79,7 +80,8 @@
     }
     .retry-btn:hover { background: #6a62e8; }
     .setup-actions { display: flex; justify-content: center; gap: 10px; }
-    .quit-btn {
+    .quit-btn,
+    .cancel-btn {
       padding: 8px 20px;
       border: 1px solid #665f78;
       background: transparent;
@@ -90,26 +92,34 @@
       display: none;
     }
     .quit-btn:hover { background: #292536; }
+    .cancel-btn { display: inline-block; margin-top: 16px; }
+    .cancel-btn:hover { background: #292536; }
+    @media (prefers-reduced-motion: reduce) {
+      .progress-fill { transition: none; }
+    }
   </style>
 </head>
 <body>
   <div class="setup-container">
-    <h1>Media<span>Melt</span></h1>
-    <div class="subtitle">First-time setup — downloading required components</div>
+    <h1>Mux<span>Melt</span></h1>
+    <div class="subtitle">Installing the optional local media pack</div>
     <div class="progress-area">
-      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-      <div class="status" id="status">Preparing...</div>
+      <div class="progress-bar" id="progressBar" role="progressbar" aria-label="Media pack installation" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="status" id="status" role="status" aria-live="polite">Preparing...</div>
       <div class="detail" id="detail"></div>
     </div>
     <div class="error" id="error"></div>
     <div class="setup-actions">
       <button class="retry-btn" id="retryBtn">Retry</button>
+      <button class="cancel-btn" id="cancelBtn">Cancel</button>
       <button class="quit-btn" id="quitBtn">Quit</button>
     </div>
   </div>
   <script>
     window.setup.onProgress((data) => {
-      document.getElementById('progressFill').style.width = data.percent + '%';
+      const percent = Math.max(0, Math.min(100, Number(data.percent) || 0));
+      document.getElementById('progressFill').style.width = percent + '%';
+      document.getElementById('progressBar').setAttribute('aria-valuenow', String(percent));
       document.getElementById('status').textContent = data.status || '';
       document.getElementById('detail').textContent = data.detail || '';
     });
@@ -118,17 +128,21 @@
       document.getElementById('error').style.display = 'block';
       document.getElementById('error').textContent = msg;
       document.getElementById('retryBtn').style.display = 'inline-block';
+      document.getElementById('cancelBtn').style.display = 'none';
       document.getElementById('quitBtn').style.display = 'inline-block';
     });
 
     window.setup.onComplete(() => {
       document.getElementById('status').textContent = 'Setup complete! Starting MuxMelt...';
       document.getElementById('progressFill').style.width = '100%';
+      document.getElementById('progressBar').setAttribute('aria-valuenow', '100');
+      document.getElementById('cancelBtn').style.display = 'none';
     });
 
     document.getElementById('retryBtn').addEventListener('click', () => {
       document.getElementById('error').style.display = 'none';
       document.getElementById('retryBtn').style.display = 'none';
+      document.getElementById('cancelBtn').style.display = 'inline-block';
       document.getElementById('quitBtn').style.display = 'none';
       document.getElementById('status').textContent = 'Retrying...';
       document.getElementById('detail').textContent = '';
@@ -137,6 +151,12 @@
     });
 
     document.getElementById('quitBtn').addEventListener('click', () => {
+      window.setup.requestCancel();
+    });
+
+    document.getElementById('cancelBtn').addEventListener('click', () => {
+      document.getElementById('cancelBtn').disabled = true;
+      document.getElementById('status').textContent = 'Cancelling safely...';
       window.setup.requestCancel();
     });
   </script>

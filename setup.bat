@@ -50,21 +50,20 @@ if errorlevel 1 (
     echo.
 )
 
-REM Install Python dependencies. Use CUDA only when an NVIDIA driver is present.
+REM Install the exact direct Python dependency versions from the controlled
+REM package index. The packaged app uses its own managed optional component;
+REM this path is only for source development.
 echo Installing Python dependencies...
 echo This may take several minutes (PyTorch dependencies are large).
 echo.
-nvidia-smi >nul 2>&1
-if errorlevel 1 (
-    echo No NVIDIA GPU detected, installing CPU-only PyTorch...
-    python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-) else (
-    echo NVIDIA GPU detected, installing PyTorch with CUDA...
-    python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-)
-if errorlevel 1 goto :python_install_failed
-
-python -m pip install -r python\requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --prefer-binary
+set "PIP_CONFIG_FILE=NUL"
+set "PIP_INDEX_URL=https://pypi.org/simple"
+set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+set "PIP_NO_INPUT=1"
+set "PYTHONHOME="
+set "PYTHONPATH="
+set "PYTHONNOUSERSITE=1"
+python -m pip --isolated --disable-pip-version-check --no-input install --index-url https://pypi.org/simple -r python\requirements.txt --prefer-binary
 if errorlevel 1 goto :python_install_failed
 echo.
 echo [OK] Python dependencies installed
@@ -80,8 +79,8 @@ exit /b 1
 :python_install_complete
 
 REM Install Node.js dependencies
-echo Installing Node.js dependencies...
-npm install
+echo Installing locked Node.js dependencies...
+npm ci
 if errorlevel 1 (
     echo.
     echo [ERROR] Failed to install Node.js dependencies.
@@ -102,7 +101,7 @@ echo   - Stem Separator (vocals/drums/bass separation)
 echo   - Format Converter, Video Compressor
 echo   - Audio Extractor, GIF Maker
 echo   - Background Remover, Bulk Imager
-echo   - PDF Toolkit, QR Studio
+echo   - Image Editor, QR Studio, Text to Speech
 echo.
 echo GPU acceleration requires an NVIDIA GPU with CUDA support.
 echo Without a GPU, processing will still work but will be slower.

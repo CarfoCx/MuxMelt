@@ -1,49 +1,6 @@
 {
-  "appId": "com.carfocx.muxmelt",
-  "productName": "MuxMelt",
-  "directories": {
-    "output": "dist"
-  },
-  "publish": [
-    {
-      "provider": "github",
-      "owner": "CarfoCx",
-      "repo": "MuxMelt"
-    }
-  ],
-  "files": [
-    "main.js",
-    "preload.js",
-    "setup-preload.js",
-    "package.json",
-    "build/icon.png",
-    "src/**/*",
-    "renderer/**/*",
-    "node-tools/**/*",
-    "python/**/*",
-    "!python/weights/**",
-    "!python/**/__pycache__/**",
-    "!**/*.pyc"
-  ],
-  "asarUnpack": [
-    "node_modules/sharp/**",
-    "node_modules/@img/**",
-    "python/**"
-  ],
-  "extraResources": [
-    {
-      "from": "build/bundle/python-env",
-      "to": "python-env",
-      "filter": ["**/*"]
-    },
-    {
-      "from": "build/bundle/ffmpeg",
-      "to": "ffmpeg",
-      "filter": ["**/*"]
-    }
-  ],
+  "extends": "build/base.json",
   "win": {
-    "signAndEditExecutable": false,
     "target": [
       {
         "target": "nsis",
@@ -66,8 +23,7 @@
       }
     ],
     "icon": "build/icon.png",
-    "category": "public.app-category.utilities",
-    "identity": "-"
+    "category": "public.app-category.utilities"
   },
   "dmg": {
     "artifactName": "MuxMelt-${version}-macos-${arch}.${ext}"

@@ -1,40 +1,42 @@
 <div class="warning-banner" id="ffmpegWarning" style="display: none;">
   &#9888; ffmpeg not found — video upscaling requires ffmpeg.
-  <a id="ffmpegLink">Install ffmpeg</a>
+  <button type="button" class="warning-link" id="ffmpegLink">Install ffmpeg</button>
 </div>
 
 <!-- Tool body -->
 <div class="tool-body">
   <div class="module-banner">
     <strong>Upscaler.</strong> Increase image or video resolution with 2x and 4x processing modes.
+    Processing stays on this computer. If the selected model is not installed
+    yet, starting the first job uses the internet to download checksum-verified weights from GitHub.
   </div>
 
   <!-- Drop zone -->
-  <div class="drop-zone" id="dropZone">
+  <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-describedby="upscalerDropHint">
     <div class="drop-zone-icon">&#128194;</div>
     <div class="drop-zone-text">
       Drag &amp; drop images, videos, or <strong>folders</strong> here
     </div>
     <div class="drop-zone-actions">
-      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <button type="button" class="drop-zone-link" id="browseBtn">browse files</button>
       <span class="drop-zone-sep">|</span>
-      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+      <button type="button" class="drop-zone-link" id="browseFolderBtn">browse folder</button>
     </div>
-    <div class="drop-zone-hint">
+    <div class="drop-zone-hint" id="upscalerDropHint">
       Supports: PNG, JPG, WebP, BMP, TIFF, MP4, AVI, MKV, MOV, WebM
     </div>
   </div>
 
   <!-- Settings -->
   <div class="settings-bar">
-    <div class="setting-group">
-      <label>Scale:</label>
-      <button class="scale-btn active" data-scale="2">2x</button>
-      <button class="scale-btn" data-scale="4">4x</button>
+    <div class="setting-group" role="group" aria-label="Upscale factor">
+      <span>Scale:</span>
+      <button type="button" class="scale-btn active" data-scale="2" aria-pressed="true">2x</button>
+      <button type="button" class="scale-btn" data-scale="4" aria-pressed="false">4x</button>
     </div>
 
     <div class="setting-group">
-      <label>Model:</label>
+      <label for="modelProfile">Model:</label>
       <select id="modelProfile">
         <option value="general">General</option>
         <option value="anime">Anime</option>
@@ -42,7 +44,7 @@
     </div>
 
     <div class="setting-group">
-      <label>Format:</label>
+      <label for="outputFormat">Format:</label>
       <select id="outputFormat">
         <option value="same">Same as input</option>
         <optgroup label="Images">
@@ -60,8 +62,8 @@
     </div>
 
     <div class="setting-group">
-      <label>Output:</label>
-      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+      <label for="outputDirBtn">Output:</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
         Same as source
       </button>
     </div>
@@ -81,8 +83,8 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Waiting for File</span>
-    <div class="upscaler-footer-progress" id="footerProgress" aria-hidden="true">
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for File</span>
+    <div class="upscaler-footer-progress" id="footerProgress" role="progressbar" aria-label="Upscaling progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
       <div class="upscaler-footer-progress-fill" id="footerProgressFill"></div>
     </div>
     <span class="eta-text" id="etaText"></span>
@@ -102,7 +104,7 @@
 <!-- Overwrite modal -->
 <div class="upscaler-overwrite-modal" id="overwriteModal" aria-hidden="true">
   <div class="upscaler-overwrite-overlay"></div>
-  <div class="upscaler-overwrite-dialog" role="dialog" aria-modal="true" aria-labelledby="overwriteTitle">
+  <div class="upscaler-overwrite-dialog" role="dialog" aria-modal="true" aria-labelledby="overwriteTitle" tabindex="-1">
     <div class="upscaler-overwrite-title" id="overwriteTitle">Output name already exists</div>
     <div class="upscaler-overwrite-name" id="overwriteFileName"></div>
     <div class="upscaler-overwrite-detail">The existing file will stay unchanged. Create a numbered copy instead?</div>
@@ -115,20 +117,20 @@
 </div>
 
 <!-- Preview modal -->
-<div class="preview-modal" id="previewModal">
+<div class="preview-modal" id="previewModal" aria-hidden="true">
   <div class="preview-overlay" id="previewOverlay"></div>
-  <div class="preview-dialog">
+  <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle" tabindex="-1">
     <div class="preview-header">
       <span id="previewTitle">Preview</span>
-      <button class="preview-close" id="previewClose">&times;</button>
+      <button type="button" class="preview-close" id="previewClose" aria-label="Close preview">&times;</button>
     </div>
     <div class="preview-body" id="previewBody">
       <div class="preview-container" id="previewContainer">
-        <img class="preview-img preview-after" id="previewAfter" draggable="false">
+        <img class="preview-img preview-after" id="previewAfter" draggable="false" alt="Upscaled image">
         <div class="preview-before-clip" id="previewBeforeClip">
-          <img class="preview-img preview-before" id="previewBefore" draggable="false">
+          <img class="preview-img preview-before" id="previewBefore" draggable="false" alt="Original image">
         </div>
-        <div class="preview-slider" id="previewSlider">
+        <div class="preview-slider" id="previewSlider" role="slider" tabindex="0" aria-label="Original and upscaled comparison" aria-valuemin="2" aria-valuemax="98" aria-valuenow="50">
           <div class="preview-slider-line"></div>
           <div class="preview-slider-handle"></div>
         </div>

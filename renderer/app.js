@@ -10,6 +10,48 @@ let currentToolModule = null;
 let _vramTimer = null;
 let _vramFailCount = 0;
 
+const APP_META = Object.freeze({
+  name: document.body?.dataset.appName || 'MuxMelt',
+  supportUrl: 'https://ko-fi.com/carfo'
+});
+
+// One registry powers Settings and the dark/light toggle. There is one visual
+// family: monochrome, with only dark and light variants.
+const THEME_REGISTRY = Object.freeze([
+  { id: 'mono-dark', family: 'mono', mode: 'dark', label: 'Monochrome', swatch: '#e4e4e7' },
+  { id: 'mono-light', family: 'mono', mode: 'light', label: 'Monochrome', swatch: '#18181b' }
+]);
+
+function normalizeTheme(themeName) {
+  const candidate = String(themeName || '').toLowerCase();
+  if (candidate === 'mono-light' || candidate === 'light' || candidate.endsWith('-light')) {
+    return 'mono-light';
+  }
+  return 'mono-dark';
+}
+
+function getThemePair(themeName) {
+  return normalizeTheme(themeName) === 'mono-light' ? 'mono-dark' : 'mono-light';
+}
+
+function applyAppTheme(themeName, persist = true) {
+  const normalized = normalizeTheme(themeName);
+  document.documentElement.setAttribute('data-theme', normalized);
+  document.documentElement.style.colorScheme = normalized.endsWith('-light') ? 'light' : 'dark';
+  if (persist) {
+    updateSettings(all => {
+      all.global = all.global || {};
+      all.global.theme = normalized;
+    }).catch(() => {});
+  }
+  return normalized;
+}
+
+window.APP_META = APP_META;
+window.getThemeRegistry = () => THEME_REGISTRY.map(theme => ({ ...theme }));
+window.getThemePair = getThemePair;
+window.applyAppTheme = applyAppTheme;
+
 // DOM elements
 const toolContent = document.getElementById('toolContent');
 const logEntries = document.getElementById('logEntries');
@@ -159,6 +201,13 @@ function showCompletionToast(message, isError = false, outputFiles = []) {
   // Store last output files for workflow chaining
   if (safeOutputFiles.length > 0) {
     window.lastOutputFiles = safeOutputFiles;
+    if (!isError) {
+      updateSettings(all => {
+        all.global = all.global || {};
+        const current = Number(all.global.completedOutputCount) || 0;
+        all.global.completedOutputCount = Math.min(1000000, current + safeOutputFiles.length);
+      }).catch(() => {});
+    }
   }
 
   // Remove existing toast
@@ -202,11 +251,20 @@ function showCompletionToast(message, isError = false, outputFiles = []) {
   document.body.appendChild(toast);
   setTimeout(() => { if (toast.parentNode) toast.remove(); }, 7000);
 
-  // Also fire a native OS notification (useful when app is in background)
-  window.api.system.showNotification({
-    title: 'MuxMelt',
-    body: message
-  }).catch(() => {});
+  // Native notification details are private by default because tool messages
+  // may contain filenames. Users can explicitly choose detailed or no alerts.
+  const notificationDetail = ['generic', 'detailed', 'off'].includes(globalSettings.notificationDetail)
+    ? globalSettings.notificationDetail
+    : 'generic';
+  if (notificationDetail !== 'off' && typeof window.api.system.showNotification === 'function') {
+    const genericBody = isError
+      ? `${APP_META.name} needs your attention`
+      : `Your ${APP_META.name} task is complete`;
+    window.api.system.showNotification({
+      title: APP_META.name,
+      body: notificationDetail === 'detailed' ? message : genericBody
+    }).catch(() => {});
+  }
 }
 window.showCompletionToast = showCompletionToast;
 
@@ -242,13 +300,24 @@ function getSendToSuggestions(outputFiles) {
 // Send output files to another tool for chaining
 window.sendToTool = async function(toolId) {
   const files = window.lastOutputFiles || [];
+  return window.openFilesInTool(toolId, files);
+};
+
+window.openFilesInTool = async function(toolId, files) {
+  const safeFiles = Array.isArray(files)
+    ? files.filter(filePath => typeof filePath === 'string' && filePath)
+    : [];
   const loaded = await loadTool(toolId);
   // loadTool resolves only after the destination has initialized. A fixed
   // delay raced slower disks and caused files to be silently dropped.
   if (loaded && currentToolId === toolId) {
-    document.dispatchEvent(new CustomEvent('paste-files', { detail: files }));
+    document.dispatchEvent(new CustomEvent('paste-files', { detail: safeFiles }));
+    return true;
   }
+  return false;
 };
+
+window.openTool = loadTool;
 
 // Auto-open output folder if setting is enabled
 window.autoOpenOutputIfEnabled = async function(outputDir) {
@@ -267,6 +336,8 @@ const RECENT_FILES_MAX = 20;
 window.addRecentFile = async function(filePath) {
   if (typeof filePath !== 'string' || !filePath) return;
   try {
+    const existing = await loadAllSettings();
+    if (existing.global?.rememberRecentFiles !== true) return;
     await updateSettings(all => {
       all.global = all.global || {};
       let recent = Array.isArray(all.global.recentFiles) ? all.global.recentFiles : [];
@@ -280,6 +351,7 @@ window.addRecentFile = async function(filePath) {
 window.getRecentFiles = async function() {
   try {
     const all = await loadAllSettings();
+    if (all.global?.rememberRecentFiles !== true) return [];
     const recent = all.global && all.global.recentFiles;
     return Array.isArray(recent) ? recent.filter(filePath => typeof filePath === 'string' && filePath) : [];
   } catch { return []; }
@@ -603,12 +675,109 @@ window.saveAllSettings = replaceAllSettings;
 window.updateSettings = updateSettings;
 
 // ============================================================================
+// Shared accessibility enhancements for dynamically loaded tools
+// ============================================================================
+
+let generatedControlId = 0;
+
+function syncProgressbar(progressbar) {
+  if (!progressbar) return;
+  progressbar.setAttribute('role', 'progressbar');
+  progressbar.setAttribute('aria-valuemin', '0');
+  progressbar.setAttribute('aria-valuemax', '100');
+  const fill = progressbar.querySelector('[class*="progress-fill"], .file-progress-fill');
+  const match = fill?.style.width?.match(/[\d.]+/);
+  const value = match ? Math.min(100, Math.max(0, Math.round(Number(match[0])))) : 0;
+  progressbar.setAttribute('aria-valuenow', String(value));
+  const isFooterProgress = progressbar.className.includes('footer-progress');
+  if (isFooterProgress) progressbar.setAttribute('aria-hidden', String(!progressbar.classList.contains('active')));
+}
+
+function enhanceAccessibility(root = document) {
+  root.querySelectorAll?.('.drop-zone').forEach(zone => {
+    if (!zone.hasAttribute('role')) zone.setAttribute('role', 'button');
+    if (!zone.hasAttribute('tabindex')) zone.tabIndex = 0;
+    if (!zone.hasAttribute('aria-label')) zone.setAttribute('aria-label', 'Add media files');
+  });
+
+  root.querySelectorAll?.('.drop-zone-link:not(button)').forEach(link => {
+    link.setAttribute('role', 'button');
+    link.tabIndex = 0;
+  });
+
+  root.querySelectorAll?.('.status-text').forEach(status => {
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.setAttribute('aria-atomic', 'true');
+  });
+
+  root.querySelectorAll?.('[class*="footer-progress"], .file-progress-bar').forEach(syncProgressbar);
+
+  // Associate the common "label + control in one row" pattern without
+  // changing tool behavior. Explicit labels remain untouched.
+  root.querySelectorAll?.('label:not([for])').forEach(label => {
+    if (label.querySelector('input, select, textarea')) return;
+    const row = label.closest('.options-row, .option-row, .settings-row, .control-row, .qr-field');
+    const control = row?.querySelector('input, select, textarea');
+    if (!control) return;
+    if (!control.id) control.id = `accessibleControl${++generatedControlId}`;
+    label.htmlFor = control.id;
+  });
+
+  root.querySelectorAll?.('button').forEach(button => {
+    if (!button.textContent.trim() && !button.hasAttribute('aria-label')) {
+      const fallback = button.title || 'Action';
+      button.setAttribute('aria-label', fallback);
+    }
+  });
+}
+
+const accessibilityObserver = new MutationObserver(records => {
+  records.forEach(record => {
+    if (record.type === 'childList') {
+      record.addedNodes.forEach(node => {
+        if (node.nodeType === Node.ELEMENT_NODE) enhanceAccessibility(node);
+      });
+    }
+    if (record.type === 'attributes') {
+      const target = record.target;
+      const progressbar = target.matches?.('[class*="footer-progress"], .file-progress-bar')
+        ? target
+        : target.closest?.('[class*="footer-progress"], .file-progress-bar');
+      syncProgressbar(progressbar);
+    }
+  });
+});
+accessibilityObserver.observe(toolContent, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+
+document.addEventListener('keydown', event => {
+  const link = event.target.closest?.('.drop-zone-link:not(button)');
+  if (link && (event.key === 'Enter' || event.key === ' ')) {
+    event.preventDefault();
+    link.click();
+    return;
+  }
+  const zone = event.target.closest?.('.drop-zone');
+  if (zone && event.target === zone && (event.key === 'Enter' || event.key === ' ')) {
+    event.preventDefault();
+    zone.querySelector('.drop-zone-link, button')?.click();
+  }
+});
+
+// ============================================================================
 // GPU monitoring
 // ============================================================================
 
 function startGpuPolling() {
   if (_vramTimer !== null) return;
   _scheduleVramPoll(0);
+}
+
+function stopGpuPolling() {
+  if (_vramTimer !== null) clearTimeout(_vramTimer);
+  _vramTimer = null;
+  _vramFailCount = 0;
+  gpuStats.classList.remove('active');
 }
 
 function _scheduleVramPoll(delayMs) {
@@ -733,6 +902,68 @@ window.pythonToken = null; // will be set during init
 
 let _loadRequestId = 0;
 
+function updateSidebarSelection(toolId) {
+  document.querySelectorAll('.sidebar-item').forEach(item => {
+    const active = item.dataset.tool === toolId;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
+}
+
+let lastBackendUiState = null;
+function handleBackendStatus(status = {}) {
+  if (Number.isInteger(status.port) && status.port >= 1 && status.port <= 65535) {
+    pythonPort = status.port;
+    window.pythonPort = status.port;
+  }
+
+  // Tool modules and their DOM are cached between visits. Forward status
+  // changes so an initialized Python-backed tool can move an existing socket,
+  // while the live getter passed below keeps later reconnects on this port.
+  for (const [toolId, entry] of Object.entries(toolCache)) {
+    if (!entry?.initialized || typeof entry.module?.onBackendStatus !== 'function') continue;
+    try {
+      entry.module.onBackendStatus({ ...status, port: pythonPort });
+    } catch (err) {
+      log(`Could not refresh ${toolId}'s backend connection: ${err.message}`, 'warn', toolId);
+    }
+  }
+
+  const state = typeof status.state === 'string' ? status.state : 'unknown';
+  if (state === 'ready') {
+    lastBackendUiState = state;
+    gpuBadge.textContent = 'Checking local backend...';
+    gpuBadge.style.borderColor = 'var(--border-color, #64748b)';
+    checkHealth();
+    startGpuPolling();
+    return;
+  }
+
+  stopGpuPolling();
+  if (state === 'starting' || state === 'restarting') {
+    gpuBadge.textContent = state === 'restarting' ? 'Backend restarting...' : 'Backend starting...';
+    gpuBadge.style.borderColor = '#fbbf24';
+  } else if (state === 'setup-required' || state === 'stopped') {
+    gpuBadge.textContent = state === 'setup-required' ? 'Media pack optional' : 'Backend stopped';
+    gpuBadge.style.borderColor = 'var(--border-color, #64748b)';
+  } else if (state === 'error') {
+    gpuBadge.textContent = 'Backend unavailable';
+    gpuBadge.style.borderColor = '#f87171';
+    if (lastBackendUiState !== 'error') {
+      log(status.detail || 'The optional local media backend is unavailable.', 'warn');
+    }
+  }
+  lastBackendUiState = state;
+}
+
+function updateDocumentTitle(toolId) {
+  const label = toolId
+    ? document.querySelector(`.sidebar-item[data-tool="${toolId}"] .sidebar-label`)
+    : null;
+  document.title = label ? `${label.textContent} - ${APP_META.name}` : APP_META.name;
+}
+
 function restorePreviousTool(previousToolId, message) {
   const previous = previousToolId && toolCache[previousToolId];
   if (previous && previous.initialized && previous.container) {
@@ -752,13 +983,8 @@ function restorePreviousTool(previousToolId, message) {
       </div>`;
   }
 
-  document.querySelectorAll('.sidebar-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.tool === currentToolId);
-  });
-  const label = currentToolId
-    ? document.querySelector(`.sidebar-item[data-tool="${currentToolId}"] .sidebar-label`)
-    : null;
-  document.title = label ? `${label.textContent} - MuxMelt` : 'MuxMelt';
+  updateSidebarSelection(currentToolId);
+  updateDocumentTitle(currentToolId);
 }
 
 async function loadTool(toolId) {
@@ -785,16 +1011,13 @@ async function loadTool(toolId) {
   currentToolModule = null;
 
   // Update sidebar
-  document.querySelectorAll('.sidebar-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.tool === toolId);
-  });
+  updateSidebarSelection(toolId);
 
   currentToolId = toolId;
   renderLogEntries(toolId);
 
   // Update window title
-  const toolLabel = document.querySelector(`.sidebar-item[data-tool="${toolId}"] .sidebar-label`);
-  document.title = toolLabel ? `${toolLabel.textContent} - MuxMelt` : 'MuxMelt';
+  updateDocumentTitle(toolId);
 
   // Load tool CSS
   toolStylesheet.href = `tools/${toolId}/${toolId}.css`;
@@ -818,6 +1041,7 @@ async function loadTool(toolId) {
     const html = await resp.text();
     if (_loadRequestId !== requestId) return false;
     container.innerHTML = html;
+    enhanceAccessibility(container);
     toolCache[toolId] = {
       ...(toolCache[toolId] || {}),
       container,
@@ -872,7 +1096,12 @@ async function loadTool(toolId) {
         const toolClearLog = () => clearLog(toolId);
         const moduleToInitialize = currentToolModule;
         cacheEntry.initPromise = Promise.resolve().then(() => moduleToInitialize.init({
-          pythonPort, pythonToken, log: toolLog, escapeHtml, clearLog: toolClearLog
+          pythonPort,
+          getPythonPort: () => pythonPort,
+          pythonToken,
+          log: toolLog,
+          escapeHtml,
+          clearLog: toolClearLog
         }));
       }
       await cacheEntry.initPromise;
@@ -880,6 +1109,7 @@ async function loadTool(toolId) {
       cacheEntry.initialized = true;
       if (_loadRequestId !== requestId) return false;
     }
+    enhanceAccessibility(container);
   } catch (e) {
     const staleRequest = _loadRequestId !== requestId;
     const failedModule = toolRegistry[toolId];
@@ -920,7 +1150,6 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
 // Init
 // ============================================================================
 
-// Custom (frameless) window controls — minimize / maximize-restore / close.
 function setupWindowControls() {
   const wc = window.api && window.api.windowControls;
   if (!wc) return;
@@ -943,7 +1172,6 @@ function setupWindowControls() {
   if (minBtn) minBtn.addEventListener('click', () => { wc.minimize().catch(() => {}); });
   if (closeBtn) closeBtn.addEventListener('click', () => { wc.close().catch(() => {}); });
   if (maxBtn) maxBtn.addEventListener('click', toggleMax);
-  // Double-clicking the caption maximizes/restores, like a native title bar.
   if (dragArea) dragArea.addEventListener('dblclick', toggleMax);
 
   wc.onMaximizeChange(reflectMaxState);
@@ -955,17 +1183,66 @@ async function init() {
   const allSettings = await loadGlobalSettings();
   setLogCollapsed(!!allSettings.global?.logCollapsed);
 
-  // Apply saved theme
-  const theme = allSettings.global?.theme || 'dark';
-  document.documentElement.setAttribute('data-theme', theme);
+  // Apply saved theme (default to monochrome dark)
+  const savedTheme = allSettings.global?.theme || 'mono-dark';
+  const theme = applyAppTheme(savedTheme, false);
+  if (theme !== savedTheme) {
+    updateSettings(all => {
+      all.global = all.global || {};
+      all.global.theme = theme;
+    }).catch(() => {});
+  }
+
+  const appNameEl = document.getElementById('titlebarAppName');
+  const versionEl = document.getElementById('titlebarVersion');
+  if (appNameEl) appNameEl.textContent = APP_META.name;
+  if (versionEl && typeof window.api.system.getAppVersion === 'function') {
+    window.api.system.getAppVersion().then(version => {
+      if (version) {
+        versionEl.textContent = `v${String(version).replace(/^v/i, '')}`;
+        versionEl.setAttribute('aria-label', `${APP_META.name} version ${String(version).replace(/^v/i, '')}`);
+      }
+    }).catch(() => {});
+  }
+
+  // Bind titlebar header quick action controls
+  const themeToggleBtn = document.getElementById('themeToggleBtn');
+  const headerSettingsBtn = document.getElementById('headerSettingsBtn');
+  const headerLogBtn = document.getElementById('headerLogBtn');
+
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'mono-dark';
+      applyAppTheme(getThemePair(current));
+    });
+  }
+
+  if (headerSettingsBtn) {
+    headerSettingsBtn.addEventListener('click', () => {
+      loadTool('settings');
+    });
+  }
+
+  if (headerLogBtn) {
+    headerLogBtn.addEventListener('click', () => {
+      toggleLogPanel();
+    });
+  }
 
   pythonPort = await window.api.python.getPythonPort();
   window.pythonPort = pythonPort;
   pythonToken = await window.api.python.getPythonToken();
   window.pythonToken = pythonToken;
 
-  checkHealth();
-  startGpuPolling();
+  if (typeof window.api.python.onBackendStatus === 'function') {
+    window.api.python.onBackendStatus(handleBackendStatus);
+  }
+  try {
+    const componentStatus = await window.api.python.getStatus();
+    handleBackendStatus(componentStatus?.backend || {});
+  } catch {
+    handleBackendStatus({ state: 'error', detail: 'Could not read the local backend status.' });
+  }
 
   window.api.python.onPythonCrashed((code) => {
     log(`Python backend crashed (exit code ${code})`, 'error');
@@ -981,16 +1258,18 @@ async function init() {
   const sidebarDonateBtn = document.getElementById('sidebarDonateBtn');
   if (sidebarDonateBtn) {
     sidebarDonateBtn.addEventListener('click', () => {
-      window.api.system.openExternal('https://ko-fi.com/carfo');
+      window.api.system.openExternal(APP_META.supportUrl);
     });
   }
 
-  // Check for updates and show banner if available
-  checkForAppUpdates();
+  // Network access is opt-in. Manual checks remain available in Settings.
+  if (allSettings.global?.automaticUpdateChecks === true && allSettings.global?.offlineMode !== true) {
+    checkForAppUpdates();
+  }
 
-  // Load last used tool or default to upscaler
-  const savedTool = allSettings.global?.lastTool || 'upscaler';
-  const startTool = document.querySelector(`.sidebar-item[data-tool="${savedTool}"]`) ? savedTool : 'upscaler';
+  // Home gives new users a neutral start instead of assuming an AI workflow.
+  const savedTool = allSettings.global?.lastTool || 'home';
+  const startTool = document.querySelector(`.sidebar-item[data-tool="${savedTool}"]`) ? savedTool : 'home';
   loadTool(startTool);
 }
 
@@ -1013,7 +1292,7 @@ let pendingUpdateInfo = null;
 if (window.api.updater.onUpdateAvailable) {
   window.api.updater.onUpdateAvailable((info) => {
     pendingUpdateInfo = info;
-    if (updateBanner && updateBannerText && updateDownloadBtn) {
+    if (updateBanner && updateBannerText && updateDownloadBtn && updateRestartBtn) {
       updateBannerText.textContent = info.isLocal
         ? `A new local version (v${info.version}) is available!`
         : `A new version (v${info.version}) is available!`;
@@ -1119,18 +1398,33 @@ if (updateDismiss) {
 // Shortcuts overlay
 const shortcutsOverlay = document.getElementById('shortcutsOverlay');
 const shortcutsClose = document.getElementById('shortcutsClose');
+const shortcutsDialog = shortcutsOverlay.querySelector('.shortcuts-modal');
+let shortcutsReturnFocus = null;
 
 function toggleShortcutsOverlay() {
-  shortcutsOverlay.classList.toggle('active');
+  if (shortcutsOverlay.classList.contains('active')) closeShortcutsOverlay();
+  else openShortcutsOverlay();
 }
 
-shortcutsClose.addEventListener('click', () => {
+function openShortcutsOverlay() {
+  shortcutsReturnFocus = document.activeElement;
+  shortcutsOverlay.classList.add('active');
+  shortcutsOverlay.setAttribute('aria-hidden', 'false');
+  shortcutsDialog.focus();
+}
+
+function closeShortcutsOverlay() {
   shortcutsOverlay.classList.remove('active');
-});
+  shortcutsOverlay.setAttribute('aria-hidden', 'true');
+  if (shortcutsReturnFocus?.isConnected) shortcutsReturnFocus.focus();
+  shortcutsReturnFocus = null;
+}
+
+shortcutsClose.addEventListener('click', closeShortcutsOverlay);
 
 shortcutsOverlay.addEventListener('click', (e) => {
   if (e.target === shortcutsOverlay) {
-    shortcutsOverlay.classList.remove('active');
+    closeShortcutsOverlay();
   }
 });
 
@@ -1138,11 +1432,30 @@ document.addEventListener('keydown', (e) => {
   // Escape — close shortcuts overlay, then context menus
   if (e.key === 'Escape') {
     if (shortcutsOverlay.classList.contains('active')) {
-      shortcutsOverlay.classList.remove('active');
+      closeShortcutsOverlay();
       return;
     }
     const menu = document.querySelector('.context-menu');
     if (menu) { menu.remove(); return; }
+  }
+
+  if (e.key === 'Tab' && shortcutsOverlay.classList.contains('active')) {
+    const focusable = Array.from(shortcutsDialog.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+      .filter(element => !element.disabled && element.offsetParent !== null);
+    if (focusable.length === 0) {
+      e.preventDefault();
+      shortcutsDialog.focus();
+    } else {
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   }
 
   // Ctrl+? (Ctrl+Shift+/) — toggle shortcuts overlay
@@ -1187,4 +1500,5 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+enhanceAccessibility(document);
 init();

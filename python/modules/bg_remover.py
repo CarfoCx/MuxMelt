@@ -1,6 +1,13 @@
+import hashlib
+import hmac
 import os
 import re
+import socket
+import tempfile
 import threading
+import time
+import urllib.parse
+import urllib.request
 from importlib.util import find_spec
 
 from PIL import Image, ImageFilter
@@ -13,6 +20,54 @@ _available = find_spec('rembg') is not None and find_spec('onnxruntime') is not 
 _HEX_COLOR_RE = re.compile(r'^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$')
 _OUTPUT_FORMATS = {'png': 'PNG', 'webp': 'WEBP', 'tiff': 'TIFF'}
 _BG_MODES = {'transparent', 'color', 'blur', 'image'}
+
+_MODEL_FILENAME = 'u2net.onnx'
+_MODEL_URL = (
+    'https://github.com/danielgatis/rembg/releases/download/v0.0.0/'
+    + _MODEL_FILENAME
+)
+_MODEL_SHA256 = '8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491'
+_MODEL_SIZE = 175_997_641
+_MODEL_DOWNLOAD_HOSTS = {
+    'github.com', 'release-assets.githubusercontent.com',
+    'objects.githubusercontent.com',
+}
+
+
+def _offline_mode_enabled():
+    return os.environ.get('MUXMELT_OFFLINE', '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
+
+def _model_path():
+    configured = os.environ.get('U2NET_HOME')
+    if configured:
+        model_dir = os.path.expanduser(configured)
+    else:
+        data_home = os.environ.get('XDG_DATA_HOME', '~')
+        model_dir = os.path.expanduser(os.path.join(data_home, '.u2net'))
+    return os.path.join(model_dir, _MODEL_FILENAME)
+
+
+def _sha256_matches(path, expected=_MODEL_SHA256):
+    digest = hashlib.sha256()
+    try:
+        with open(path, 'rb') as model_file:
+            for chunk in iter(lambda: model_file.read(1024 * 1024), b''):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return hmac.compare_digest(digest.hexdigest(), expected)
+
+
+class _RestrictedModelRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlparse(newurl)
+        if (parsed.scheme != 'https'
+                or (parsed.hostname or '').lower() not in _MODEL_DOWNLOAD_HOSTS):
+            raise RuntimeError('Background model download used an unexpected redirect')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def is_available():
@@ -51,27 +106,132 @@ class BGRemover:
         self._session = None
         self._remove = None
         self._session_lock = threading.Lock()
+        self._download_response = None
 
     def cancel(self):
         self.cancel_event.set()
+        response = self._download_response
+        if response is not None:
+            try:
+                response.close()
+            except OSError:
+                pass
 
     def reset_cancel(self):
         self.cancel_event.clear()
 
-    def _get_backend(self):
+    def _download_model(self, model_path, progress_callback=None):
+        if _offline_mode_enabled():
+            raise RuntimeError(
+                'The background-removal model is not installed or failed its '
+                'integrity check. Disable Offline Mode and retry once to '
+                'download the checksum-verified model.'
+            )
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        request = urllib.request.Request(
+            _MODEL_URL, headers={'User-Agent': 'MuxMelt/1.3'},
+        )
+        response = None
+        temp_path = None
+        try:
+            response = urllib.request.build_opener(
+                _RestrictedModelRedirects(),
+            ).open(request, timeout=10)
+            final = urllib.parse.urlparse(response.geturl())
+            if (final.scheme != 'https'
+                    or (final.hostname or '').lower() not in _MODEL_DOWNLOAD_HOSTS):
+                raise RuntimeError('Background model download used an unexpected host')
+            self._download_response = response
+            declared = int(response.headers.get('Content-Length') or 0)
+            if declared and declared != _MODEL_SIZE:
+                raise RuntimeError('Background model download has an unexpected size')
+            digest = hashlib.sha256()
+            downloaded = 0
+            last_data_at = time.monotonic()
+            with tempfile.NamedTemporaryFile(
+                mode='wb', prefix=_MODEL_FILENAME + '.', suffix='.part',
+                dir=os.path.dirname(model_path), delete=False,
+            ) as output:
+                temp_path = output.name
+                while True:
+                    if self.cancel_event.is_set():
+                        raise RuntimeError('Cancelled')
+                    try:
+                        chunk = response.read(256 * 1024)
+                    except (TimeoutError, socket.timeout) as exc:
+                        if self.cancel_event.is_set():
+                            raise RuntimeError('Cancelled') from exc
+                        if time.monotonic() - last_data_at >= 60:
+                            raise RuntimeError('Background model download stalled') from exc
+                        continue
+                    if not chunk:
+                        break
+                    last_data_at = time.monotonic()
+                    downloaded += len(chunk)
+                    if downloaded > _MODEL_SIZE:
+                        raise RuntimeError('Background model download exceeded its size limit')
+                    output.write(chunk)
+                    digest.update(chunk)
+                    if progress_callback:
+                        progress_callback(
+                            min(0.08, 0.08 * downloaded / _MODEL_SIZE),
+                            f'Downloading checksum-verified AI model... '
+                            f'{downloaded / _MODEL_SIZE * 100:.0f}%',
+                        )
+            if downloaded != _MODEL_SIZE:
+                raise RuntimeError('Background model download was incomplete')
+            if not hmac.compare_digest(digest.hexdigest(), _MODEL_SHA256):
+                raise RuntimeError('Background model failed its SHA-256 integrity check')
+            os.replace(temp_path, model_path)
+            temp_path = None
+        finally:
+            self._download_response = None
+            if response is not None:
+                try:
+                    response.close()
+                except OSError:
+                    pass
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+    def _get_backend(self, progress_callback=None):
         """Load rembg once and reuse its expensive ONNX session per batch."""
         with self._session_lock:
             if self._session is not None and self._remove is not None:
                 return self._remove, self._session
             if self.cancel_event.is_set():
                 raise RuntimeError('Cancelled')
+            model_path = _model_path()
+            if (not os.path.isfile(model_path)
+                    or os.path.getsize(model_path) != _MODEL_SIZE
+                    or not _sha256_matches(model_path)):
+                self._download_model(model_path, progress_callback)
             try:
-                from rembg import new_session, remove
-                session = new_session()
+                import onnxruntime as ort
+                from rembg import remove
+                from rembg.sessions.u2net import U2netSession
+
+                # Bypass rembg's implicit downloader. The exact file above was
+                # downloaded and SHA-256 verified by MuxMelt, and this subclass
+                # gives ONNX Runtime only that local path.
+                class _PinnedU2netSession(U2netSession):
+                    @classmethod
+                    def download_models(cls, *args, **kwargs):
+                        return model_path
+
+                options = ort.SessionOptions()
+                threads = os.environ.get('OMP_NUM_THREADS')
+                if threads:
+                    options.inter_op_num_threads = int(threads)
+                    options.intra_op_num_threads = int(threads)
+                session = _PinnedU2netSession('u2net', options)
             except (Exception, SystemExit) as exc:
                 raise RuntimeError(
                     'Background removal could not load its ONNX runtime. Run '
-                    'the Python setup again, then restart MediaMelt.'
+                    'the local media-pack setup again, then restart MuxMelt.'
                 ) from exc
             self._remove = remove
             self._session = session
@@ -125,7 +285,7 @@ class BGRemover:
 
         # Heavy import and ONNX initialization are deferred until first use,
         # then cached so a batch does not reload the U2Net model for every file.
-        remove, session = self._get_backend()
+        remove, session = self._get_backend(progress_callback)
 
         if progress_callback:
             progress_callback(0.1, 'Loading image...')

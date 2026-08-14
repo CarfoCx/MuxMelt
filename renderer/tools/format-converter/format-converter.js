@@ -4,7 +4,11 @@
 
 (function() {
 
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif']);
+// '.tim' (PlayStation 1 texture) is decode-only: it can be converted from, but
+// never to, so it deliberately has no entry in FORMAT_OPTIONS below.
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif', '.tim']);
+// Image inputs a Chromium <img> cannot display, so the queue shows an icon.
+const NO_THUMBNAIL_EXTS = new Set(['.tim']);
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac', '.wma', '.mka', '.opus']);
 const FORMAT_OPTIONS = {
@@ -478,9 +482,12 @@ function createFileElement(file, index) {
 
   const ext = getFileExtension(file.path);
   const isImage = IMAGE_EXTS.has(ext);
-  const iconHtml = isImage
+  // A <img> thumbnail only works for formats the browser itself can render.
+  // TIM is decoded in the main process, so show a static icon instead of an
+  // <img> that would never load.
+  const iconHtml = isImage && !NO_THUMBNAIL_EXTS.has(ext)
     ? `<img class="file-thumb" data-path="${window.escapeHtml(file.path)}" src="" alt="">`
-    : `<span class="file-icon">\u{1F3AC}</span>`;
+    : `<span class="file-icon">${isImage ? '\u{1F5BC}' : '\u{1F3AC}'}</span>`;
   let progressClass = '';
   if (file.state === 'complete') progressClass = ' complete';
   else if (file.state === 'error') progressClass = ' error';

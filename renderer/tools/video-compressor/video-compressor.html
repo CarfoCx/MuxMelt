@@ -5,32 +5,42 @@
   </div>
 
   <!-- Drop zone -->
-  <div class="drop-zone" id="dropZone">
+  <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-describedby="videoDropHint">
     <div class="drop-zone-icon">&#128230;</div>
     <div class="drop-zone-text">
       Drag &amp; drop video files to compress
     </div>
     <div class="drop-zone-actions">
-      <span class="drop-zone-link" id="browseBtn">browse files</span>
+      <button type="button" class="drop-zone-link" id="browseBtn">browse files</button>
       <span class="drop-zone-sep">|</span>
-      <span class="drop-zone-link" id="browseFolderBtn">browse folder</span>
+      <button type="button" class="drop-zone-link" id="browseFolderBtn">browse folder</button>
     </div>
-    <div class="drop-zone-hint">
+    <div class="drop-zone-hint" id="videoDropHint">
       Supports: MP4, AVI, MKV, MOV, WebM
     </div>
   </div>
 
   <!-- Settings -->
   <div class="settings-bar" style="flex-wrap: wrap;">
+    <div class="setting-group compression-goal-group">
+      <label for="compressionGoal">Goal:</label>
+      <select id="compressionGoal">
+        <option value="quick">Quick share</option>
+        <option value="balanced" selected>Balanced</option>
+        <option value="smaller">Smallest file</option>
+        <option value="quality">Best quality</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
     <div class="setting-group">
-      <label title="Lower = better quality, bigger file">CRF:</label>
+      <label for="crfSlider" title="Lower = better quality, bigger file">Quality level (CRF):</label>
       <input type="range" id="crfSlider" min="18" max="35" value="23">
       <span class="range-value" id="crfValue">23</span>
       <span class="range-hint">(lower = better)</span>
     </div>
 
     <div class="setting-group">
-      <label>Preset:</label>
+      <label for="preset">Encoding speed:</label>
       <select id="preset">
         <option value="ultrafast">Ultrafast</option>
         <option value="fast">Fast</option>
@@ -41,7 +51,7 @@
     </div>
 
     <div class="setting-group">
-      <label>Codec:</label>
+      <label for="codec">Compatibility:</label>
       <select id="codec">
         <option value="h264">H.264 (compatible)</option>
         <option value="h265">H.265 / HEVC (smaller)</option>
@@ -49,7 +59,7 @@
     </div>
 
     <div class="setting-group">
-      <label>Max resolution:</label>
+      <label for="resolution">Max resolution:</label>
       <select id="resolution">
         <option value="original">Original</option>
         <option value="1080p">1080p</option>
@@ -65,8 +75,8 @@
     </div>
 
     <div class="setting-group">
-      <label>Output:</label>
-      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+      <label for="outputDirBtn">Output:</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
         Same as source
       </button>
     </div>
@@ -86,8 +96,8 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Waiting for Video</span>
-    <div class="video-footer-progress" id="footerProgress" aria-hidden="true">
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for Video</span>
+    <div class="video-footer-progress" id="footerProgress" role="progressbar" aria-label="Video compression progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
       <div class="video-footer-progress-fill" id="footerProgressFill"></div>
     </div>
     <span class="video-progress-percent" id="progressPercent"></span>

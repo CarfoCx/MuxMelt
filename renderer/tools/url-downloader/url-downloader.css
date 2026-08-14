@@ -286,38 +286,6 @@
   color: var(--text-secondary);
 }
 
-/* Update button in header */
-.update-ytdlp-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-  transition: all 0.15s ease;
-}
-.update-ytdlp-btn:hover {
-  border-color: var(--accent);
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-.update-ytdlp-btn:active {
-  transform: scale(0.98);
-}
-.update-ytdlp-btn.updating .update-icon {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
 /* Advanced Settings collapsible */
 .advanced-settings-toggle {
   display: flex;
@@ -490,26 +458,11 @@
   transform: rotate(45deg);
 }
 
-/* Thumbnail and Preview elements in Row */
+/* Metadata preview elements in Row */
 .url-main.has-info {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-.url-thumbnail-container {
-  width: 64px;
-  height: 36px;
-  border-radius: 4px;
-  overflow: hidden;
-  background: #000;
-  flex-shrink: 0;
-  border: 1px solid var(--border);
-  position: relative;
-}
-.url-thumbnail {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 .url-info-details {
   display: flex;

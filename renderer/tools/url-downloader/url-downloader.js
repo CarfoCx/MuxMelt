@@ -53,9 +53,27 @@ async function init(ctx) {
   log('Online Video Downloader initialized');
 }
 
+function clearSessionSecrets() {
+  for (const id of ['proxyInput', 'usernameInput', 'passwordInput', 'videoPasswordInput']) {
+    const input = document.getElementById(id);
+    if (input) input.value = '';
+  }
+  // Cookie sources can identify a browser profile or reveal a private local
+  // path. Keep both choices in memory only for the active tool session.
+  cookiesFile = '';
+  updateCookiesButton();
+  const cookieBrowser = document.getElementById('cookieBrowserSelect');
+  if (cookieBrowser) cookieBrowser.value = '';
+}
+
+function deactivate() {
+  clearSessionSecrets();
+}
+
 function cleanup() {
   cancelAllInfoRequests();
   if (progressCleanup) { progressCleanup(); progressCleanup = null; }
+  clearSessionSecrets();
 }
 
 function updateDependencies() {
@@ -94,14 +112,12 @@ function bindEvents() {
         cookiesFile = files[0];
       }
       updateCookiesButton();
-      saveToolSettings();
     });
     cookiesFileBtn.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       if (cookiesFile) {
         cookiesFile = '';
         updateCookiesButton();
-        saveToolSettings();
       }
     });
   }
@@ -128,8 +144,7 @@ function bindEvents() {
     'skipSponsorsCheckbox', 'embedMetadataCheckbox', 'embedThumbnailCheckbox',
     'splitChaptersCheckbox', 'writeDescriptionCheckbox', 'writeThumbnailCheckbox',
     'audioFormatSelect', 'writeAutoSubsCheckbox', 'timeRangeInput',
-    'concurrentFragmentsInput', 'simultaneousDownloadsInput', 'proxyInput', 'usernameInput',
-    'passwordInput', 'videoPasswordInput', 'geoBypassCheckbox'
+    'concurrentFragmentsInput', 'simultaneousDownloadsInput', 'geoBypassCheckbox'
   ];
 
   elementsToWatch.forEach(id => {
@@ -142,35 +157,6 @@ function bindEvents() {
       });
     }
   });
-
-  // Dependency updater button
-  const updateYtDlpBtn = document.getElementById('updateYtDlpBtn');
-  if (updateYtDlpBtn) {
-    updateYtDlpBtn.addEventListener('click', async () => {
-      if (updateYtDlpBtn.classList.contains('updating')) return;
-      updateYtDlpBtn.classList.add('updating');
-      const textSpan = updateYtDlpBtn.querySelector('span');
-      textSpan.textContent = 'Updating (yt-dlp)...';
-      log('Starting yt-dlp dependencies update...');
-      try {
-        const res = await window.api.tools.urlDownloader.updateYtDlp();
-        if (res && res.success) {
-          log('yt-dlp upgraded successfully: ' + res.message, 'success');
-          if (window.showCompletionToast) window.showCompletionToast('Downloader dependencies updated successfully');
-        } else {
-          const error = res && res.error ? res.error : 'Unknown error';
-          log('Upgrade failed: ' + error, 'error');
-          if (window.showCompletionToast) window.showCompletionToast('Failed to update downloader: ' + error, true);
-        }
-      } catch (err) {
-        log('Upgrade error: ' + err.message, 'error');
-        if (window.showCompletionToast) window.showCompletionToast('Error updating downloader: ' + err.message, true);
-      } finally {
-        updateYtDlpBtn.classList.remove('updating');
-        textSpan.textContent = 'Update Downloader (yt-dlp)';
-      }
-    });
-  }
 
   clearBtn.addEventListener('click', () => {
     if (isProcessing) return;
@@ -221,7 +207,6 @@ function addRow(value) {
     state: 'pending',
     output: '',
     info: null,
-    thumbnailDataUrl: null,
     isFetchingInfo: false,
     isEditing: false
   };
@@ -231,7 +216,7 @@ function addRow(value) {
   
   if (value && isValidHttpUrl(value)) {
     // If a batch is already running, a URL added with a value joins the live
-    // queue immediately; otherwise fetch its info/thumbnail preview.
+    // queue immediately; otherwise fetch its text metadata preview.
     if (isProcessing) enqueueRow(row);
     else fetchInfoForRow(row, value);
   }
@@ -252,7 +237,6 @@ function createEmptyRow() {
     state: 'pending',
     output: '',
     info: null,
-    thumbnailDataUrl: null,
     isFetchingInfo: false,
     isEditing: false
   };
@@ -279,7 +263,8 @@ function removeRow(id) {
 function isValidHttpUrl(value) {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && !parsed.username && !parsed.password;
   } catch {
     return false;
   }
@@ -324,7 +309,6 @@ function fetchInfoForRow(row, url) {
   row.isFetchingInfo = true;
   row.status = 'Fetching video info...';
   row.info = null;
-  row.thumbnailDataUrl = null;
   renderRows();
 
   infoQueue.push({
@@ -368,7 +352,6 @@ async function runInfoJob(job) {
       row.info = res.info;
       row.status = 'Ready';
       row.url = url;
-      loadThumbnailForRow(row);
     } else {
       row.info = null;
       row.status = 'Ready';
@@ -384,36 +367,6 @@ async function runInfoJob(job) {
       renderRows();
     }
   }
-}
-
-// Thumbnails are remote https images, which the app's CSP (img-src 'self' data:
-// file:) blocks from loading directly in an <img>. The main process fetches the
-// bytes and returns a data: URL we can render inline.
-async function loadThumbnailForRow(row) {
-  const info = row.info;
-  if (!info) return;
-  let thumbUrl = info.thumbnail || '';
-  if (!thumbUrl && Array.isArray(info.thumbnails) && info.thumbnails.length) {
-    // thumbnails are ordered worst -> best; take the last valid one.
-    for (let i = info.thumbnails.length - 1; i >= 0; i--) {
-      if (info.thumbnails[i] && info.thumbnails[i].url) { thumbUrl = info.thumbnails[i].url; break; }
-    }
-  }
-  if (!thumbUrl) return;
-
-  try {
-    const res = await window.api.tools.urlDownloader.getThumbnail({
-      url: thumbUrl,
-      referer: info.webpage_url || row.url || undefined
-    });
-    // Guard against a stale response after the row's URL changed.
-    if (res && res.success && typeof res.dataUrl === 'string'
-        && /^data:image\/(?:png|jpe?g|webp|gif|avif);base64,[a-z0-9+/]+=*$/i.test(res.dataUrl)
-        && row.info === info) {
-      row.thumbnailDataUrl = res.dataUrl;
-      renderRows();
-    }
-  } catch {}
 }
 
 // Read the current advanced/queue settings into a plain options object. Read
@@ -707,6 +660,12 @@ function finishBatch() {
   downloadBtn.classList.remove('btn-cancel');
   downloadBtn.disabled = false;
   processingIndicator.classList.remove('active');
+  // Account/video credentials are deliberately session-memory-only and are no
+  // longer needed once every worker has finished.
+  for (const id of ['usernameInput', 'passwordInput', 'videoPasswordInput']) {
+    const input = document.getElementById(id);
+    if (input) input.value = '';
+  }
 
   // Report only this batch. Previously a one-row retry included every old
   // completed/failed row still visible in the queue.
@@ -821,18 +780,8 @@ function renderRows() {
       const titleStr = row.info.title || row.info.fulltitle || row.info.id || 'Untitled';
       const uploaderStr = row.info.uploader || row.info.channel || row.info.uploader_id
         || row.info.extractor_key || row.info.webpage_url_domain || 'Unknown';
-      // Only a data: URL (fetched by the main process) is renderable under the
-      // app CSP; remote https thumbnails are blocked, so skip the <img> until
-      // the data URL arrives rather than showing a broken-image icon.
-      const thumbnailSrc = typeof row.thumbnailDataUrl === 'string'
-        && /^data:image\/(?:png|jpe?g|webp|gif|avif);base64,[a-z0-9+/]+=*$/i.test(row.thumbnailDataUrl)
-        ? row.thumbnailDataUrl : '';
-
       mainContentHtml = `
         <div class="url-main has-info">
-          <div class="url-thumbnail-container">
-            ${thumbnailSrc ? `<img src="${thumbnailSrc}" class="url-thumbnail" alt="">` : ''}
-          </div>
           <div class="url-info-details">
             <span class="url-video-title" title="${window.escapeHtml(titleStr)}">${window.escapeHtml(titleStr)}</span>
             <div class="url-video-meta">
@@ -851,7 +800,7 @@ function renderRows() {
       // Edit URL mode
       mainContentHtml = `
         <div class="url-main">
-          <input class="url-input" type="url" placeholder="https://example.com/watch..." value="${window.escapeHtml(row.url)}" ${row.state === 'processing' ? 'disabled' : ''}>
+          <input class="url-input" type="url" placeholder="https://example.com/watch..." value="${window.escapeHtml(row.url)}" autocomplete="off" spellcheck="false" ${row.state === 'processing' ? 'disabled' : ''}>
           <div class="url-main-actions">
             ${row.url.trim() ? `<button class="url-action-btn download-url-btn" title="Download this video" ${row.state === 'processing' ? 'disabled' : ''}>${DOWNLOAD_SVG}</button>` : ''}
             ${row.info ? `<button class="url-action-btn cancel-edit-btn" title="Cancel edit">&times;</button>` : ''}
@@ -881,7 +830,6 @@ function renderRows() {
         row.status = 'Waiting for URL';
         row.progress = 0;
         row.info = null;
-        row.thumbnailDataUrl = null;
         // Un-queue while the URL is being edited so a worker can't grab a
         // half-typed (transiently valid) URL; the debounce re-queues it.
         row.queued = false;
@@ -1011,16 +959,18 @@ async function loadToolSettings() {
   try {
     const all = await window.loadAllSettings();
     const s = all['url-downloader'] || {};
+    const hadLegacyCredentials = [
+      'proxy', 'username', 'password', 'videoPassword', 'cookiesFile', 'cookieBrowser',
+    ]
+      .some(key => Object.prototype.hasOwnProperty.call(s, key));
     if (!outputDir && window.applyDefaultOutputDir) {
       outputDir = window.applyDefaultOutputDir(outputDirBtn);
     }
     if (s.outputDir) outputDir = s.outputDir;
-    if (s.cookiesFile) { cookiesFile = s.cookiesFile; updateCookiesButton(); }
     updateOutputButton();
     if (outputDir) openOutputBtn.style.display = '';
 
     if (s.quality && qualitySelect) qualitySelect.value = s.quality;
-    if (s.cookieBrowser) document.getElementById('cookieBrowserSelect').value = s.cookieBrowser;
     if (s.playlist !== undefined) document.getElementById('playlistCheckbox').checked = s.playlist;
     if (s.maxDownloads !== undefined) document.getElementById('maxDownloadsInput').value = s.maxDownloads;
     if (s.limitRate !== undefined) document.getElementById('limitRateInput').value = s.limitRate;
@@ -1039,9 +989,25 @@ async function loadToolSettings() {
     if (s.timeRange !== undefined) document.getElementById('timeRangeInput').value = s.timeRange;
     if (s.concurrentFragments !== undefined) document.getElementById('concurrentFragmentsInput').value = s.concurrentFragments;
     if (s.simultaneousDownloads !== undefined) document.getElementById('simultaneousDownloadsInput').value = s.simultaneousDownloads;
-    if (s.proxy !== undefined) document.getElementById('proxyInput').value = s.proxy;
-    if (s.username !== undefined) document.getElementById('usernameInput').value = s.username;
     if (s.geoBypass !== undefined) document.getElementById('geoBypassCheckbox').checked = s.geoBypass;
+
+    // Older versions persisted proxy/username values in plaintext. Remove all
+    // such legacy fields during the first load; current values stay only in DOM
+    // memory and are intentionally absent from saved settings.
+    if (hadLegacyCredentials) {
+      try {
+        await window.updateSettings(settings => {
+          const saved = settings['url-downloader'];
+          if (!saved || typeof saved !== 'object') return;
+          delete saved.proxy;
+          delete saved.username;
+          delete saved.password;
+          delete saved.videoPassword;
+          delete saved.cookiesFile;
+          delete saved.cookieBrowser;
+        });
+      } catch {}
+    }
 
     updateDependencies();
   } catch {}
@@ -1054,9 +1020,7 @@ function saveToolSettings() {
     window.updateSettings(all => {
       all['url-downloader'] = {
         outputDir,
-        cookiesFile: cookiesFile || undefined,
         quality: qualitySelect ? qualitySelect.value : 'best',
-        cookieBrowser: document.getElementById('cookieBrowserSelect').value || '',
         playlist: document.getElementById('playlistCheckbox').checked,
         maxDownloads: document.getElementById('maxDownloadsInput').value,
         limitRate: document.getElementById('limitRateInput').value,
@@ -1075,14 +1039,12 @@ function saveToolSettings() {
         timeRange: document.getElementById('timeRangeInput').value,
         concurrentFragments: document.getElementById('concurrentFragmentsInput').value,
         simultaneousDownloads: document.getElementById('simultaneousDownloadsInput').value,
-        proxy: document.getElementById('proxyInput').value,
-        username: document.getElementById('usernameInput').value,
         geoBypass: document.getElementById('geoBypassCheckbox').checked
       };
     }).catch(err => log('Could not save settings: ' + err.message, 'warn'));
   }, 300);
 }
 
-window.registerTool('url-downloader', { init, cleanup });
+window.registerTool('url-downloader', { init, cleanup, deactivate });
 
 })();

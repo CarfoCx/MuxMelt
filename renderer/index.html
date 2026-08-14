@@ -8,15 +8,24 @@
   <link rel="stylesheet" href="app.css">
   <link rel="stylesheet" id="toolStylesheet" href="">
 </head>
-<body>
+<body data-app-name="MuxMelt">
 
-  <!-- Custom window title bar (the OS frame is disabled; see window-manager.js).
-       Drawn here so it can be themed — modern in the default themes, a classic
-       beveled caption bar in the Classic schemes. -->
+  <!-- Custom window title bar -->
   <div class="titlebar" id="titlebar">
     <div class="titlebar-drag" id="titlebarDrag">
-      <span class="titlebar-title">MuxMelt</span>
+      <div class="titlebar-brand-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+          <polyline points="2 17 12 22 22 17"/>
+          <polyline points="2 12 12 17 22 12"/>
+        </svg>
+      </div>
+      <span class="titlebar-title" id="titlebarAppName">MuxMelt</span>
+      <span class="titlebar-version-tag" id="titlebarVersion" aria-label="Application version"></span>
     </div>
+
+    <!-- Quick Actions moved to Sidebar -->
+
     <div class="titlebar-controls">
       <button class="titlebar-btn" id="winMinBtn" title="Minimize" aria-label="Minimize">
         <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><rect x="1" y="5" width="9" height="1" fill="currentColor"/></svg>
@@ -35,80 +44,126 @@
 
     <a href="#toolContent" class="skip-nav">Skip to content</a>
 
-    <!-- Sidebar -->
+    <!-- Sidebar with Organized Categories -->
     <nav class="sidebar" id="sidebar" aria-label="Tool navigation">
       <div class="sidebar-header">
-        <h1>Mux<span>Melt</span></h1>
+        <div class="brand-logo-container">
+          <div class="brand-logo-box">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+              <polyline points="2 17 12 22 22 17"/>
+              <polyline points="2 12 12 17 22 12"/>
+            </svg>
+          </div>
+          <div class="brand-title-group">
+            <h1>Mux<span>Melt</span></h1>
+            <span class="brand-subtitle">MEDIA TOOLKIT</span>
+          </div>
+        </div>
       </div>
 
       <div class="sidebar-tools">
-        <button class="sidebar-item active" data-tool="upscaler">
-          <span class="sidebar-icon">&#10024;</span>
-          <span class="sidebar-label">Upscaler</span>
+        <button class="sidebar-item active" data-tool="home">
+          <span class="sidebar-icon" aria-hidden="true">&#8962;</span>
+          <span class="sidebar-label">Home</span>
+        </button>
+
+        <!-- Section: Video & Animation -->
+        <div class="sidebar-category">VIDEO &amp; ANIMATION</div>
+        <button class="sidebar-item" data-tool="upscaler">
+          <span class="sidebar-icon">✨</span>
+          <span class="sidebar-label">AI Upscaler</span>
+          <span class="sidebar-badge">AI</span>
         </button>
         <button class="sidebar-item" data-tool="format-converter">
-          <span class="sidebar-icon">&#128260;</span>
+          <span class="sidebar-icon">🔄</span>
           <span class="sidebar-label">Format Converter</span>
         </button>
-        <button class="sidebar-item" data-tool="audio-extractor">
-          <span class="sidebar-icon">&#127925;</span>
-          <span class="sidebar-label">Audio Extractor</span>
-        </button>
-        <button class="sidebar-item" data-tool="gif-maker">
-          <span class="sidebar-icon">&#127916;</span>
-          <span class="sidebar-label">GIF Maker</span>
-        </button>
         <button class="sidebar-item" data-tool="video-compressor">
-          <span class="sidebar-icon">&#128230;</span>
+          <span class="sidebar-icon">📦</span>
           <span class="sidebar-label">Video Compressor</span>
         </button>
-        <button class="sidebar-item" data-tool="url-downloader">
-          <span class="sidebar-icon">&#11015;</span>
-          <span class="sidebar-label">Online Video Downloader</span>
+        <button class="sidebar-item" data-tool="gif-maker">
+          <span class="sidebar-icon">🎬</span>
+          <span class="sidebar-label">GIF Maker</span>
         </button>
-        <button class="sidebar-item" data-tool="torrent-downloader">
-          <span class="sidebar-icon">&#128142;</span>
-          <span class="sidebar-label">Torrent Downloader</span>
-        </button>
-        <button class="sidebar-item" data-tool="bg-remover">
-          <span class="sidebar-icon">&#9986;</span>
-          <span class="sidebar-label">Background Editor</span>
-        </button>
-        <button class="sidebar-item" data-tool="bulk-imager">
-          <span class="sidebar-icon">&#128444;</span>
-          <span class="sidebar-label">Basic Image Editor</span>
+
+        <!-- Section: Audio & Sound -->
+        <div class="sidebar-category">AUDIO &amp; SOUND</div>
+        <button class="sidebar-item" data-tool="audio-extractor">
+          <span class="sidebar-icon">🎵</span>
+          <span class="sidebar-label">Audio Extractor</span>
         </button>
         <button class="sidebar-item" data-tool="stem-separator">
-          <span class="sidebar-icon">&#127929;</span>
+          <span class="sidebar-icon">🎹</span>
           <span class="sidebar-label">Stem Separator</span>
-        </button>
-        <button class="sidebar-item" data-tool="qr-studio">
-          <span class="sidebar-icon">&#9641;</span>
-          <span class="sidebar-label">QR Studio</span>
+          <span class="sidebar-badge">AI</span>
         </button>
         <button class="sidebar-item" data-tool="tts">
-          <span class="sidebar-icon">&#128483;</span>
+          <span class="sidebar-icon">🗣️</span>
           <span class="sidebar-label">Text to Speech</span>
         </button>
+
+        <!-- Section: Image & Design -->
+        <div class="sidebar-category">IMAGE &amp; DESIGN</div>
+        <button class="sidebar-item" data-tool="bg-remover">
+          <span class="sidebar-icon">✂️</span>
+          <span class="sidebar-label">Background Editor</span>
+          <span class="sidebar-badge">AI</span>
+        </button>
+        <button class="sidebar-item" data-tool="bulk-imager">
+          <span class="sidebar-icon">🖼️</span>
+          <span class="sidebar-label">Image Editor</span>
+        </button>
+        <button class="sidebar-item" data-tool="qr-studio">
+          <span class="sidebar-icon">🔳</span>
+          <span class="sidebar-label">QR Studio</span>
+        </button>
+
+        <!-- Section: Network & Utilities -->
+        <div class="sidebar-category">NETWORK &amp; UTILITIES</div>
+        <button class="sidebar-item" data-tool="url-downloader">
+          <span class="sidebar-icon">⬇️</span>
+          <span class="sidebar-label">Video Downloader</span>
+        </button>
+        <button class="sidebar-item" data-tool="torrent-downloader">
+          <span class="sidebar-icon">💎</span>
+          <span class="sidebar-label">Torrent Downloader</span>
+        </button>
         <button class="sidebar-item" data-tool="chat">
-          <span class="sidebar-icon">&#128172;</span>
-          <span class="sidebar-label">Local Chat</span>
+          <span class="sidebar-icon">💬</span>
+          <span class="sidebar-label">Local AI Chat</span>
         </button>
       </div>
 
       <div class="sidebar-footer">
-        <button class="sidebar-item sidebar-settings" data-tool="settings">
-          <span class="sidebar-icon">&#9881;</span>
+        <div class="sidebar-action-bar">
+          <button class="sidebar-action-btn" id="themeToggleBtn" title="Toggle Light/Dark Mode" aria-label="Toggle light or dark theme">
+            <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+
+          <button class="sidebar-action-btn" id="headerLogBtn" title="Toggle Log" aria-label="Toggle application log">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          </button>
+        </div>
+
+        <button class="sidebar-item sidebar-settings" data-tool="settings" id="headerSettingsBtn">
+          <span class="sidebar-icon">⚙️</span>
           <span class="sidebar-label">Settings</span>
         </button>
-        <button class="sidebar-shortcuts-btn" id="shortcutsBtn" title="Keyboard shortcuts (Ctrl+?)">
-          <span class="sidebar-shortcuts-icon">?</span>
-          <span>Shortcuts</span>
-        </button>
-        <button class="sidebar-donate-btn" id="sidebarDonateBtn" title="Support MuxMelt development">
-          <span class="sidebar-donate-heart">&#9829;</span>
-          <span>Support</span>
-        </button>
+
+        <div class="sidebar-quick-links">
+          <button class="sidebar-shortcuts-btn" id="shortcutsBtn" title="Keyboard shortcuts (Ctrl+?)" aria-haspopup="dialog" aria-controls="shortcutsOverlay">
+            <span class="sidebar-shortcuts-icon">?</span>
+            <span>Shortcuts</span>
+          </button>
+          <button class="sidebar-donate-btn" id="sidebarDonateBtn" title="Support MuxMelt development">
+            <span class="sidebar-donate-heart">&#9829;</span>
+            <span>Support</span>
+          </button>
+        </div>
+
         <div class="gpu-stats" id="gpuStats">
           <span class="gpu-stat" id="gpuUtilStat" title="GPU utilization" aria-label="GPU utilization"></span>
           <span class="gpu-stat" id="gpuTempStat" title="GPU temperature" aria-label="GPU temperature"></span>
@@ -126,7 +181,7 @@
         <div class="update-banner-actions">
           <button class="btn btn-primary btn-sm" id="updateDownloadBtn">Download</button>
           <button class="btn btn-primary btn-sm" id="updateRestartBtn" style="display: none;">Restart to Update</button>
-          <button class="update-banner-dismiss" id="updateDismiss" title="Dismiss">&times;</button>
+          <button class="update-banner-dismiss" id="updateDismiss" title="Dismiss" aria-label="Dismiss update notice">&times;</button>
         </div>
       </div>
 
@@ -136,7 +191,10 @@
       <!-- Log panel (shared) -->
       <div class="log-panel" id="logPanel" role="log" aria-label="Application log">
         <div class="log-header" id="logToggle" role="button" tabindex="0" aria-expanded="true" aria-controls="logBody" aria-label="Toggle log panel">
-          <span>Log</span>
+          <div class="log-header-left">
+            <span class="log-header-title">Application Log</span>
+            <span class="log-status-indicator"></span>
+          </div>
           <span class="log-toggle-icon" id="logIcon" aria-hidden="true">&#9650;</span>
         </div>
         <div class="log-body" id="logBody">
@@ -146,19 +204,19 @@
     </div>
 
     <!-- Keyboard shortcuts modal -->
-    <div class="shortcuts-overlay" id="shortcutsOverlay">
-      <div class="shortcuts-modal">
+    <div class="shortcuts-overlay" id="shortcutsOverlay" aria-hidden="true">
+      <div class="shortcuts-modal" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle" tabindex="-1">
         <div class="shortcuts-header">
-          <h3>Keyboard Shortcuts</h3>
-          <button class="shortcuts-close" id="shortcutsClose">&times;</button>
+          <h3 id="shortcutsTitle">Keyboard Shortcuts</h3>
+          <button class="shortcuts-close" id="shortcutsClose" aria-label="Close keyboard shortcuts">&times;</button>
         </div>
         <div class="shortcuts-body">
-          <div class="shortcut-section">General</div>
+          <div class="shortcut-section">General Navigation</div>
           <div class="shortcut-row"><kbd>Ctrl+O</kbd><span>Open file browser</span></div>
           <div class="shortcut-row"><kbd>Ctrl+L</kbd><span>Toggle log panel</span></div>
           <div class="shortcut-row"><kbd>Enter</kbd><span>Run primary action</span></div>
           <div class="shortcut-row"><kbd>Escape</kbd><span>Close menus / modals</span></div>
-          <div class="shortcut-row"><kbd>Ctrl+?</kbd><span>Show this help</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+?</kbd><span>Show shortcuts help</span></div>
         </div>
       </div>
     </div>
