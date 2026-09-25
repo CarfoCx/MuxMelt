@@ -35,6 +35,7 @@ let isDownloading = false;
 let isCancellingDownload = false;
 let isImporting = false;
 let streamingText = '';
+let streamingRenderFrameId = null;
 let isFollowingOutput = true;
 
 const MAX_HISTORY_MESSAGES = 24;
@@ -97,6 +98,7 @@ async function init(ctx) {
 }
 
 function cleanup() {
+  flushStreamingRender();
   shouldReconnect = false;
   if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
   if (reconnectTimerId) { clearTimeout(reconnectTimerId); reconnectTimerId = null; }
@@ -112,6 +114,9 @@ function cleanup() {
 }
 
 function deactivate() {
+  // Tool navigation can detach this DOM before the next animation frame. Commit
+  // any tokens already received so the cached conversation remains current.
+  flushStreamingRender();
   if (!isSocketOpen()) return;
   try {
     ws.send(JSON.stringify({ action: 'unload' }));
@@ -243,16 +248,16 @@ function handleWSMessage(data) {
     }
 
     case 'start':
+      cancelStreamingRender();
       if (pendingTurn) setPlainMessage(pendingTurn.assistant, '');
       streamingText = '';
       setStatus('Generating locally…');
       break;
 
     case 'token':
-      if (!pendingTurn || typeof data.text !== 'string') return;
+      if (!pendingTurn || typeof data.text !== 'string' || data.text.length === 0) return;
       streamingText += data.text;
-      setPlainMessage(pendingTurn.assistant, streamingText);
-      scrollToBottom();
+      scheduleStreamingRender();
       break;
 
     case 'done':
@@ -810,6 +815,7 @@ function send() {
   const userMessage = addMessageEl('user', text);
   const assistantMessage = addMessageEl('assistant', 'Thinking…');
   pendingTurn = { text, user: userMessage, assistant: assistantMessage };
+  cancelStreamingRender();
   streamingText = '';
   isGenerating = true;
   isStopping = false;
@@ -836,6 +842,43 @@ function send() {
   }
 }
 
+function cancelStreamingRender() {
+  if (streamingRenderFrameId === null) return;
+  window.cancelAnimationFrame(streamingRenderFrameId);
+  streamingRenderFrameId = null;
+}
+
+function renderStreamingText() {
+  if (!pendingTurn) return;
+  setPlainMessage(pendingTurn.assistant, streamingText);
+  // Keep the existing follow/jump behavior, but do the layout read and scroll
+  // at most once for all tokens delivered during this display frame.
+  scrollToBottom();
+}
+
+function scheduleStreamingRender() {
+  if (streamingRenderFrameId !== null) return;
+  streamingRenderFrameId = window.requestAnimationFrame(() => {
+    streamingRenderFrameId = null;
+    renderStreamingText();
+  });
+}
+
+function flushStreamingRender(options = {}) {
+  const hadPendingFrame = streamingRenderFrameId !== null;
+  cancelStreamingRender();
+  if (!pendingTurn) return false;
+
+  const hasCustomRender = Object.prototype.hasOwnProperty.call(options, 'render');
+  if (!hasCustomRender && !hadPendingFrame) return false;
+  const render = hasCustomRender
+    ? options.render
+    : (assistant, text) => setPlainMessage(assistant, text);
+  if (typeof render === 'function') render(pendingTurn.assistant, streamingText);
+  if (options.scroll !== false) scrollToBottom();
+  return true;
+}
+
 function stopGeneration() {
   if (!isGenerating || isStopping) return;
   if (!isSocketOpen()) {
@@ -860,15 +903,18 @@ function completeGeneration(stats) {
   }
 
   const generation = describeGenerationStats(stats);
-  if (generation.limitReached) pendingTurn.assistant.bubble.classList.add('partial');
-  finalizeAssistantMessage(pendingTurn.assistant, streamingText, {
-    copy: true,
-    meta: generation.meta,
+  flushStreamingRender({
+    render: (assistant, text) => {
+      if (generation.limitReached) assistant.bubble.classList.add('partial');
+      finalizeAssistantMessage(assistant, text, {
+        copy: true,
+        meta: generation.meta,
+      });
+    },
   });
   commitPendingTurn();
   setStatus(generation.status);
   resetGenerationState();
-  scrollToBottom();
 }
 
 function completeCancellation() {
@@ -879,14 +925,19 @@ function completeCancellation() {
   }
 
   if (streamingText) {
-    pendingTurn.assistant.bubble.classList.add('partial');
-    finalizeAssistantMessage(pendingTurn.assistant, streamingText, {
-      copy: true,
-      meta: 'Stopped · partial reply kept locally',
+    flushStreamingRender({
+      render: (assistant, text) => {
+        assistant.bubble.classList.add('partial');
+        finalizeAssistantMessage(assistant, text, {
+          copy: true,
+          meta: 'Stopped · partial reply kept locally',
+        });
+      },
     });
     commitPendingTurn();
     setStatus('Stopped · partial reply kept');
   } else {
+    cancelStreamingRender();
     const retryText = pendingTurn.text;
     const userWrap = pendingTurn.user.wrap;
     const assistantWrap = pendingTurn.assistant.wrap;
@@ -896,6 +947,7 @@ function completeCancellation() {
     });
     pendingTurn = null;
     setStatus('Stopped before a reply was produced');
+    scrollToBottom();
   }
   resetGenerationState();
 }
@@ -911,10 +963,14 @@ function failCurrentTurn(message) {
   const retryText = pendingTurn.text;
   const userWrap = pendingTurn.user.wrap;
   const assistantWrap = pendingTurn.assistant.wrap;
-  pendingTurn.assistant.bubble.classList.add('error');
-  finalizeAssistantMessage(pendingTurn.assistant, message, {
-    retry: () => retryFailedTurn(retryText, userWrap, assistantWrap),
-    meta: 'Reply not added to conversation context',
+  flushStreamingRender({
+    render: (assistant) => {
+      assistant.bubble.classList.add('error');
+      finalizeAssistantMessage(assistant, message, {
+        retry: () => retryFailedTurn(retryText, userWrap, assistantWrap),
+        meta: 'Reply not added to conversation context',
+      });
+    },
   });
   pendingTurn = null;
   resetGenerationState();
@@ -923,6 +979,7 @@ function failCurrentTurn(message) {
 
 function restorePendingTurnToComposer() {
   if (!pendingTurn) return;
+  cancelStreamingRender();
   const text = pendingTurn.text;
   pendingTurn.user.wrap.remove();
   pendingTurn.assistant.wrap.remove();
@@ -952,6 +1009,7 @@ function commitPendingTurn() {
 }
 
 function resetGenerationState() {
+  cancelStreamingRender();
   pendingTurn = null;
   streamingText = '';
   isGenerating = false;

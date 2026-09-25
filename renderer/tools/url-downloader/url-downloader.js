@@ -20,6 +20,7 @@ let batchTotalFiles = 0;
 let concurrencyLimit = 3;
 let activeWorkers = 0;
 let batchRowIds = new Set();
+const rowElements = new Map();
 const INFO_CONCURRENCY_LIMIT = 3;
 let infoQueue = [];
 let activeInfoRequests = 0;
@@ -73,6 +74,7 @@ function deactivate() {
 function cleanup() {
   cancelAllInfoRequests();
   if (progressCleanup) { progressCleanup(); progressCleanup = null; }
+  rowElements.clear();
   clearSessionSecrets();
 }
 
@@ -129,6 +131,8 @@ function bindEvents() {
 
   advancedToggleBtn.addEventListener('click', () => {
     const collapsed = advancedSettingsPanel.classList.toggle('collapsed');
+    advancedSettingsPanel.hidden = collapsed;
+    advancedToggleBtn.setAttribute('aria-expanded', String(!collapsed));
     if (collapsed) {
       advancedChevron.style.transform = 'rotate(0deg)';
     } else {
@@ -169,7 +173,7 @@ function bindEvents() {
     retryBtn.style.display = 'none';
     window.clearLog();
     addRow('');
-    statusText.textContent = 'Waiting for URL';
+    statusText.textContent = 'Waiting for a link';
   });
 
   retryBtn.addEventListener('click', () => {
@@ -177,7 +181,7 @@ function bindEvents() {
       if (row.state === 'error') {
         row.state = 'pending';
         row.progress = 0;
-        row.status = 'Waiting for URL';
+        row.status = 'Waiting for a link';
       }
     });
     retryBtn.style.display = 'none';
@@ -203,7 +207,7 @@ function addRow(value) {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     url: value || '',
     progress: 0,
-    status: 'Waiting for URL',
+    status: 'Waiting for a link',
     state: 'pending',
     output: '',
     info: null,
@@ -233,7 +237,7 @@ function createEmptyRow() {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     url: '',
     progress: 0,
-    status: 'Waiting for URL',
+    status: 'Waiting for a link',
     state: 'pending',
     output: '',
     info: null,
@@ -295,7 +299,7 @@ function fetchInfoForRow(row, url) {
     cancelInfoForRow(row);
     row.info = null;
     row.isFetchingInfo = false;
-    row.status = 'Waiting for URL';
+    row.status = 'Waiting for a link';
     renderRows();
     return;
   }
@@ -464,7 +468,7 @@ function ensureWorkers() {
 
 // Add a row to the queue. When a batch is already running the row is picked up
 // by a free worker (or a freshly spawned one, up to the limit); otherwise it
-// simply waits for the next Download All / per-row download.
+// simply waits for the next Download all / per-row download.
 function enqueueRow(row) {
   const url = (row.url || '').trim();
   if (!url || !isValidHttpUrl(url) || row.state === 'processing' || cancelRequested) return;
@@ -563,7 +567,7 @@ function updateBatchStatus() {
 
 // `onlyRow` (optional) restricts the download to a single queue row — used by
 // the per-row Download button when idle. When omitted, every pending/failed
-// row in the queue is processed (the "Download All" button).
+// row in the queue is processed (the "Download all" button).
 async function startDownload(onlyRow = null) {
   if (isProcessing) {
     // The primary button toggles to Cancel while a batch is running.
@@ -647,16 +651,16 @@ function finishBatch() {
   isProcessing = false;
   cancelRequested = false;
   // Clear the stale "Queued..." label from rows that were queued but never
-  // started (e.g. after a cancel). They stay pending so Download All can resume
+  // started (e.g. after a cancel). They stay pending so Download all can resume
   // them, but shouldn't look like they're still waiting on a worker.
   rows.forEach(r => {
     if (r.queued) {
       r.queued = false;
-      if (r.state === 'pending') r.status = wasCancelled ? 'Cancelled' : 'Waiting for URL';
+      if (r.state === 'pending') r.status = wasCancelled ? 'Cancelled' : 'Waiting for a link';
     }
   });
   if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
-  downloadBtn.textContent = 'Download All';
+  downloadBtn.textContent = 'Download all';
   downloadBtn.classList.remove('btn-cancel');
   downloadBtn.disabled = false;
   processingIndicator.classList.remove('active');
@@ -737,7 +741,33 @@ function handleProgress(data) {
     etaText.textContent = window.calculateETA(batchStartTime, batchTotal(), batch);
   }
 
-  renderRows();
+  // Progress can arrive several times per second. Rebuilding every queue row
+  // here used to discard and recreate all inputs, SVGs, and event listeners on
+  // every update. Only the changing status/progress nodes need to be touched.
+  if (!updateRenderedRowProgress(row)) renderRows();
+}
+
+function updateRenderedRowProgress(row) {
+  const el = rowElements.get(row.id);
+  if (!el || !el.isConnected) return false;
+
+  el.className = `url-row state-${row.state}`;
+  const state = el.querySelector('.url-state');
+  if (state) {
+    state.textContent = row.isFetchingInfo ? 'Fetching info...' : String(row.status || '');
+    state.title = String(row.status || '');
+  }
+
+  const percent = Math.round(Math.min(1, Math.max(0, Number(row.progress) || 0)) * 100);
+  const fill = el.querySelector('.url-progress-fill');
+  if (fill) {
+    fill.style.width = `${percent}%`;
+    fill.classList.toggle('complete', row.state === 'complete');
+    fill.classList.toggle('error', row.state === 'error');
+  }
+  const progressText = el.querySelector('.url-progress-text');
+  if (progressText) progressText.textContent = `${percent}%`;
+  return true;
 }
 
 function formatDuration(seconds) {
@@ -754,6 +784,7 @@ function formatDuration(seconds) {
 
 function renderRows() {
   if (window.updateQueueSummary) window.updateQueueSummary(rows.filter(row => row.url.trim()), 'url-downloader');
+  rowElements.clear();
   urlList.innerHTML = '';
   
   rows.forEach(row => {
@@ -790,8 +821,8 @@ function renderRows() {
             </div>
           </div>
           <div class="url-row-actions">
-            <button class="url-action-btn download-url-btn" title="Download this video" ${row.state === 'processing' ? 'disabled' : ''}>${DOWNLOAD_SVG}</button>
-            <button class="url-action-btn edit-url-btn" title="Edit URL">${EDIT_SVG}</button>
+            <button class="url-action-btn download-url-btn" title="Download this video" aria-label="Download this video" ${row.state === 'processing' ? 'disabled' : ''}>${DOWNLOAD_SVG}</button>
+            <button class="url-action-btn edit-url-btn" title="Edit link" aria-label="Edit video link">${EDIT_SVG}</button>
             ${row.output ? `<button class="url-output" title="${window.escapeHtml(row.output)}">Open file</button>` : ''}
           </div>
         </div>
@@ -800,10 +831,10 @@ function renderRows() {
       // Edit URL mode
       mainContentHtml = `
         <div class="url-main">
-          <input class="url-input" type="url" placeholder="https://example.com/watch..." value="${window.escapeHtml(row.url)}" autocomplete="off" spellcheck="false" ${row.state === 'processing' ? 'disabled' : ''}>
+          <input class="url-input" type="url" aria-label="Video link" placeholder="Paste a video link..." value="${window.escapeHtml(row.url)}" autocomplete="off" spellcheck="false" ${row.state === 'processing' ? 'disabled' : ''}>
           <div class="url-main-actions">
-            ${row.url.trim() ? `<button class="url-action-btn download-url-btn" title="Download this video" ${row.state === 'processing' ? 'disabled' : ''}>${DOWNLOAD_SVG}</button>` : ''}
-            ${row.info ? `<button class="url-action-btn cancel-edit-btn" title="Cancel edit">&times;</button>` : ''}
+            ${row.url.trim() ? `<button class="url-action-btn download-url-btn" title="Download this video" aria-label="Download this video" ${row.state === 'processing' ? 'disabled' : ''}>${DOWNLOAD_SVG}</button>` : ''}
+            ${row.info ? `<button class="url-action-btn cancel-edit-btn" title="Cancel edit" aria-label="Cancel editing this link">&times;</button>` : ''}
             ${row.output ? `<button class="url-output" title="${window.escapeHtml(row.output)}">Open file</button>` : ''}
           </div>
         </div>
@@ -813,7 +844,7 @@ function renderRows() {
     el.innerHTML = `
       ${mainContentHtml}
       <div class="url-state" title="${window.escapeHtml(String(row.status || ''))}">${statusDisplay}</div>
-      <button class="url-remove" title="Remove from list" ${row.state === 'processing' ? 'disabled' : ''}>&times;</button>
+      <button class="url-remove" title="Remove from list" aria-label="Remove video link from list" ${row.state === 'processing' ? 'disabled' : ''}>&times;</button>
       <div class="url-progress">
         <div class="url-progress-fill${progressClass}" style="width: ${percent}%"></div>
         ${showPercent ? `<div class="url-progress-text">${percent}%</div>` : ''}
@@ -827,7 +858,7 @@ function renderRows() {
         cancelInfoForRow(row);
         row.url = input.value.trim();
         row.state = 'pending';
-        row.status = 'Waiting for URL';
+        row.status = 'Waiting for a link';
         row.progress = 0;
         row.info = null;
         // Un-queue while the URL is being edited so a worker can't grab a
@@ -898,7 +929,7 @@ function renderRows() {
         row.isEditing = true;
         renderRows();
         setTimeout(() => {
-          const inp = el.querySelector('.url-input');
+          const inp = urlList.children[rows.indexOf(row)]?.querySelector('.url-input');
           if (inp) {
             inp.focus();
             inp.select();
@@ -922,6 +953,7 @@ function renderRows() {
 
     el.querySelector('.url-remove').addEventListener('click', () => removeRow(row.id));
     urlList.appendChild(el);
+    rowElements.set(row.id, el);
   });
 }
 

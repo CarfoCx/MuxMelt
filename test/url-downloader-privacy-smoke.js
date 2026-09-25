@@ -39,6 +39,9 @@ async function main() {
     );
     const commandLine = args.join(' ');
     assert.ok(args.includes('--ignore-config'));
+    assert.strictEqual(args[args.indexOf('--progress-delta') + 1], '0.5');
+    assert.strictEqual(args[args.indexOf('--progress-template') + 1], downloader.__progress.template);
+    assert.ok(downloader.__progress.template.startsWith(`download:${downloader.__progress.prefix}\t`));
     for (const secret of Object.values(secrets)) assert.ok(!commandLine.includes(secret));
     for (const flag of ['--proxy', '--username', '--password', '--video-password']) {
       assert.ok(!args.includes(flag));
@@ -52,9 +55,44 @@ async function main() {
     assert.throws(() => downloader.buildYtDlpArgs(
       { args: [] }, 'https://example.test/watch', tempDir, { password: 'must-not-leak' }
     ), /Secure temporary storage/);
+
+    const resolutionArgs = downloader.buildYtDlpArgs(
+      { args: [] }, 'https://example.test/watch', tempDir, { format: '360p' }
+    );
+    const resolutionSelector = resolutionArgs[resolutionArgs.indexOf('-f') + 1];
+    assert.ok(
+      resolutionSelector.startsWith(
+        'bestvideo[height<=360][ext=mp4][protocol!*=m3u8]+bestaudio[ext=m4a][protocol!*=m3u8]/'
+      ),
+      'resolution presets should prefer directly downloadable streams before HLS fallbacks'
+    );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+
+  const machineProgress = downloader.__progress.parseProgressLine([
+    downloader.__progress.prefix,
+    'downloading',
+    String(10 * 1024 * 1024),
+    String(100 * 1024 * 1024),
+    'NA',
+    '2.500',
+    '22.000',
+  ].join('\t'));
+  assert.strictEqual(machineProgress.percent, 10);
+  assert.strictEqual(machineProgress.downloadedBytes, 10 * 1024 * 1024);
+  assert.strictEqual(machineProgress.elapsedSeconds, 2.5);
+  assert.strictEqual(machineProgress.etaSeconds, 22);
+  assert.strictEqual(machineProgress.machineReadable, true);
+
+  const speedTracker = downloader.__progress.createAverageThroughputTracker();
+  assert.strictEqual(speedTracker.update({ downloadedBytes: 2 * 1024 * 1024, elapsedSeconds: 0.25 }), null);
+  assert.strictEqual(speedTracker.update({ downloadedBytes: 10 * 1024 * 1024, elapsedSeconds: 2.25 }), 4 * 1024 * 1024);
+  assert.strictEqual(speedTracker.update({ downloadedBytes: 22 * 1024 * 1024, elapsedSeconds: 4.25 }), 5 * 1024 * 1024);
+  assert.strictEqual(downloader.__progress.formatAverageDownloadRate(5 * 1024 * 1024), 'Avg 5.0 MiB/s');
+  // A second media stream resets yt-dlp's counters. Do not blend video and
+  // audio bytes into one inflated number.
+  assert.strictEqual(speedTracker.update({ downloadedBytes: 1024, elapsedSeconds: 0.1 }), null);
 
   const cleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'muxmelt-cleanup-test-'));
   try {
@@ -103,6 +141,10 @@ async function main() {
     'BrowserWindow', 'url-downloader-thumbnail', 'validatePublicThumbnailUrl',
     'allowHiddenBrowserFallback', 'url-downloader-update-ytdlp', "'-m', 'pip'",
   ]) assert.ok(!source.includes(forbidden), `backend still exposes ${forbidden}`);
+  assert.ok(
+    source.includes('!l.startsWith(`${DOWNLOAD_PROGRESS_PREFIX}\\t`)'),
+    'machine progress telemetry must not replace a useful yt-dlp failure message'
+  );
 
   const rendererSource = fs.readFileSync(
     path.join(__dirname, '..', 'renderer', 'tools', 'url-downloader', 'url-downloader.js'),
@@ -119,6 +161,12 @@ async function main() {
   for (const forbidden of ['getThumbnail', 'loadThumbnailForRow', 'hiddenBrowserFallback', 'updateYtDlp']) {
     assert.ok(!rendererSource.includes(forbidden), `renderer still exposes ${forbidden}`);
   }
+  assert.ok(rendererSource.includes('updateRenderedRowProgress(row)'));
+  assert.ok(rendererSource.includes('const rowElements = new Map()'));
+  assert.ok(
+    rendererSource.includes('advancedSettingsPanel.hidden = collapsed;'),
+    'collapsed advanced settings must leave the keyboard tab order'
+  );
 
   const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   assert.ok(!preloadSource.includes('url-downloader-thumbnail'));
@@ -129,6 +177,10 @@ async function main() {
   );
   assert.ok(!htmlSource.includes('hiddenBrowserFallbackCheckbox'));
   assert.ok(!htmlSource.includes('updateYtDlpBtn'));
+  assert.ok(
+    /id="advancedSettingsPanel"\s+hidden/.test(htmlSource),
+    'advanced settings must start hidden as well as visually collapsed'
+  );
 
   console.log('URL Downloader privacy smoke passed.');
 }

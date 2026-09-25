@@ -54,7 +54,6 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  transition: all 0.2s ease-in-out;
   margin-top: 4px;
   outline: none;
 }
@@ -63,12 +62,6 @@
   border-color: var(--accent);
   color: var(--text-primary);
   background: var(--bg-secondary);
-  box-shadow: 0 2px 8px var(--accent-glow);
-  transform: translateY(-1px);
-}
-
-.add-url-row-btn:active:not(:disabled) {
-  transform: translateY(0);
 }
 
 .add-url-row-btn:disabled {
@@ -78,11 +71,6 @@
 
 .add-icon {
   flex-shrink: 0;
-  transition: transform 0.2s ease-in-out;
-}
-
-.add-url-row-btn:hover:not(:disabled) .add-icon {
-  transform: rotate(90deg);
 }
 
 .url-list-header {
@@ -220,7 +208,6 @@
   height: 100%;
   width: 0%;
   background: var(--accent);
-  transition: width 0.15s ease;
   z-index: 1;
 }
 
@@ -238,7 +225,8 @@
   font-size: 10px;
   font-weight: 700;
   color: var(--text-primary);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  background: var(--bg-secondary);
+  padding: 0 4px;
   pointer-events: none;
 }
 
@@ -271,7 +259,6 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.15s ease;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -300,15 +287,11 @@
   font-weight: 650;
   color: var(--text-primary);
   user-select: none;
-  transition: all 0.2s ease;
   margin-top: -2px;
 }
 .advanced-settings-toggle:hover {
   background: var(--bg-hover);
   border-color: var(--accent);
-}
-.chevron-icon {
-  transition: transform 0.2s ease;
 }
 .advanced-settings-toggle:hover .chevron-icon {
   color: var(--accent);
@@ -318,7 +301,6 @@
 .advanced-settings-panel {
   max-height: 500px;
   overflow: hidden;
-  transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s, padding 0.3s;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-top: none;
@@ -431,7 +413,6 @@
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 3px;
-  transition: all 0.15s ease;
 }
 .checkbox-container:hover input ~ .checkmark {
   border-color: var(--accent);
@@ -514,7 +495,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s;
 }
 .url-action-btn:hover {
   background: var(--bg-tertiary);
@@ -548,7 +528,6 @@
   border: 2px solid rgba(255,255,255,0.1);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
   display: inline-block;
   margin-right: 6px;
   vertical-align: middle;

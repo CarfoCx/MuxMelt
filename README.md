@@ -12,7 +12,7 @@ the exact data flow of every online feature.
 
 | Tool | What it does | Network behavior |
 |---|---|---|
-| Home | Drop a file once and choose a compatible workflow | Offline |
+| Home | Open a file and choose a compatible tool | Offline |
 | Upscaler | Increases image and video resolution in 2x and 4x modes | Processing is local; model weights may download on first use |
 | Format Converter | Converts images, audio, and video between common formats | Offline |
 | Audio Extractor | Extracts audio from video to MP3, WAV, FLAC, AAC, or OGG | Offline |
@@ -25,13 +25,11 @@ the exact data flow of every online feature.
 | Text to Speech | Converts text into speech using voices installed on the computer | Offline; uses Windows SAPI, macOS `say`, or eSpeak |
 | Online Video Downloader | Downloads media from a URL | Online by design; connects to the requested site |
 | Torrent Downloader | Downloads through the BitTorrent network | Online by design; peers and trackers can see your IP address |
-| Local Chat | Runs a GGUF language model on this computer | Prompts and replies stay local; engine/model downloads are online |
 
 ## Privacy promise
 
 - No advertising or behavioral analytics.
 - No MuxMelt account and no automatic upload of media files.
-- Local Chat prompts, replies, and conversation context stay on this computer.
 - Network-capable features are documented instead of being described as
   universally offline.
 - Recent-file history and automatic update checks are off by default and can be
@@ -57,7 +55,7 @@ then run it. The installer is per-user and does not require administrator
 rights.
 
 The slim installer opens directly into the Core tools and does not download
-optional AI components on first launch. Install the Media AI or Local Chat pack
+optional AI components on first launch. Install the Media AI pack
 from Settings only when you want it. The app shows the expected download and
 disk requirements before installation; CUDA media packages can require several
 gigabytes.
@@ -122,6 +120,16 @@ npm start
 ```bash
 npm test
 ```
+
+Check navigation, keyboard controls, themes, and desktop layouts in an isolated
+Electron window (requires development dependencies):
+
+```bash
+npm run test:ui
+```
+
+The UI check uses fixture media services without processing real files or
+connecting to the network. Screenshots and its report are saved in `artifacts/ui/`.
 
 Build artifacts are written to `dist/`:
 

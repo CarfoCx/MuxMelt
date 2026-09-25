@@ -80,20 +80,12 @@ def _cancel_known_runtime_work():
         except Exception:
             pass
 
-    chat_routes = sys.modules.get('routers.chat_routes')
-    chat_llm = getattr(chat_routes, 'llm', None) if chat_routes else None
-    if chat_llm is not None:
-        try:
-            chat_llm.cancel()
-        except Exception:
-            pass
-
 
 def _create_windows_kill_on_close_job(kernel32=None):
     """Put this process in a non-inheritable, kill-on-close Windows job.
 
     The retained job handle is an OS-level backstop: if Python crashes, Windows
-    closes its handle and terminates ffmpeg, Demucs, llama-server, and any other
+    closes its handle and terminates ffmpeg, Demucs, and any other
     descendants which inherited membership in the job.
     """
     import ctypes
@@ -437,14 +429,6 @@ def _close_known_runtime():
     """Cancel and reap long-lived native workers during every shutdown path."""
     _cancel_known_runtime_work()
 
-    chat_routes = sys.modules.get('routers.chat_routes')
-    chat_llm = getattr(chat_routes, 'llm', None) if chat_routes else None
-    if chat_llm is not None:
-        try:
-            chat_llm.unload()
-        except Exception:
-            pass
-
     current_upscaler = globals().get('upscaler')
     if current_upscaler is not None:
         try:
@@ -497,13 +481,6 @@ try:
     available_modules.append('tts')
 except ImportError as exc:
     print(f'TTS router is unavailable: {exc}', file=sys.stderr)
-
-try:
-    from routers.chat_routes import router as chat_router
-    app.include_router(chat_router, prefix='/chat')
-    available_modules.append('chat')
-except ImportError as exc:
-    print(f'Chat router is unavailable: {exc}', file=sys.stderr)
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
 VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.webm'}

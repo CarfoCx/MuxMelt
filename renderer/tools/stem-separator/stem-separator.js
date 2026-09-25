@@ -102,7 +102,7 @@ function connectWebSocket() {
     if (isProcessing) {
       isProcessing = false;
       processingIndicator.classList.remove('active');
-      separateBtn.textContent = 'Separate Stems';
+      separateBtn.textContent = 'Separate tracks';
       separateBtn.classList.remove('btn-cancel');
       files.forEach(file => {
         if (file.state === 'processing') {
@@ -180,7 +180,7 @@ function handleWSMessage(data) {
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
       updateButton();
-      separateBtn.textContent = 'Separate Stems';
+      separateBtn.textContent = 'Separate tracks';
       separateBtn.classList.remove('btn-cancel');
       const batchFiles = files.filter(file => batchFilePaths.has(file.path));
       const completed = batchFiles.filter(f => f.state === 'complete').length;
@@ -270,7 +270,7 @@ function bindEvents() {
       const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFilesDirect(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Waiting for Audio';
+      if (statusText) statusText.textContent = 'Waiting for audio';
     });
   }
 
@@ -372,7 +372,7 @@ function bindEvents() {
         file.status = 'Ready to retry';
       });
       processingIndicator.classList.remove('active');
-      separateBtn.textContent = 'Separate Stems';
+      separateBtn.textContent = 'Separate tracks';
       separateBtn.classList.remove('btn-cancel');
       statusText.textContent = 'Could not start separation';
       renderFileList();
@@ -409,7 +409,7 @@ async function addFilesDirect(paths) {
     const type = AUDIO_EXTS.has(ext) ? 'audio' : 'video';
     try {
       const size = await window.api.system.getFileSize(p);
-      files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for Audio', state: 'pending', outputs: {} });
+      files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Queued', state: 'pending', outputs: {} });
       added++;
     } catch (err) {
       log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
@@ -432,6 +432,7 @@ function stopCurrentAudio() {
     fileList.querySelectorAll('.audio-play-btn.playing').forEach(button => {
       button.innerHTML = '&#9654;';
       button.classList.remove('playing');
+      button.setAttribute('aria-pressed', 'false');
       button._audio = null;
     });
   }
@@ -450,7 +451,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateButton();
-  statusText.textContent = 'Waiting for Audio';
+  statusText.textContent = 'Waiting for audio';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([], 'stem-separator');
 }
@@ -464,7 +465,7 @@ function updateButton() {
 // ---- Rendering ----
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">Your files will appear here. Choose files above, drop them here, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     return;
   }
   fileList.innerHTML = '';
@@ -515,7 +516,7 @@ function createFileElement(file, index) {
       return `<div class="stem-audio-row">
         <span class="stem-badge">${label}</span>
         <div class="audio-preview">
-          <button class="audio-play-btn" data-src="${window.escapeHtml(fileUrl)}" title="Play ${label}">&#9654;</button>
+          <button class="audio-play-btn" data-src="${window.escapeHtml(fileUrl)}" title="Play or stop ${label}" aria-label="Play or stop ${label}" aria-pressed="false">&#9654;</button>
         </div>
       </div>`;
     }).join('');
@@ -533,7 +534,7 @@ function createFileElement(file, index) {
     <div class="file-progress-bar">
       <div class="file-progress-fill${progressClass}" style="width: ${Math.round(file.progress * 100)}%"></div>
     </div>
-    <button class="file-remove" data-index="${index}" title="Remove">\u00D7</button>`;
+    <button class="file-remove" data-index="${index}" title="Remove" aria-label="Remove ${window.escapeHtml(file.name)}">\u00D7</button>`;
 
   el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing) removeFile(index); });
 
@@ -548,6 +549,8 @@ function createFileElement(file, index) {
         btn._audio.currentTime = 0;
         btn.innerHTML = '&#9654;';
         btn.classList.remove('playing');
+
+        btn.setAttribute('aria-pressed', 'false');
         btn._audio = null;
         _currentAudio = null;
         return;
@@ -557,6 +560,8 @@ function createFileElement(file, index) {
         if (other._audio) { other._audio.pause(); other._audio.currentTime = 0; other._audio = null; }
         other.innerHTML = '&#9654;';
         other.classList.remove('playing');
+
+        other.setAttribute('aria-pressed', 'false');
       });
       // Play this one
       const audio = new Audio(src);
@@ -564,14 +569,20 @@ function createFileElement(file, index) {
       _currentAudio = audio;
       btn.innerHTML = '&#9632;';
       btn.classList.add('playing');
+
+      btn.setAttribute('aria-pressed', 'true');
       audio.play().catch(() => {
         btn.innerHTML = '&#9654;';
         btn.classList.remove('playing');
+
+        btn.setAttribute('aria-pressed', 'false');
         log('Could not play audio preview', 'warn');
       });
       audio.addEventListener('ended', () => {
         btn.innerHTML = '&#9654;';
         btn.classList.remove('playing');
+
+        btn.setAttribute('aria-pressed', 'false');
         btn._audio = null;
         if (_currentAudio === audio) _currentAudio = null;
       });

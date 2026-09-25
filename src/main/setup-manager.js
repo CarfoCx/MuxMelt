@@ -1089,7 +1089,7 @@ async function runSlimSetup(options) {
       sandbox: true,
       navigateOnDragDrop: false
     },
-    backgroundColor: '#0f0f1a'
+    backgroundColor: '#111315'
   });
   const setupContents = setupWindow.webContents;
   const cancelSetup = () => {

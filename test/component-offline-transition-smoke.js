@@ -21,8 +21,6 @@ function harness(overrides = {}) {
     saveSettings: (next) => { events.push('save'); settings = next; return true; },
     networkPolicy: { isOffline: () => settings.global.offlineMode === true, assertAllowed: () => true },
     runSlimSetup: async () => {},
-    ensureLlamaServer: async () => {},
-    hasCompleteLlamaSetup: () => false,
     hasCurrentSetupMarker: () => true,
     needsSlimSetup: () => false,
     startBackend: async () => { events.push('start'); return { success: true }; },
@@ -49,6 +47,8 @@ function harness(overrides = {}) {
   };
   createComponentManager(options);
   return {
+    tempRoot,
+    hasChannel: (name) => handlers.has(name),
     invoke: (enabled) => handlers.get('set-offline-mode')({}, enabled),
     invokeChannel: (name, ...args) => handlers.get(name)({}, ...args),
     events,
@@ -58,6 +58,27 @@ function harness(overrides = {}) {
 }
 
 (async () => {
+  const retiredChat = harness();
+  try {
+    assert.strictEqual(retiredChat.hasChannel('install-chat-pack'), false, 'Retired chat cannot be installed over IPC');
+    assert.strictEqual(retiredChat.invokeChannel('component-status').chat, undefined, 'Chat is not an available pack');
+    let storage = await retiredChat.invokeChannel('get-storage-summary');
+    assert.strictEqual(storage.packs.some(pack => pack.id === 'chat'), false, 'Fresh installs do not advertise legacy chat storage');
+
+    const legacyDir = path.join(retiredChat.tempRoot, 'llama');
+    fs.mkdirSync(legacyDir);
+    const legacyFile = path.join(legacyDir, 'old-engine.bin');
+    fs.writeFileSync(legacyFile, 'retained engine');
+    storage = await retiredChat.invokeChannel('get-storage-summary');
+    const legacyPack = storage.packs.find(pack => pack.id === 'chat');
+    assert.ok(legacyPack?.installed && legacyPack.removable);
+    assert.ok(legacyPack.label.includes('unused'));
+    assert.strictEqual(fs.readFileSync(legacyFile, 'utf8'), 'retained engine', 'Inspecting storage preserves existing downloads');
+    const removed = await retiredChat.invokeChannel('remove-component-pack', 'chat');
+    assert.strictEqual(removed.success, true);
+    assert.strictEqual(fs.existsSync(legacyDir), false, 'Explicit legacy removal is still supported');
+  } finally { retiredChat.cleanup(); }
+
   const blocked = Object.assign(new Error('maintenance already active'), { code: 'APP_MAINTENANCE' });
   const duringMaintenance = harness({
     jobRegistry: {

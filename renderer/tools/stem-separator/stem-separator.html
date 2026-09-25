@@ -1,9 +1,11 @@
 <!-- Tool body -->
 <div class="tool-body">
+  <header class="tool-intro">
+    <h2>Separate vocals &amp; instruments</h2>
+    <p>Split a song or video into separate vocals, drums, bass, and other instruments.</p>
+  </header>
   <div class="module-banner">
-    <strong>Stem Separator.</strong> Split songs or videos into vocals, drums, bass, and other stems.
-    Processing stays on this computer. If the selected Demucs model is not
-    installed yet, starting the first job downloads full-SHA-256-verified weights from Meta's published host.
+    <strong>Processed on your computer.</strong> The first use of a model may need an internet connection to download it.
   </div>
 
   <!-- Drop zone -->
@@ -13,12 +15,12 @@
       Drag &amp; drop audio or video files to separate stems
     </div>
     <div class="drop-zone-actions">
-      <button type="button" class="drop-zone-link" id="browseBtn">browse files</button>
+      <button type="button" class="drop-zone-link" id="browseBtn">Choose files</button>
       <span class="drop-zone-sep">|</span>
-      <button type="button" class="drop-zone-link" id="browseFolderBtn">browse folder</button>
+      <button type="button" class="drop-zone-link" id="browseFolderBtn">Choose folder</button>
     </div>
     <div class="drop-zone-hint" id="stemDropHint">
-      Supports: MP3, WAV, FLAC, OGG, M4A, MP4, MKV, MOV
+      Supported files: MP3, WAV, FLAC, OGG, M4A, MP4, MKV, MOV
     </div>
   </div>
 
@@ -35,19 +37,19 @@
     </div>
 
     <div class="setting-group">
-      <span id="stemSelectionLabel">Stems:</span>
+      <span id="stemSelectionLabel">Tracks to save</span>
       <div class="stem-checkboxes" id="stemCheckboxes" role="group" aria-labelledby="stemSelectionLabel">
         <label class="stem-check"><input type="checkbox" value="vocals" checked> Vocals</label>
         <label class="stem-check"><input type="checkbox" value="drums" checked> Drums</label>
         <label class="stem-check"><input type="checkbox" value="bass" checked> Bass</label>
-        <label class="stem-check"><input type="checkbox" value="other" checked> Other</label>
+        <label class="stem-check"><input type="checkbox" value="other" checked> Other instruments</label>
       </div>
     </div>
 
     <div class="setting-group">
-      <label for="outputDirBtn">Output:</label>
-      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
-        Same as source
+      <label for="outputDirBtn">Save to</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Choose where to save your results">
+        Beside original files
       </button>
     </div>
   </div>
@@ -56,7 +58,7 @@
   <div class="file-list-container">
     <div class="file-list" id="fileList">
       <div class="empty-state">
-        No files added. Drag audio or video files here, or click browse.
+        Your files will appear here. Choose audio or video files to begin.
       </div>
     </div>
   </div>
@@ -66,7 +68,7 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for Audio</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for audio</span>
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
@@ -74,9 +76,9 @@
     </div>
   </div>
   <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
-    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
-    <button class="btn btn-primary" id="separateBtn" disabled>Separate Stems</button>
+    <button class="btn btn-clear" id="clearBtn">Clear all</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open folder</button>
+    <button class="btn btn-primary" id="separateBtn" disabled>Separate tracks</button>
   </div>
 </div>

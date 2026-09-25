@@ -1,8 +1,9 @@
 <!-- Tool body -->
 <div class="tool-body">
-  <div class="module-banner">
-    <strong>Video Compressor.</strong> Reduce video file size by tuning quality, codec, preset, resolution, and two-pass encoding.
-  </div>
+  <header class="tool-intro">
+    <h2>Compress videos</h2>
+    <p>Make videos easier to share. Choose a goal to get started, or adjust the settings for more control.</p>
+  </header>
 
   <!-- Drop zone -->
   <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-describedby="videoDropHint">
@@ -11,12 +12,12 @@
       Drag &amp; drop video files to compress
     </div>
     <div class="drop-zone-actions">
-      <button type="button" class="drop-zone-link" id="browseBtn">browse files</button>
+      <button type="button" class="drop-zone-link" id="browseBtn">Choose files</button>
       <span class="drop-zone-sep">|</span>
-      <button type="button" class="drop-zone-link" id="browseFolderBtn">browse folder</button>
+      <button type="button" class="drop-zone-link" id="browseFolderBtn">Choose folder</button>
     </div>
     <div class="drop-zone-hint" id="videoDropHint">
-      Supports: MP4, AVI, MKV, MOV, WebM
+      Supported files: MP4, AVI, MKV, MOV, WebM
     </div>
   </div>
 
@@ -32,6 +33,15 @@
         <option value="custom">Custom</option>
       </select>
     </div>
+    <div class="setting-group">
+      <label for="outputDirBtn">Save to</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Choose where to save your results">Beside original files</button>
+    </div>
+  </div>
+
+  <details class="tool-options" id="compressionOptions">
+    <summary>Fine-tune quality &amp; encoding <span>Optional</span></summary>
+    <div class="settings-bar">
     <div class="setting-group">
       <label for="crfSlider" title="Lower = better quality, bigger file">Quality level (CRF):</label>
       <input type="range" id="crfSlider" min="18" max="35" value="23">
@@ -67,26 +77,21 @@
         <option value="480p">480p</option>
         <option value="custom">Custom width...</option>
       </select>
-      <input type="number" id="customWidth" class="custom-width-input" placeholder="Width" min="128" max="7680" style="display:none; width: 80px; margin-left: 6px;">
+      <input type="number" id="customWidth" class="custom-width-input" placeholder="Width" aria-label="Custom width in pixels" min="128" max="7680" style="display:none; width: 80px; margin-left: 6px;">
     </div>
 
     <div class="setting-group">
-      <label><input type="checkbox" id="twoPassCheck"> Two-pass</label>
+      <label title="Analyze the video before encoding; processing takes longer"><input type="checkbox" id="twoPassCheck"> Two-pass encoding</label>
     </div>
 
-    <div class="setting-group">
-      <label for="outputDirBtn">Output:</label>
-      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
-        Same as source
-      </button>
     </div>
-  </div>
+  </details>
 
   <!-- File list -->
   <div class="file-list-container">
     <div class="file-list" id="fileList">
       <div class="empty-state">
-        No files added yet. Drag video files above or click browse.
+        Your videos will appear here. Choose files or drop them above to begin.
       </div>
     </div>
   </div>
@@ -96,7 +101,7 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for Video</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for video</span>
     <div class="video-footer-progress" id="footerProgress" role="progressbar" aria-label="Video compression progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
       <div class="video-footer-progress-fill" id="footerProgressFill"></div>
     </div>
@@ -108,9 +113,9 @@
     </div>
   </div>
   <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
-    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-clear" id="clearBtn">Clear all</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open folder</button>
     <button class="btn btn-primary" id="compressBtn" disabled>Compress</button>
   </div>
 </div>

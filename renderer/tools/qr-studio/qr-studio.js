@@ -263,7 +263,7 @@ function bindEvents() {
     qrPreviewBox.innerHTML = '<div class="empty-state">QR code preview will appear here</div>';
     scanResult.style.display = 'none';
     decodedText.textContent = '';
-    statusText.textContent = 'Waiting for Input';
+    statusText.textContent = 'Waiting for input';
     lastGeneratedDataUrl = null;
     lastGeneratedOptions = null;
     isGenerating = false;
@@ -416,7 +416,7 @@ async function handleSave() {
   }
 
   saveBtn.disabled = !lastGeneratedDataUrl || requestId !== generationRequestId;
-  saveBtn.textContent = 'Save QR';
+  saveBtn.textContent = 'Save QR code';
 }
 
 async function scanQR(filePath) {

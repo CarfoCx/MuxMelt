@@ -1,8 +1,9 @@
 <!-- Tool body -->
 <div class="tool-body">
-  <div class="module-banner">
-    <strong>QR Studio.</strong> Generate styled QR codes for common data types and scan QR codes from images.
-  </div>
+  <header class="tool-intro">
+    <h2>Create a QR code</h2>
+    <p>Share a link, text, Wi-Fi network, contact, or location. You can also read a QR code from an image.</p>
+  </header>
 
   <!-- Generate panel (always visible) -->
   <div class="qr-generate-layout">
@@ -10,24 +11,24 @@
       <!-- Template selector tabs -->
       <div class="qr-template-tabs" role="tablist" aria-label="QR code type">
         <button type="button" class="qr-template-tab active" data-template="text" role="tab" aria-selected="true" aria-controls="tmplText">Text</button>
-        <button type="button" class="qr-template-tab" data-template="url" role="tab" aria-selected="false" aria-controls="tmplUrl">URL</button>
-        <button type="button" class="qr-template-tab" data-template="wifi" role="tab" aria-selected="false" aria-controls="tmplWifi">WiFi</button>
-        <button type="button" class="qr-template-tab" data-template="vcard" role="tab" aria-selected="false" aria-controls="tmplVcard">vCard</button>
-        <button type="button" class="qr-template-tab" data-template="geo" role="tab" aria-selected="false" aria-controls="tmplGeo">Geo</button>
+        <button type="button" class="qr-template-tab" data-template="url" role="tab" aria-selected="false" aria-controls="tmplUrl">Website</button>
+        <button type="button" class="qr-template-tab" data-template="wifi" role="tab" aria-selected="false" aria-controls="tmplWifi">Wi-Fi</button>
+        <button type="button" class="qr-template-tab" data-template="vcard" role="tab" aria-selected="false" aria-controls="tmplVcard">Contact</button>
+        <button type="button" class="qr-template-tab" data-template="geo" role="tab" aria-selected="false" aria-controls="tmplGeo">Location</button>
       </div>
 
       <!-- Text template (default) -->
       <div class="qr-template-fields" id="tmplText" role="tabpanel">
         <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 6px;">
-          <label for="qrText">Text / URL:</label>
-          <input type="text" id="qrText" placeholder="Enter text or URL..." style="width: 100%;" autocomplete="off" spellcheck="false">
+          <label for="qrText">Text or link</label>
+          <input type="text" id="qrText" placeholder="What would you like to share?" style="width: 100%;" autocomplete="off" spellcheck="false">
         </div>
       </div>
 
       <!-- URL template -->
       <div class="qr-template-fields" id="tmplUrl" role="tabpanel" style="display: none;">
         <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 6px;">
-          <label for="qrUrl">URL:</label>
+          <label for="qrUrl">Website address</label>
           <div class="qr-url-input-wrap">
             <span class="qr-url-prefix">https://</span>
             <input type="text" id="qrUrl" placeholder="example.com/page" autocomplete="off" spellcheck="false">
@@ -39,7 +40,7 @@
       <div class="qr-template-fields" id="tmplWifi" role="tabpanel" style="display: none;">
         <div class="qr-template-grid">
           <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
-            <label for="qrWifiSsid">SSID (Network Name):</label>
+            <label for="qrWifiSsid">Network name</label>
             <input type="text" id="qrWifiSsid" placeholder="MyNetwork" style="width: 100%;" autocomplete="off" spellcheck="false">
           </div>
           <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
@@ -117,11 +118,11 @@
         </div>
 
         <div class="setting-group">
-          <label for="qrErrorCorrection">Error Correction:</label>
+          <label for="qrErrorCorrection" title="Higher levels help a QR code remain readable if part of it is damaged">Damage tolerance</label>
           <select id="qrErrorCorrection" class="select-input">
             <option value="L">Low (7%)</option>
             <option value="M" selected>Medium (15%)</option>
-            <option value="Q">Quartile (25%)</option>
+            <option value="Q">Higher (25%)</option>
             <option value="H">High (30%)</option>
           </select>
         </div>
@@ -143,15 +144,15 @@
           Drag &amp; drop an image containing a QR code
         </div>
         <div class="drop-zone-actions">
-          <button type="button" class="drop-zone-link" id="scanBrowseBtn">browse files</button>
+          <button type="button" class="drop-zone-link" id="scanBrowseBtn">Choose files</button>
         </div>
         <div class="drop-zone-hint" id="scanDropHint">
-          Supports: PNG, JPG, WebP, BMP
+          Supported files: PNG, JPG, WebP, BMP
         </div>
       </div>
 
       <div class="qr-scan-result" id="scanResult" style="display: none;">
-        <span id="decodedTextLabel">Decoded Text:</span>
+        <span id="decodedTextLabel">QR code content</span>
         <div class="qr-decoded-text" id="decodedText" role="textbox" aria-readonly="true" aria-labelledby="decodedTextLabel"></div>
         <button class="btn btn-secondary" id="copyResultBtn">Copy to Clipboard</button>
       </div>
@@ -163,15 +164,15 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for Input</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for input</span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
       <span>Processing...</span>
     </div>
   </div>
   <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
-    <button class="btn btn-secondary" id="saveBtn" disabled>Save QR</button>
-    <button class="btn btn-primary" id="generateBtn">Generate QR</button>
+    <button class="btn btn-clear" id="clearBtn">Clear all</button>
+    <button class="btn btn-secondary" id="saveBtn" disabled>Save QR code</button>
+    <button class="btn btn-primary" id="generateBtn">Create QR code</button>
   </div>
 </div>

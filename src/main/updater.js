@@ -159,6 +159,9 @@ function hashFile(filePath, signal = null) {
 }
 
 async function copyFileAbortable(sourcePath, targetPath, signal = null) {
+  // Do not open streams after cancellation. A pending Windows open can outlive
+  // a pre-aborted pipeline and keep the temporary installer directory locked.
+  signal?.throwIfAborted();
   const readOptions = signal ? { signal } : undefined;
   const writeOptions = { flags: 'wx', mode: 0o700 };
   await pipeline(

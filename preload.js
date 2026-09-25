@@ -65,7 +65,6 @@ contextBridge.exposeInMainWorld('api', {
     getPythonToken: () => ipcRenderer.invoke('get-python-token'),
     getStatus: () => ipcRenderer.invoke('component-status'),
     installMediaPack: () => ipcRenderer.invoke('install-media-pack'),
-    installChatPack: () => ipcRenderer.invoke('install-chat-pack'),
     removePack: (id) => ipcRenderer.invoke('remove-component-pack', id),
     restartPython: () => ipcRenderer.invoke('restart-python'),
     onStatus: (callback) => subscribe('component-status', callback),

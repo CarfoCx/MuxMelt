@@ -1,9 +1,11 @@
 <!-- Tool body -->
 <div class="tool-body">
+  <header class="tool-intro">
+    <h2>Edit backgrounds</h2>
+    <p>Remove a background, soften it with blur, or replace it with a color or image.</p>
+  </header>
   <div class="module-banner">
-    <strong>Background Editor.</strong> Remove image backgrounds and export them transparent, on a solid color, blurred, or composited onto your own background image.
-    Processing stays on this computer. If its AI model is not installed yet,
-    starting the first job uses the internet to download checksum-verified weights from GitHub.
+    <strong>Processed on your computer.</strong> The first use may need an internet connection to download the model.
   </div>
 
   <!-- Drop zone -->
@@ -13,12 +15,12 @@
       Drag &amp; drop images to remove backgrounds
     </div>
     <div class="drop-zone-actions">
-      <button type="button" class="drop-zone-link" id="browseBtn">browse files</button>
+      <button type="button" class="drop-zone-link" id="browseBtn">Choose files</button>
       <span class="drop-zone-sep">|</span>
-      <button type="button" class="drop-zone-link" id="browseFolderBtn">browse folder</button>
+      <button type="button" class="drop-zone-link" id="browseFolderBtn">Choose folder</button>
     </div>
     <div class="drop-zone-hint" id="backgroundDropHint">
-      Supports: PNG, JPG, WebP, BMP, TIFF
+      Supported files: PNG, JPG, WebP, BMP, TIFF
     </div>
   </div>
 
@@ -44,7 +46,7 @@
     </div>
 
     <div class="setting-group bg-image-group" id="bgImageGroup" style="display:none;">
-      <label for="bgImageBtn">Input:</label>
+      <label for="bgImageBtn">Background image</label>
       <button type="button" class="output-dir-btn" id="bgImageBtn" title="Choose a background image to place behind the subject (right-click to clear)">
         Choose image&hellip;
       </button>
@@ -64,14 +66,14 @@
       <label class="toggle-label" for="alphaMatting">
         <input type="checkbox" id="alphaMatting" class="toggle-checkbox">
         <span class="toggle-switch"></span>
-        Edge Refinement
+        Refine edges
       </label>
     </div>
 
     <div class="setting-group">
-      <label for="outputDirBtn">Output:</label>
-      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
-        Same as source
+      <label for="outputDirBtn">Save to</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Choose where to save your results">
+        Beside original files
       </button>
     </div>
   </div>
@@ -80,7 +82,7 @@
   <div class="file-list-container">
     <div class="file-list" id="fileList">
       <div class="empty-state">
-        No files added yet. Drag images above or click browse.
+        Your images will appear here. Choose files or drop them above to begin.
       </div>
     </div>
   </div>
@@ -114,7 +116,7 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for Image</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for image</span>
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
@@ -122,8 +124,8 @@
     </div>
   </div>
   <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
-    <button class="btn btn-primary" id="processBtn" disabled>Apply Background Edit</button>
+    <button class="btn btn-clear" id="clearBtn">Clear all</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open folder</button>
+    <button class="btn btn-primary" id="processBtn" disabled>Apply background</button>
   </div>
 </div>

@@ -1,6 +1,6 @@
 # MuxMelt Privacy Notice
 
-Last updated: 2026-08-14
+Last updated: 2026-09-16
 
 MuxMelt is designed without ads, accounts, behavioral analytics, or automatic
 crash-report uploads. This notice describes what stays local, what can connect
@@ -10,13 +10,9 @@ to the internet, and what is stored on your computer.
 
 Format conversion, compression, audio extraction, GIF creation, QR creation and
 scanning, basic image editing, offline Text to Speech, background processing,
-stem separation, image or video upscaling, and Local Chat inference are
+stem separation, and image or video upscaling are
 performed by processes on your computer. The renderer talks to the media
-backend and Local Chat over `127.0.0.1`.
-
-Local Chat prompts, replies, and conversation context are held in memory for
-the current session and are not intentionally sent to MuxMelt or a model host.
-Imported GGUF files are used from their original location.
+backend over `127.0.0.1`.
 
 ## Features that connect to third parties
 
@@ -25,7 +21,6 @@ Imported GGUF files are used from their original location.
 | Update check | At launch only if automatic checks are enabled, or when you click Check for Updates | App version, normal network metadata such as IP address and user agent | GitHub |
 | First-time/component setup | When a required component is installed | Requests for the selected packages; normal network metadata | Python.org, PyPI, GitHub |
 | Upscaler/background/stem models | When a needed model is not installed | Model download request; normal network metadata | The model's published host |
-| Local Chat model download | Only after an explicit model-download action | Model download request; normal network metadata; **not prompts or replies** | Hugging Face |
 | Online Video Downloader | When information is requested or a download begins | The supplied URL, request metadata, and any explicitly supplied authentication/cookie material | The requested website and any redirect, media, or resource hosts it directs `yt-dlp` to; use only sources you trust because those addresses can include private-network services |
 | Torrent Downloader | While a torrent is active | Torrent identifiers and peer traffic; peers and trackers can observe your IP address | Trackers, DHT participants, and peers |
 | Support/source/issue links | Only when clicked | A normal browser visit | Ko-fi or GitHub |
@@ -49,8 +44,8 @@ Depending on the enabled features, MuxMelt can store:
 
 - Preferences in Electron's per-user application-data directory.
 - Recent output paths, only when Remember Recent Files is enabled.
-- Downloaded Python packages, processing models, and Local Chat engines/models.
-- A reference to an imported GGUF file and non-sensitive tool preferences.
+- Downloaded Python packages and processing models.
+- Non-sensitive tool preferences.
 - A local completed-output count and support-prompt dismissal preference. This
   only times the optional donation reminder and is never transmitted.
 - Temporary processing files, which are normally removed after completion.
@@ -68,6 +63,12 @@ components, or open the application-data folder.
 Uninstalling a current build may preserve application data so that models do
 not need to be downloaded again; delete that data explicitly if you do not want
 it retained.
+
+The removed Local Chat feature no longer runs or downloads components. Files
+and preferences from older installations are preserved. If a legacy chat engine
+is present, Settings lists it as unused storage that you can remove explicitly.
+Downloaded models can be cleared with the model-data controls; imported files
+outside the app-data folder are not deleted.
 
 ## Notifications
 

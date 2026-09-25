@@ -120,7 +120,7 @@ function connectWebSocket() {
       isProcessing = false;
       processingIndicator.classList.remove('active');
       updateButton();
-      processBtn.textContent = 'Apply Background Edit';
+      processBtn.textContent = 'Apply background';
       processBtn.classList.remove('btn-cancel');
       files.forEach(file => {
         if (file.state === 'processing') {
@@ -190,7 +190,7 @@ function handleWSMessage(data) {
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
       updateButton();
-      processBtn.textContent = 'Apply Background Edit';
+      processBtn.textContent = 'Apply background';
       processBtn.classList.remove('btn-cancel');
       const batchFiles = files.filter(file => batchFilePaths.has(file.path));
       const completed = batchFiles.filter(f => f.state === 'complete').length;
@@ -213,7 +213,7 @@ function handleWSMessage(data) {
       if (etaText) etaText.textContent = '';
       processingIndicator.classList.remove('active');
       updateButton();
-      processBtn.textContent = 'Apply Background Edit';
+      processBtn.textContent = 'Apply background';
       processBtn.classList.remove('btn-cancel');
       statusText.textContent = `Fatal error: ${data.error}`;
       log(`Fatal: ${data.error}`, 'error');
@@ -274,6 +274,10 @@ function bindEvents() {
     if (e.key === 'Escape') {
       e.preventDefault();
       closeCompare();
+      return;
+    }
+    if (e.key === 'Tab') {
+      trapCompareFocus(e);
     }
   });
   compareSlider.addEventListener('keydown', (e) => {
@@ -324,7 +328,7 @@ function bindEvents() {
       const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Waiting for Image';
+      if (statusText) statusText.textContent = 'Waiting for image';
     });
   }
 
@@ -415,7 +419,7 @@ function bindEvents() {
         file.status = 'Ready to retry';
       });
       processingIndicator.classList.remove('active');
-      processBtn.textContent = 'Apply Background Edit';
+      processBtn.textContent = 'Apply background';
       processBtn.classList.remove('btn-cancel');
       statusText.textContent = 'Could not start processing';
       renderFileList();
@@ -461,7 +465,7 @@ async function addFiles(paths) {
     if (files.some(f => f.path === p)) { log(`Skipped duplicate: ${getFileName(p)}`, 'warn'); continue; }
     try {
       const size = await window.api.system.getFileSize(p);
-      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Image', state: 'pending' });
+      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Queued', state: 'pending' });
       added++;
     } catch (err) {
       log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
@@ -479,7 +483,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateButton();
-  statusText.textContent = 'Waiting for Image';
+  statusText.textContent = 'Waiting for image';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([], 'bg-remover');
 }
@@ -492,7 +496,7 @@ function updateButton() {
 // ---- Rendering ----
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">Your files will appear here. Choose files above, drop them here, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     return;
   }
   fileList.innerHTML = '';
@@ -505,9 +509,8 @@ function renderFileItem(index) {
   const existing = fileList.children[index];
   if (!existing) return;
   const file = files[index];
-  // Only fully rebuild when the file finishes (to attach the compare hint +
-  // click handler). For progress/error updates, mutate in place so we don't
-  // re-fetch the thumbnail on every tick.
+  // Only rebuild when the file finishes to attach the comparison action.
+  // For progress/error updates, mutate the existing fields in place.
   if (file.state === 'complete') {
     fileList.replaceChild(createFileElement(file, index), existing);
   } else {
@@ -531,36 +534,30 @@ function createFileElement(file, index) {
   el.className = 'file-item';
 
   const isComplete = file.state === 'complete' && file.outputPath;
-  if (isComplete) el.classList.add('clickable-compare');
 
   let progressClass = '';
   if (file.state === 'complete') progressClass = ' complete';
   else if (file.state === 'error') progressClass = ' error';
 
   el.innerHTML = `
-    <img class="file-thumb" data-path="${window.escapeHtml(file.path)}" src="" alt="">
+    <span class="file-type">${window.escapeHtml(getFileExtension(file.path).slice(1).toUpperCase())}</span>
     <div class="file-info">
       <div class="file-name" title="${window.escapeHtml(file.path)}">${window.escapeHtml(file.name)}</div>
       <div class="file-status">${window.escapeHtml(file.status)}</div>
     </div>
     ${file.size ? `<span class="file-size">${window.formatFileSize(file.size)}</span>` : ''}
-    ${isComplete ? '<span class="file-compare-hint">Compare</span>' : ''}
+    ${isComplete ? `<button type="button" class="file-compare-btn" title="Compare original and result" aria-label="Compare before and after for ${window.escapeHtml(file.name)}">Compare</button>` : ''}
     <div class="file-progress-bar">
       <div class="file-progress-fill${progressClass}" style="width: ${Math.round(file.progress * 100)}%"></div>
     </div>
-    <button class="file-remove" data-index="${index}" title="Remove">\u00D7</button>`;
-
-  // Load thumbnail async
-  const thumb = el.querySelector('.file-thumb');
-  if (thumb) {
-    window.getFileThumbnail(file.path).then(url => { if (url) thumb.src = url; });
-  }
+    <button class="file-remove" data-index="${index}" title="Remove" aria-label="Remove ${window.escapeHtml(file.name)}">\u00D7</button>`;
 
   el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing) removeFile(index); });
 
-  if (isComplete) {
-    el.addEventListener('click', (e) => {
-      if (e.target.closest('.file-remove')) return;
+  const compareBtn = el.querySelector('.file-compare-btn');
+  if (compareBtn) {
+    compareBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
       openCompare(file);
     });
   }
@@ -595,6 +592,34 @@ function closeCompare() {
   compareAfter.src = '';
   if (compareReturnFocus?.isConnected) compareReturnFocus.focus();
   compareReturnFocus = null;
+}
+
+function trapCompareFocus(event) {
+  const dialog = compareOverlay.querySelector('.compare-modal');
+  if (!dialog) return;
+
+  const focusable = Array.from(dialog.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+
+  if (focusable.length === 0) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const activeElement = document.activeElement;
+  const focusIsInside = dialog.contains(activeElement);
+
+  if (event.shiftKey && (activeElement === first || !focusIsInside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (activeElement === last || !focusIsInside)) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function setComparePosition(pct) {

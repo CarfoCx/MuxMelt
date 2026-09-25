@@ -65,8 +65,10 @@ function addAll(target, source) {
 
 const indexPath = path.join(rendererDir, 'index.html');
 const appPath = path.join(rendererDir, 'app.js');
+const classicCssPath = path.join(rendererDir, 'classic.css');
 check(fs.existsSync(indexPath), 'renderer/index.html is missing');
 check(fs.existsSync(appPath), 'renderer/app.js is missing');
+check(fs.existsSync(classicCssPath), 'renderer/classic.css is missing');
 
 if (!fs.existsSync(indexPath) || !fs.existsSync(appPath)) {
   console.error(failures.join('\n'));
@@ -75,6 +77,33 @@ if (!fs.existsSync(indexPath) || !fs.existsSync(appPath)) {
 
 const indexSource = read(indexPath);
 const appSource = read(appPath);
+const classicCssSource = fs.existsSync(classicCssPath) ? read(classicCssPath) : '';
+const toolStylesheetIndex = indexSource.indexOf('id="toolStylesheet"');
+const classicStylesheetIndex = indexSource.indexOf('href="classic.css"');
+check(
+  toolStylesheetIndex >= 0 && classicStylesheetIndex > toolStylesheetIndex,
+  'The classic UI stylesheet must load after the dynamic tool stylesheet'
+);
+check(
+  classicCssSource.includes('--radius:')
+    && classicCssSource.includes('prefers-reduced-motion')
+    && classicCssSource.includes(':focus-visible'),
+  'The shared UI must provide control tokens, visible keyboard focus, and reduced-motion support'
+);
+check(
+  classicCssSource.includes('.tool-instance')
+    && classicCssSource.includes('.completion-toast')
+    && classicCssSource.includes('.context-menu')
+    && classicCssSource.includes('.file-progress-bar'),
+  'The classic UI is missing shared dynamic component styles'
+);
+
+const splashSource = read(path.join(rendererDir, 'splash.html'));
+check(
+  !/@keyframes|animation\s*:|filter\s*:\s*(?:blur|url\()/i.test(splashSource)
+    && splashSource.includes('return Promise.resolve();'),
+  'The startup splash must remain static and must not delay the main window'
+);
 const declaredTools = [];
 const declarationPattern = /\bdata-tool\s*=\s*(["'])([^"']+)\1/g;
 let declaration;
@@ -100,7 +129,11 @@ for (const toolId of declaredTools) {
   check(directorySet.has(toolId), `Sidebar tool "${toolId}" has no renderer/tools/${toolId} directory`);
 }
 for (const toolId of toolDirectories) {
-  check(declaredSet.has(toolId), `Tool directory "${toolId}" is not declared in the sidebar`);
+  if (toolId === 'chat') {
+    check(!declaredSet.has(toolId), 'The removed chat feature must not appear in navigation');
+  } else {
+    check(declaredSet.has(toolId), `Tool directory "${toolId}" is not declared in the sidebar`);
+  }
 }
 
 const shellIds = addAll(htmlIds(indexSource), htmlIds(appSource));
@@ -167,7 +200,6 @@ for (const id of literalGetElementByIds(appSource)) {
 // value from their one-time init call.
 const pythonToolPaths = [
   'renderer/tools/bg-remover/bg-remover.js',
-  'renderer/tools/chat/chat.js',
   'renderer/tools/upscaler/upscaler.js',
   'renderer/tools/tts/tts.js',
   'renderer/tools/stem-separator/stem-separator.js',
@@ -399,6 +431,56 @@ check(
   'Bulk Imager chain intermediates must use a lossless PNG format'
 );
 
+const bulkImagerRendererSource = read(path.join(toolsDir, 'bulk-imager', 'bulk-imager.js'));
+const bulkImagerHtmlSource = read(path.join(toolsDir, 'bulk-imager', 'bulk-imager.html'));
+const bulkImagerCssSource = read(path.join(toolsDir, 'bulk-imager', 'bulk-imager.css'));
+const cropMoveSource = (bulkImagerRendererSource.match(
+  /function onCanvasMouseMove\(e\)\s*\{[\s\S]*?(?=\r?\nfunction onCanvasMouseUp)/
+) || [''])[0];
+const cropScheduleSource = (bulkImagerRendererSource.match(
+  /function scheduleCropRender\(\)\s*\{[\s\S]*?(?=\r?\nfunction cancelCropRender)/
+) || [''])[0];
+const cropCancelSource = (bulkImagerRendererSource.match(
+  /function cancelCropRender\(\)\s*\{[\s\S]*?(?=\r?\nfunction flushCropRender)/
+) || [''])[0];
+const cropSelectionSource = (bulkImagerRendererSource.match(
+  /function renderCropSelection\(\)\s*\{[\s\S]*?(?=\r?\nfunction updateFlipInfo)/
+) || [''])[0];
+const bulkImagerDrawSource = (bulkImagerRendererSource.match(
+  /function drawEditor\(\)\s*\{[\s\S]*?(?=\r?\nfunction getDisplayCropRect)/
+) || [''])[0];
+const bulkImagerCleanupSource = (bulkImagerRendererSource.match(
+  /function cleanup\(\)\s*\{[\s\S]*?(?=\r?\nfunction bindEvents)/
+) || [''])[0];
+const bulkImagerCloseSource = (bulkImagerRendererSource.match(
+  /function closeEditor\(\)\s*\{[\s\S]*?(?=\r?\nfunction drawEditor)/
+) || [''])[0];
+check(
+  cropMoveSource.includes('scheduleCropRender();')
+    && !/\b(?:drawEditor|renderCropSelection)\s*\(/.test(cropMoveSource)
+    && /cropRenderFrame !== null[\s\S]*requestAnimationFrame/.test(cropScheduleSource)
+    && /cropRenderFrame = null;[\s\S]*renderCropSelection\(\)/.test(cropScheduleSource),
+  'Bulk Imager crop moves must coalesce visual updates into one animation frame'
+);
+check(
+  bulkImagerHtmlSource.includes('id="editorCropShade"')
+    && bulkImagerCssSource.includes('#editorCropShade')
+    && cropSelectionSource.includes('cropShadeCtx.fillRect')
+    && cropSelectionSource.includes('cropShadeCtx.clearRect')
+    && !cropSelectionSource.includes('editorCtx')
+    && !bulkImagerDrawSource.includes('if (cropRect'),
+  'Bulk Imager crop selection must render separately from the image bitmap'
+);
+check(
+  cropCancelSource.includes('window.cancelAnimationFrame(cropRenderFrame)')
+    && cropCancelSource.includes('cropRenderFrame = null;')
+    && bulkImagerCleanupSource.includes('cancelCropRender();')
+    && bulkImagerCleanupSource.includes('isCropping = false;')
+    && bulkImagerCloseSource.includes('cancelCropRender();')
+    && bulkImagerCloseSource.includes('isCropping = false;'),
+  'Bulk Imager must cancel pending crop animation frames during modal close and tool cleanup'
+);
+
 const videoCompressorSource = read(path.join(root, 'node-tools', 'video-compressor.js'));
 check(
   /ext === '\.webm'\s*\|\|\s*ext === '\.avi'/.test(videoCompressorSource),
@@ -427,14 +509,27 @@ check(
   'Generic renderer settings must not control local update provenance'
 );
 
-const chatRendererSource = read(path.join(root, 'renderer', 'tools', 'chat', 'chat.js'));
-const chatHtmlSource = read(path.join(root, 'renderer', 'tools', 'chat', 'chat.html'));
+const componentManagerSource = read(path.join(root, 'src', 'main', 'component-manager.js'));
+const settingsHtmlSource = read(path.join(toolsDir, 'settings', 'settings.html'));
+const settingsRendererSource = read(path.join(toolsDir, 'settings', 'settings.js'));
+const backendServerSource = read(path.join(root, 'python', 'server.py'));
+const buildFiles = JSON.parse(read(path.join(root, 'build', 'base.json'))).files;
 const chatBackendSource = read(path.join(root, 'python', 'modules', 'llm.py'));
 const setupManagerSource = read(path.join(root, 'src', 'main', 'setup-manager.js'));
 check(
-  chatRendererSource.includes("isDownloading ? 'Cancel download'")
-    && chatRendererSource.includes("ws.send(JSON.stringify({ action: 'cancel' }))"),
-  'Chat model downloads must expose a cancellation control'
+  !indexSource.includes('data-tool="chat"')
+    && !settingsHtmlSource.includes('installChatPackBtn')
+    && !settingsRendererSource.includes('installChatPack')
+    && !read(preloadPath).includes('install-chat-pack')
+    && !componentManagerSource.includes('install-chat-pack')
+    && !backendServerSource.includes('routers.chat_routes')
+    && !backendServerSource.includes("prefix='/chat'"),
+  'Retired chat must have no navigation, installation bridge, settings action, or backend route'
+);
+check(
+  ['!renderer/tools/chat/**', '!python/routers/chat_routes.py', '!python/modules/llm.py']
+    .every(pattern => buildFiles.includes(pattern)),
+  'Packaged builds must exclude retired chat screens and inference modules'
 );
 check(
   chatBackendSource.includes("'--host', '127.0.0.1'")
@@ -444,17 +539,6 @@ check(
     && !chatBackendSource.includes("'--api-key',")
     && chatBackendSource.includes('urllib.request.ProxyHandler({})'),
   'Local Chat inference must keep its authentication secret out of argv and stay proxy-free, offline, and loopback-only'
-);
-check(
-  chatHtmlSource.includes('id="executionSelect"')
-    && chatHtmlSource.includes('id="profileSelect"')
-    && chatHtmlSource.includes('id="importModelBtn"')
-    && chatHtmlSource.includes('id="chatStopBtn"')
-    && chatHtmlSource.includes('id="modelQualityBadge"')
-    && chatHtmlSource.includes('id="modelFitBadge"')
-    && chatRendererSource.includes('QUALITY_GROUP_LABELS')
-    && chatRendererSource.includes('quality_tier'),
-  'Local Chat must expose controls and separate model-quality from hardware-fit guidance'
 );
 check(
   (setupManagerSource.match(/sha256:\s*'[a-f0-9]{64}'/g) || []).length >= 12
@@ -478,6 +562,39 @@ check(
     && chatBackendSource.includes("'quality_tier': 'standard'")
     && chatBackendSource.includes("'quality_tier': 'unverified'"),
   'Local Chat catalog must enforce and disclose its professional quality floor'
+);
+
+const bgRemoverRendererSource = read(path.join(toolsDir, 'bg-remover', 'bg-remover.js'));
+const bgRemoverHtmlSource = read(path.join(toolsDir, 'bg-remover', 'bg-remover.html'));
+const bgRemoverCssSource = read(path.join(toolsDir, 'bg-remover', 'bg-remover.css'));
+const bgRemoverFileItemSource = (bgRemoverRendererSource.match(
+  /function createFileElement\(file, index\)\s*\{[\s\S]*?(?=\r?\n\/\/ ---- Before\/After Comparison ----)/
+) || [''])[0];
+const bgRemoverFocusTrapSource = (bgRemoverRendererSource.match(
+  /function trapCompareFocus\(event\)\s*\{[\s\S]*?(?=\r?\nfunction setComparePosition)/
+) || [''])[0];
+check(
+  bgRemoverFileItemSource.includes('<button type="button" class="file-compare-btn"')
+    && bgRemoverFileItemSource.includes("compareBtn.addEventListener('click'")
+    && !bgRemoverFileItemSource.includes("el.addEventListener('click'")
+    && bgRemoverFileItemSource.includes("el.querySelector('.file-remove').addEventListener('click'")
+    && bgRemoverCssSource.includes('.file-compare-btn'),
+  'Background Editor completed rows must use an explicit Compare button without losing Remove'
+);
+check(
+  bgRemoverHtmlSource.includes('role="dialog" aria-modal="true"')
+    && bgRemoverRendererSource.includes("if (e.key === 'Tab')")
+    && bgRemoverRendererSource.includes('trapCompareFocus(e);')
+    && bgRemoverFocusTrapSource.includes('dialog.querySelectorAll(')
+    && bgRemoverFocusTrapSource.includes('last.focus();')
+    && bgRemoverFocusTrapSource.includes('first.focus();'),
+  'Background Editor comparison dialog must trap forward and reverse Tab focus'
+);
+check(
+  bgRemoverRendererSource.includes('compareReturnFocus = document.activeElement;')
+    && bgRemoverRendererSource.includes('if (compareReturnFocus?.isConnected) compareReturnFocus.focus();')
+    && bgRemoverRendererSource.includes("if (e.key === 'Escape')"),
+  'Background Editor comparison dialog must restore focus after close or Escape'
 );
 
 if (failures.length > 0) {

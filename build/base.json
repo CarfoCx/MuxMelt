@@ -20,6 +20,9 @@
     "renderer/**/*",
     "node-tools/**/*",
     "python/**/*",
+    "!renderer/tools/chat/**",
+    "!python/routers/chat_routes.py",
+    "!python/modules/llm.py",
     "!python/weights/**",
     "!python/**/__pycache__/**",
     "!**/*.pyc"

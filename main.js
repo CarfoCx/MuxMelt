@@ -21,6 +21,7 @@ const {
   killPython,
   getPythonPort,
   getPythonInfo,
+  findPython,
   isPythonRunning,
   getBackendLogPath,
   flushBackendLogs,
@@ -28,8 +29,6 @@ const {
 const {
   runSlimSetup,
   needsSlimSetup,
-  ensureLlamaServer,
-  hasCompleteLlamaSetup,
   hasCurrentSetupMarker,
 } = require('./src/main/setup-manager');
 const { scanFolder } = require('./src/main/folder-scan');
@@ -381,7 +380,7 @@ try {
   require('./node-tools/url-downloader').registerIPC(
     ipcMain,
     getMainWindow,
-    () => getPythonInfo(),
+    () => getPythonInfo() || findPython(pythonStartOptions()),
     networkPolicy,
     jobRegistry
   );
@@ -399,8 +398,6 @@ componentManager = createComponentManager({
   saveSettings,
   networkPolicy,
   runSlimSetup,
-  ensureLlamaServer,
-  hasCompleteLlamaSetup,
   hasCurrentSetupMarker,
   needsSlimSetup,
   startBackend: startBackendForMaintenance,
@@ -440,7 +437,7 @@ app.whenReady().then(async () => {
     // opt-in and every external action is guarded by Offline Mode.
     registerUpdaterIpcHandlers(sendUpdateEvent, networkPolicy, jobRegistry);
 
-    // The Core workspace opens before Python or Local Chat. Node/FFmpeg tools
+    // The Core workspace opens before Python. Node/FFmpeg tools
     // remain useful even if the optional media pack is absent or broken.
     updateSplash(45, 'Loading private media workspace');
     await createWindow(APP_DIR, networkPolicy);

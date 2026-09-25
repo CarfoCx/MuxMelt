@@ -1,61 +1,3 @@
-/* Monochrome theme system: the app exposes only these two variants. */
-:root {
-  --radius: 12px;
-  --radius-sm: 8px;
-  --radius-lg: 16px;
-  --sidebar-width: 260px;
-  --header-height: 44px;
-  --font-sans: 'Inter', 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
-  --bg-primary: #09090b;
-  --bg-secondary: rgba(24, 24, 27, 0.65);
-  --bg-tertiary: rgba(39, 39, 42, 0.55);
-  --bg-hover: rgba(63, 63, 70, 0.75);
-  --sidebar: rgba(9, 9, 11, 0.85);
-  --header: rgba(9, 9, 11, 0.9);
-  --border: rgba(255, 255, 255, 0.1);
-  --accent: #e4e4e7;
-  --accent-hover: #ffffff;
-  --accent-rgb: 228, 228, 231;
-  --accent-glow: rgba(228, 228, 231, 0.2);
-  --accent-contrast: #09090b;
-  --text-primary: #ffffff;
-  --text-secondary: #a1a1aa;
-  --text-dim: #71717a;
-  --success: #4ade80;
-  --error: #f87171;
-  --warning: #facc15;
-  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), rgba(9, 9, 11, 0.85));
-  --app-bg-gradient: radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.05), transparent 40%), radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.02), transparent 45%);
-}
-
-[data-theme="mono-dark"] {
-  color-scheme: dark;
-}
-
-[data-theme="mono-light"] {
-  color-scheme: light;
-  --bg-primary: #ffffff;
-  --bg-secondary: rgba(244, 244, 245, 0.85);
-  --bg-tertiary: rgba(228, 228, 231, 0.85);
-  --bg-hover: rgba(212, 212, 216, 0.9);
-  --sidebar: rgba(255, 255, 255, 0.9);
-  --header: rgba(255, 255, 255, 0.95);
-  --border: rgba(24, 24, 27, 0.15);
-  --accent: #18181b;
-  --accent-hover: #000000;
-  --accent-rgb: 24, 24, 27;
-  --accent-glow: rgba(24, 24, 27, 0.15);
-  --accent-contrast: #ffffff;
-  --text-primary: #09090b;
-  --text-secondary: #3f3f46;
-  --text-dim: #52525b;
-  --success: #16a34a;
-  --error: #dc2626;
-  --warning: #d97706;
-  --banner-grad: linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), rgba(255, 255, 255, 0.9));
-  --app-bg-gradient: radial-gradient(circle at 15% 50%, rgba(0, 0, 0, 0.03), transparent 40%), radial-gradient(circle at 85% 30%, rgba(0, 0, 0, 0.01), transparent 45%);
-}
 /* ============================================================================
    GLOBAL BASE STYLES
    ========================================================================== */
@@ -71,7 +13,6 @@
   text-decoration: none;
   font-weight: bold;
   border-bottom-right-radius: var(--radius-sm);
-  transition: top 0.2s ease;
 }
 
 .skip-nav:focus {
@@ -89,11 +30,6 @@
 body {
   font-family: var(--font-sans);
   background-color: var(--bg-primary);
-  background-image: var(--app-bg-gradient, none);
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-attachment: fixed;
   color: var(--text-primary);
   overflow: hidden;
   height: 100vh;
@@ -131,7 +67,6 @@ input:focus-visible {
   height: var(--header-height);
   flex-shrink: 0;
   background: var(--header-bg);
-  backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
   user-select: none;
@@ -191,7 +126,6 @@ input:focus-visible {
   border: 1px solid var(--border);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.15s ease;
 }
 
 .sidebar-action-btn:hover {
@@ -229,7 +163,6 @@ input:focus-visible {
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .titlebar-btn:hover {
@@ -253,7 +186,6 @@ input:focus-visible {
 .sidebar {
   width: var(--sidebar-width);
   background: var(--sidebar-bg);
-  backdrop-filter: blur(20px);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -275,12 +207,11 @@ input:focus-visible {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  background: var(--bg-secondary);
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px var(--accent-glow);
 }
 
 .brand-title-group h1 {
@@ -339,7 +270,6 @@ input:focus-visible {
   font-size: 13px;
   font-weight: 500;
   text-align: left;
-  transition: all 0.15s ease;
   width: 100%;
 }
 
@@ -351,7 +281,6 @@ input:focus-visible {
 .sidebar-item.active {
   background: var(--accent);
   color: var(--accent-contrast);
-  box-shadow: 0 4px 14px var(--accent-glow);
 }
 
 /* Settings is a first-class navigation item and must follow both palettes. */
@@ -366,7 +295,6 @@ input:focus-visible {
   background: var(--bg-secondary);
   border-color: var(--border);
   color: var(--text-primary);
-  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .sidebar-icon {
@@ -433,7 +361,6 @@ input:focus-visible {
   cursor: pointer;
   font-size: 11px;
   font-weight: 500;
-  transition: all 0.15s ease;
 }
 
 .sidebar-shortcuts-btn:hover {
@@ -504,12 +431,6 @@ input:focus-visible {
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  animation: toolFadeIn 0.18s ease-out;
-}
-
-@keyframes toolFadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 .tool-body {
@@ -528,11 +449,9 @@ input:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--banner-grad);
-  backdrop-filter: blur(12px);
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.5;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
 }
 
 .module-banner strong {
@@ -547,17 +466,13 @@ input:focus-visible {
   padding: 24px 20px;
   text-align: center;
   cursor: pointer;
-  transition: all 0.2s ease;
   background: var(--bg-secondary);
-  backdrop-filter: blur(16px);
   flex-shrink: 0;
 }
 
 .drop-zone:hover {
   border-color: var(--accent);
-  background: linear-gradient(to bottom, rgba(var(--accent-rgb), 0.05), rgba(var(--accent-rgb), 0.12));
-  box-shadow: 0 0 24px var(--accent-glow);
-  transform: translateY(-2px);
+  background: var(--bg-secondary);
 }
 
 .drop-zone.dragover {
@@ -632,7 +547,6 @@ input:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
-  backdrop-filter: blur(16px);
 }
 
 .setting-group {
@@ -657,7 +571,6 @@ input:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
-  backdrop-filter: blur(16px);
 }
 
 .file-list {
@@ -675,7 +588,6 @@ input:focus-visible {
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  transition: all 0.15s ease;
 }
 
 .file-item:hover {
@@ -709,7 +621,6 @@ input:focus-visible {
   gap: 12px;
   padding: 12px 22px;
   background: var(--header-bg);
-  backdrop-filter: blur(20px);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -738,7 +649,6 @@ input:focus-visible {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   letter-spacing: 0.2px;
 }
 
@@ -750,13 +660,10 @@ input:focus-visible {
 .btn-primary {
   background: var(--accent);
   color: white;
-  box-shadow: 0 4px 14px var(--accent-glow);
 }
 
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  box-shadow: 0 6px 20px var(--accent-glow);
-  transform: translateY(-1px);
 }
 
 .btn-primary:disabled {
@@ -798,10 +705,6 @@ input:focus-visible {
   border-color: var(--error);
 }
 
-.btn:active {
-  transform: scale(0.98);
-}
-
 /* Shared Form Controls */
 select {
   padding: 6px 12px;
@@ -812,12 +715,10 @@ select {
   font-size: 13px;
   cursor: pointer;
   outline: none;
-  transition: all 0.15s ease;
 }
 
 select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 input[type="text"],
@@ -830,14 +731,12 @@ textarea {
   border-radius: var(--radius-sm);
   font-size: 13px;
   outline: none;
-  transition: all 0.15s ease;
 }
 
 input[type="text"]:focus,
 input[type="number"]:focus,
 textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 /* Custom Checkbox Toggle */
@@ -858,7 +757,6 @@ textarea:focus {
 
 .settings-section {
   background: var(--bg-secondary);
-  backdrop-filter: blur(16px);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 18px 22px;
@@ -952,7 +850,6 @@ textarea:focus {
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: all 0.15s ease;
 }
 
 .recent-file-item:hover {
@@ -986,12 +883,10 @@ textarea:focus {
 .log-panel {
   flex-shrink: 0;
   background: var(--bg-secondary);
-  backdrop-filter: blur(20px);
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   max-height: 200px;
-  transition: max-height 0.25s ease;
 }
 
 .log-panel.collapsed {
@@ -1025,7 +920,6 @@ textarea:focus {
 
 .log-toggle-icon {
   font-size: 10px;
-  transition: transform 0.25s ease;
 }
 
 .log-panel.collapsed .log-toggle-icon {
@@ -1072,14 +966,12 @@ textarea:focus {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(4px);
   z-index: 1100;
   display: flex;
   align-items: center;
   justify-content: center;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s ease;
 }
 
 .shortcuts-overlay.active {
@@ -1089,13 +981,10 @@ textarea:focus {
 
 .shortcuts-modal {
   background: var(--bg-secondary);
-  backdrop-filter: blur(20px);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   width: 400px;
   max-width: 90vw;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-  animation: toolFadeIn 0.2s ease-out;
 }
 
 .shortcuts-header {
@@ -1119,7 +1008,6 @@ textarea:focus {
   font-size: 22px;
   cursor: pointer;
   padding: 0 4px;
-  transition: color 0.15s ease;
 }
 
 .shortcuts-close:hover { color: var(--text-primary); }
@@ -1169,14 +1057,4 @@ textarea:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html:focus-within { scroll-behavior: auto; }
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-  }
 }

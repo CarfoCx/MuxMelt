@@ -9,17 +9,20 @@ let currentToolId = null;
 let currentToolModule = null;
 let _vramTimer = null;
 let _vramFailCount = 0;
+let _vramController = null;
+let _gpuPollingEnabled = false;
+const GPU_POLL_INTERVAL_MS = 10000;
 
 const APP_META = Object.freeze({
   name: document.body?.dataset.appName || 'MuxMelt',
   supportUrl: 'https://ko-fi.com/carfo'
 });
 
-// One registry powers Settings and the dark/light toggle. There is one visual
-// family: monochrome, with only dark and light variants.
+// One registry powers Settings and the dark/light toggle. The persisted IDs
+// stay stable while both modes use the same workspace visual family.
 const THEME_REGISTRY = Object.freeze([
-  { id: 'mono-dark', family: 'mono', mode: 'dark', label: 'Monochrome', swatch: '#e4e4e7' },
-  { id: 'mono-light', family: 'mono', mode: 'light', label: 'Monochrome', swatch: '#18181b' }
+  { id: 'mono-dark', family: 'system', mode: 'dark', label: 'Default', swatch: '#60cdff' },
+  { id: 'mono-light', family: 'system', mode: 'light', label: 'Default', swatch: '#0067c0' }
 ]);
 
 function normalizeTheme(themeName) {
@@ -38,6 +41,14 @@ function applyAppTheme(themeName, persist = true) {
   const normalized = normalizeTheme(themeName);
   document.documentElement.setAttribute('data-theme', normalized);
   document.documentElement.style.colorScheme = normalized.endsWith('-light') ? 'light' : 'dark';
+  const themeSelect = document.getElementById('themeSelect');
+  if (themeSelect) themeSelect.value = normalized;
+  const themeButton = document.getElementById('themeToggleBtn');
+  if (themeButton) {
+    const nextMode = normalized.endsWith('-light') ? 'dark' : 'light';
+    themeButton.setAttribute('aria-label', `Use ${nextMode} theme`);
+    themeButton.title = `Use ${nextMode} theme`;
+  }
   if (persist) {
     updateSettings(all => {
       all.global = all.global || {};
@@ -62,6 +73,7 @@ const gpuStats = document.getElementById('gpuStats');
 const gpuUtilStat = document.getElementById('gpuUtilStat');
 const gpuTempStat = document.getElementById('gpuTempStat');
 const gpuMemStat = document.getElementById('gpuMemStat');
+const systemStatus = gpuStats.closest('.system-status');
 // versionBadge removed — version now shown in Settings
 const toolStylesheet = document.getElementById('toolStylesheet');
 
@@ -71,10 +83,15 @@ const toolStylesheet = document.getElementById('toolStylesheet');
 
 const logsByTool = {};
 const MAX_LOG_ENTRIES_PER_TOOL = 200;
+let logRenderFrame = null;
+let renderedLogToolId = null;
+let renderedLogEntry = null;
 
 function setLogCollapsed(collapsed) {
   logPanel.classList.toggle('collapsed', collapsed);
   logToggle.setAttribute('aria-expanded', String(!collapsed));
+  if (collapsed) cancelLogRender();
+  else scheduleLogRender();
 }
 
 function toggleLogPanel() {
@@ -103,12 +120,49 @@ function createLogEntry(entry) {
 }
 
 function renderLogEntries(toolId = currentToolId) {
+  if (getLogToolId(toolId) !== getLogToolId(currentToolId)) return;
+  renderedLogToolId = null;
+  scheduleLogRender();
+}
+
+function cancelLogRender() {
+  if (logRenderFrame !== null) cancelAnimationFrame(logRenderFrame);
+  logRenderFrame = null;
+}
+
+function scheduleLogRender() {
+  if (logRenderFrame !== null || document.hidden || logPanel.classList.contains('collapsed')) return;
+  logRenderFrame = requestAnimationFrame(flushLogEntries);
+}
+
+function flushLogEntries() {
+  logRenderFrame = null;
+  if (document.hidden || logPanel.classList.contains('collapsed')) return;
+  const toolId = currentToolId;
   const key = getLogToolId(toolId);
   const entries = logsByTool[key] || [];
-  logEntries.innerHTML = '';
-  entries.forEach(entry => logEntries.appendChild(createLogEntry(entry)));
+  const previousIndex = renderedLogToolId === key ? entries.indexOf(renderedLogEntry) : -1;
+  const pending = previousIndex < 0 ? entries : entries.slice(previousIndex + 1);
+  if (previousIndex >= 0 && pending.length === 0) return;
+
+  const fragment = document.createDocumentFragment();
+  pending.forEach(entry => fragment.appendChild(createLogEntry(entry)));
+  if (previousIndex < 0) logEntries.replaceChildren(fragment);
+  else logEntries.appendChild(fragment);
+  while (logEntries.children.length > MAX_LOG_ENTRIES_PER_TOOL) {
+    logEntries.removeChild(logEntries.firstChild);
+  }
+  renderedLogToolId = key;
+  renderedLogEntry = entries[entries.length - 1] || null;
+  // One layout read per visible batch; hidden activity stays in the bounded
+  // buffer and is rendered only when the user opens the log.
   logEntries.parentElement.scrollTop = logEntries.parentElement.scrollHeight;
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) cancelLogRender();
+  else scheduleLogRender();
+});
 
 function log(message, level = 'info', toolId = currentToolId) {
   const key = getLogToolId(toolId);
@@ -123,17 +177,14 @@ function log(message, level = 'info', toolId = currentToolId) {
   }
 
   if (key === getLogToolId(currentToolId)) {
-    logEntries.appendChild(createLogEntry(entry));
-    while (logEntries.children.length > MAX_LOG_ENTRIES_PER_TOOL) {
-      logEntries.removeChild(logEntries.firstChild);
-    }
-    logEntries.parentElement.scrollTop = logEntries.parentElement.scrollHeight;
+    scheduleLogRender();
   }
 }
 
 function clearLog(toolId = currentToolId) {
-  logsByTool[getLogToolId(toolId)] = [];
-  logEntries.innerHTML = '';
+  const key = getLogToolId(toolId);
+  logsByTool[key] = [];
+  if (key === getLogToolId(currentToolId)) renderLogEntries(toolId);
 }
 
 function escapeHtml(str) {
@@ -413,7 +464,8 @@ window.updateFileCount = function(count, toolIdOrRoot) {
       const footerLeft = root.querySelector('.tool-footer-left');
       if (footerLeft) footerLeft.appendChild(badge);
     }
-    badge.textContent = count === 1 ? '1 file' : `${count} files`;
+    const label = count === 1 ? '1 file' : `${count} files`;
+    if (badge.textContent !== label) badge.textContent = label;
   } else if (badge) {
     badge.remove();
   }
@@ -458,7 +510,8 @@ window.updateQueueSummary = function(items, toolIdOrRoot) {
   if (counts.error) parts.push(`<span class="queue-pill error">Failed ${counts.error}</span>`);
   if (counts.cancelled) parts.push(`<span class="queue-pill">Cancelled ${counts.cancelled}</span>`);
 
-  summary.innerHTML = parts.join('');
+  const markup = parts.join('');
+  if (summary.innerHTML !== markup) summary.innerHTML = markup;
   window.updateFileCount(list.length, root);
 };
 
@@ -540,25 +593,6 @@ function updateDropZoneCollapse(dropZone, fileCount) {
   }
 }
 window.updateDropZoneCollapse = updateDropZoneCollapse;
-
-// Load image thumbnail for file list items
-const _thumbCache = new Map();
-const _thumbCacheMax = 200;
-window.getFileThumbnail = async function(filePath) {
-  if (_thumbCache.has(filePath)) return _thumbCache.get(filePath);
-  try {
-    const dataUrl = await window.api.system.readImagePreview(filePath);
-    if (dataUrl) {
-      // Evict oldest entries if cache is full
-      if (_thumbCache.size >= _thumbCacheMax) {
-        const firstKey = _thumbCache.keys().next().value;
-        _thumbCache.delete(firstKey);
-      }
-      _thumbCache.set(filePath, dataUrl);
-    }
-    return dataUrl;
-  } catch { return null; }
-};
 
 // Global clipboard paste support: disk files are resolved normally and
 // in-memory screenshots are persisted through the validated main-process API.
@@ -769,18 +803,36 @@ document.addEventListener('keydown', event => {
 // ============================================================================
 
 function startGpuPolling() {
-  if (_vramTimer !== null) return;
-  _scheduleVramPoll(0);
+  _gpuPollingEnabled = true;
+  syncGpuPolling();
 }
 
 function stopGpuPolling() {
-  if (_vramTimer !== null) clearTimeout(_vramTimer);
-  _vramTimer = null;
+  _gpuPollingEnabled = false;
+  pauseGpuPolling();
   _vramFailCount = 0;
   gpuStats.classList.remove('active');
 }
 
+function canPollGpuStats() {
+  return _gpuPollingEnabled && !document.hidden && (!systemStatus || systemStatus.open);
+}
+
+function pauseGpuPolling() {
+  if (_vramTimer !== null) clearTimeout(_vramTimer);
+  _vramTimer = null;
+  const controller = _vramController;
+  _vramController = null;
+  controller?.abort();
+}
+
+function syncGpuPolling() {
+  if (!canPollGpuStats()) pauseGpuPolling();
+  else _scheduleVramPoll(0);
+}
+
 function _scheduleVramPoll(delayMs) {
+  if (!canPollGpuStats() || _vramTimer !== null || _vramController !== null) return;
   _vramTimer = setTimeout(async () => {
     _vramTimer = null;
     await pollGpuStats();
@@ -788,24 +840,21 @@ function _scheduleVramPoll(delayMs) {
 }
 
 async function pollGpuStats() {
-  // No point hitting the backend for live GPU stats while the window is
-  // minimized/hidden — nobody can see them. Re-check less often until shown.
-  if (document.hidden) {
-    _scheduleVramPoll(5000);
-    return;
-  }
+  if (!canPollGpuStats() || _vramController !== null) return;
   const controller = new AbortController();
+  _vramController = controller;
   const tid = setTimeout(() => controller.abort(), 4000);
+  let nextDelay = GPU_POLL_INTERVAL_MS;
   try {
     const resp = await fetch(`http://127.0.0.1:${pythonPort}/vram?token=${encodeURIComponent(pythonToken || '')}`, { signal: controller.signal });
     if (!resp.ok) throw new Error(`GPU status request failed (${resp.status})`);
     const data = await resp.json();
+    if (_vramController !== controller || !canPollGpuStats()) return;
 
     _vramFailCount = 0;
 
     if (!data.available) {
       gpuStats.classList.remove('active');
-      _scheduleVramPoll(3000);
       return;
     }
 
@@ -835,19 +884,25 @@ async function pollGpuStats() {
       else if (memPct > 75) gpuMemStat.classList.add('warn');
     }
 
-    _scheduleVramPoll(3000);
   } catch {
+    if (_vramController !== controller || !canPollGpuStats()) return;
     _vramFailCount++;
     gpuStats.classList.remove('active');
-    // Exponential backoff: 3 s -> 6 s -> 12 s -> ... capped at 60 s
-    const backoff = Math.min(3000 * (2 ** (_vramFailCount - 1)), 60000);
-    _scheduleVramPoll(backoff);
+    // Telemetry is informational, so failed checks back off aggressively.
+    nextDelay = Math.min(GPU_POLL_INTERVAL_MS * (2 ** (_vramFailCount - 1)), 60000);
   } finally {
     clearTimeout(tid);
+    if (_vramController === controller) {
+      _vramController = null;
+      _scheduleVramPoll(nextDelay);
+    }
   }
 }
 
-
+// Collapsed diagnostics and hidden windows require no telemetry timers or
+// requests. Expanding or returning to the app refreshes them immediately.
+systemStatus?.addEventListener('toggle', syncGpuPolling);
+document.addEventListener('visibilitychange', syncGpuPolling);
 
 function checkHealth() {
   const controller = new AbortController();
@@ -883,7 +938,7 @@ const toolRegistry = {};
 const toolCache = {};
 
 function registerTool(id, module) {
-  if (typeof id !== 'string' || !/^[a-z0-9-]+$/.test(id) || !module || typeof module.init !== 'function') {
+  if (!window.WORKSPACE_TOOLS.some(tool => tool.id === id) || !module || typeof module.init !== 'function') {
     console.error('Ignoring invalid tool registration:', id);
     return false;
   }
@@ -958,10 +1013,18 @@ function handleBackendStatus(status = {}) {
 }
 
 function updateDocumentTitle(toolId) {
+  document.body.dataset.activeTool = toolId || '';
   const label = toolId
     ? document.querySelector(`.sidebar-item[data-tool="${toolId}"] .sidebar-label`)
     : null;
   document.title = label ? `${label.textContent} - ${APP_META.name}` : APP_META.name;
+  const tool = window.WORKSPACE_TOOLS.find(item => item.id === toolId);
+  document.getElementById('workspaceCategory').textContent = tool?.category || 'Workspace';
+  document.getElementById('workspaceTitle').textContent = tool?.label || 'All tools';
+  const mode = document.getElementById('workspaceMode');
+  const online = tool?.category === 'Downloads';
+  mode.textContent = online ? 'Network access' : toolId === 'settings' ? 'Device settings' : 'Local processing';
+  mode.classList.toggle('online', online);
 }
 
 function restorePreviousTool(previousToolId, message) {
@@ -987,8 +1050,35 @@ function restorePreviousTool(previousToolId, message) {
   updateDocumentTitle(currentToolId);
 }
 
+function arrangeWorkbench(container, toolId) {
+  // Keep a file's queue and output settings beside each other on desktop.
+  // IDs and the existing tool controllers remain unchanged by this layout.
+  if (!['format-converter', 'video-compressor', 'audio-extractor', 'upscaler', 'bg-remover', 'stem-separator'].includes(toolId)) return;
+  const body = container.querySelector('.tool-body');
+  const drop = body?.querySelector(':scope > .drop-zone');
+  const files = body?.querySelector(':scope > .file-list-container');
+  const settings = body?.querySelector(':scope > .settings-bar');
+  if (!drop || !files || !settings) return;
+  const layout = document.createElement('div');
+  layout.className = 'workbench-layout';
+  const stage = document.createElement('div');
+  stage.className = 'workbench-stage';
+  const inspector = document.createElement('aside');
+  inspector.className = 'workbench-inspector';
+  inspector.setAttribute('aria-label', 'Output settings');
+  const heading = document.createElement('h3');
+  heading.textContent = 'Output settings';
+  inspector.appendChild(heading);
+  body.insertBefore(layout, drop);
+  stage.append(drop, files);
+  inspector.appendChild(settings);
+  const advanced = body.querySelector(':scope > .tool-options');
+  if (advanced) inspector.appendChild(advanced);
+  layout.append(stage, inspector);
+}
+
 async function loadTool(toolId) {
-  if (typeof toolId !== 'string' || !/^[a-z0-9-]+$/.test(toolId)) return false;
+  if (!window.WORKSPACE_TOOLS.some(tool => tool.id === toolId)) return false;
   if (toolId === currentToolId && toolCache[toolId]?.initialized) return true;
 
   // A monotonically increasing request id also handles A -> B -> A races;
@@ -1027,6 +1117,9 @@ async function loadTool(toolId) {
     toolContent.replaceChildren(container);
     currentToolModule = toolCache[toolId].module || toolRegistry[toolId] || null;
     if (toolCache[toolId].initialized) {
+      try { await currentToolModule?.activate?.(); }
+      catch (err) { log(`Could not refresh ${toolId}: ${err.message}`, 'warn', toolId); }
+      if (_loadRequestId !== requestId) return false;
       saveGlobalSettings();
       return true;
     }
@@ -1041,6 +1134,7 @@ async function loadTool(toolId) {
     const html = await resp.text();
     if (_loadRequestId !== requestId) return false;
     container.innerHTML = html;
+    arrangeWorkbench(container, toolId);
     enhanceAccessibility(container);
     toolCache[toolId] = {
       ...(toolCache[toolId] || {}),
@@ -1181,9 +1275,9 @@ function setupWindowControls() {
 async function init() {
   setupWindowControls();
   const allSettings = await loadGlobalSettings();
-  setLogCollapsed(!!allSettings.global?.logCollapsed);
+  setLogCollapsed(allSettings.global?.logCollapsed !== false);
 
-  // Apply saved theme (default to monochrome dark)
+  // Preserve the saved appearance; fresh installs use the dark workspace.
   const savedTheme = allSettings.global?.theme || 'mono-dark';
   const theme = applyAppTheme(savedTheme, false);
   if (theme !== savedTheme) {
@@ -1207,19 +1301,12 @@ async function init() {
 
   // Bind titlebar header quick action controls
   const themeToggleBtn = document.getElementById('themeToggleBtn');
-  const headerSettingsBtn = document.getElementById('headerSettingsBtn');
   const headerLogBtn = document.getElementById('headerLogBtn');
 
   if (themeToggleBtn) {
     themeToggleBtn.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme') || 'mono-dark';
       applyAppTheme(getThemePair(current));
-    });
-  }
-
-  if (headerSettingsBtn) {
-    headerSettingsBtn.addEventListener('click', () => {
-      loadTool('settings');
     });
   }
 
@@ -1407,6 +1494,8 @@ function toggleShortcutsOverlay() {
 }
 
 function openShortcutsOverlay() {
+  if (Array.from(document.querySelectorAll('[aria-modal="true"]')).some(modal =>
+    modal.getClientRects().length > 0 && !modal.closest('[aria-hidden="true"]'))) return;
   shortcutsReturnFocus = document.activeElement;
   shortcutsOverlay.classList.add('active');
   shortcutsOverlay.setAttribute('aria-hidden', 'false');
@@ -1429,6 +1518,8 @@ shortcutsOverlay.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented) return;
+  if (document.getElementById('toolSearchDialog').open) return;
   // Escape — close shortcuts overlay, then context menus
   if (e.key === 'Escape') {
     if (shortcutsOverlay.classList.contains('active')) {
@@ -1448,7 +1539,7 @@ document.addEventListener('keydown', (e) => {
     } else {
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === shortcutsDialog)) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {
@@ -1464,6 +1555,9 @@ document.addEventListener('keydown', (e) => {
     toggleShortcutsOverlay();
     return;
   }
+
+  if (Array.from(document.querySelectorAll('[aria-modal="true"]')).some(modal =>
+    modal.getClientRects().length > 0 && !modal.closest('[aria-hidden="true"]'))) return;
 
   // Don't intercept when typing in inputs/textareas
   const tag = document.activeElement?.tagName;

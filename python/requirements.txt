@@ -16,5 +16,5 @@ rembg[cpu]==2.0.75; sys_platform == 'darwin'
 onnxruntime==1.26.0; sys_platform == 'darwin'
 rembg[gpu]==2.0.75; sys_platform != 'darwin'
 onnxruntime-gpu==1.26.0; sys_platform != 'darwin'
-yt-dlp[default,curl-cffi]==2026.7.4
+yt-dlp[default,curl-cffi]==2026.8.19
 curl-cffi==0.14.0

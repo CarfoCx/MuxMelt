@@ -18,6 +18,7 @@ let lastOutputDir = '';
 let _pasteHandler = null;
 
 let editorModal, editorOverlay, editorCanvas, editorCtx, editorApplyBtn;
+let cropShadeCanvas, cropShadeCtx;
 let editorCanvasWrap, cropOverlay;
 let currentEditorFile = null;
 let editorImg = null;
@@ -29,6 +30,7 @@ let isCropping = false;
 let cropStartX = 0;
 let cropStartY = 0;
 let cropAspectRatio = null;
+let cropRenderFrame = null;
 
 let flipH = false;
 let flipV = false;
@@ -51,6 +53,8 @@ async function init(ctx) {
   editorOverlay = document.getElementById('editorOverlay');
   editorCanvas = document.getElementById('editorCanvas');
   editorCtx = editorCanvas.getContext('2d');
+  cropShadeCanvas = document.getElementById('editorCropShade');
+  cropShadeCtx = cropShadeCanvas.getContext('2d');
   editorCanvasWrap = document.getElementById('editorCanvasWrap');
   cropOverlay = document.getElementById('cropOverlay');
   editorApplyBtn = document.getElementById('edApplyOne');
@@ -67,6 +71,8 @@ async function init(ctx) {
 function cleanup() {
   if (_pasteHandler) { document.removeEventListener('paste-files', _pasteHandler); _pasteHandler = null; }
   if (progressCleanup) { progressCleanup(); progressCleanup = null; }
+  cancelCropRender();
+  isCropping = false;
   closeEditor();
 }
 
@@ -188,8 +194,9 @@ function bindEditorEvents() {
       editorTool = btn.dataset.tool;
       const panel = document.getElementById(`opt-${editorTool}`);
       if (panel) panel.classList.add('active');
-      updateCropOverlay();
-      drawEditor();
+      cancelCropRender();
+      isCropping = false;
+      renderCropSelection();
     });
   });
 
@@ -249,6 +256,7 @@ function canvasToImage(clientX, clientY) {
 
 function onCanvasMouseDown(e) {
   if (editorTool !== 'crop' || !editorImg) return;
+  cancelCropRender();
   const pos = canvasToImage(e.clientX, e.clientY);
   isCropping = true;
   cropStartX = clamp(pos.x, 0, editorImg.naturalWidth);
@@ -286,35 +294,75 @@ function onCanvasMouseMove(e) {
     w: Math.abs(endX - cropStartX),
     h: Math.abs(endY - cropStartY)
   };
-  document.getElementById('cropInfo').textContent = `${cropRect.w} x ${cropRect.h} at (${cropRect.x}, ${cropRect.y})`;
-  updateCropOverlay();
-  drawEditor();
+  scheduleCropRender();
 }
 
 function onCanvasMouseUp() {
   if (!isCropping) return;
   isCropping = false;
-  if (cropRect && (cropRect.w < 5 || cropRect.h < 5)) resetCrop();
+  if (cropRect && (cropRect.w < 5 || cropRect.h < 5)) {
+    resetCrop();
+    return;
+  }
+  flushCropRender();
 }
 
 function resetCrop() {
+  cancelCropRender();
+  isCropping = false;
   cropRect = null;
   cropAspectRatio = null;
   document.getElementById('cropInfo').textContent = '-';
   document.querySelectorAll('.aspect-btn').forEach(item => item.classList.remove('active'));
   const freeBtn = document.querySelector('.aspect-btn[data-ratio="free"]');
   if (freeBtn) freeBtn.classList.add('active');
-  updateCropOverlay();
-  drawEditor();
+  renderCropSelection();
 }
 
-function updateCropOverlay() {
+function scheduleCropRender() {
+  if (cropRenderFrame !== null) return;
+  cropRenderFrame = window.requestAnimationFrame(() => {
+    cropRenderFrame = null;
+    renderCropSelection();
+  });
+}
+
+function cancelCropRender() {
+  if (cropRenderFrame === null) return;
+  window.cancelAnimationFrame(cropRenderFrame);
+  cropRenderFrame = null;
+}
+
+function flushCropRender() {
+  if (cropRenderFrame === null) return;
+  window.cancelAnimationFrame(cropRenderFrame);
+  cropRenderFrame = null;
+  renderCropSelection();
+}
+
+function renderCropSelection() {
+  if (cropShadeCtx && cropShadeCanvas) {
+    cropShadeCtx.clearRect(0, 0, cropShadeCanvas.width, cropShadeCanvas.height);
+  }
+
   if (!cropRect || editorTool !== 'crop') {
     cropOverlay.style.display = 'none';
     return;
   }
 
   const displayRect = getDisplayCropRect();
+  if (cropShadeCtx && cropShadeCanvas) {
+    cropShadeCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    cropShadeCtx.fillRect(0, 0, cropShadeCanvas.width, cropShadeCanvas.height);
+    cropShadeCtx.clearRect(
+      displayRect.x * canvasScale,
+      displayRect.y * canvasScale,
+      displayRect.w * canvasScale,
+      displayRect.h * canvasScale
+    );
+  }
+
+  document.getElementById('cropInfo').textContent = `${cropRect.w} x ${cropRect.h} at (${cropRect.x}, ${cropRect.y})`;
   const canvasRect = editorCanvas.getBoundingClientRect();
   const wrapRect = editorCanvasWrap.getBoundingClientRect();
   cropOverlay.style.display = 'block';
@@ -364,11 +412,16 @@ function openEditor(fileIndex) {
 }
 
 function closeEditor() {
+  cancelCropRender();
+  isCropping = false;
   if (isProcessing) return;
   if (editorOverlay) editorOverlay.classList.remove('active');
   if (editorModal) editorModal.classList.remove('active');
   if (editorModal) editorModal.setAttribute('aria-hidden', 'true');
   if (cropOverlay) cropOverlay.style.display = 'none';
+  if (cropShadeCtx && cropShadeCanvas) {
+    cropShadeCtx.clearRect(0, 0, cropShadeCanvas.width, cropShadeCanvas.height);
+  }
   currentEditorFile = null;
   if (editorReturnFocus?.isConnected) editorReturnFocus.focus();
   editorReturnFocus = null;
@@ -385,8 +438,10 @@ function drawEditor() {
 
   const cw = Math.round(iw * canvasScale);
   const ch = Math.round(ih * canvasScale);
-  editorCanvas.width = cw;
-  editorCanvas.height = ch;
+  if (editorCanvas.width !== cw) editorCanvas.width = cw;
+  if (editorCanvas.height !== ch) editorCanvas.height = ch;
+  if (cropShadeCanvas.width !== cw) cropShadeCanvas.width = cw;
+  if (cropShadeCanvas.height !== ch) cropShadeCanvas.height = ch;
   editorCtx.clearRect(0, 0, cw, ch);
 
   editorCtx.save();
@@ -394,19 +449,7 @@ function drawEditor() {
   editorCtx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
   editorCtx.drawImage(editorImg, -cw / 2, -ch / 2, cw, ch);
   editorCtx.restore();
-
-  if (cropRect && editorTool === 'crop') {
-    const displayRect = getDisplayCropRect();
-    editorCtx.fillStyle = 'rgba(0,0,0,0.5)';
-    editorCtx.fillRect(0, 0, cw, displayRect.y * canvasScale);
-    const cropBottom = (displayRect.y + displayRect.h) * canvasScale;
-    editorCtx.fillRect(0, cropBottom, cw, ch - cropBottom);
-    editorCtx.fillRect(0, displayRect.y * canvasScale, displayRect.x * canvasScale, displayRect.h * canvasScale);
-    const cropRight = (displayRect.x + displayRect.w) * canvasScale;
-    editorCtx.fillRect(cropRight, displayRect.y * canvasScale, cw - cropRight, displayRect.h * canvasScale);
-  }
-
-  updateCropOverlay();
+  renderCropSelection();
 }
 
 function getDisplayCropRect() {
@@ -586,7 +629,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateButton();
-  statusText.textContent = 'Waiting for Image';
+  statusText.textContent = 'Waiting for image';
   if (window.updateQueueSummary) window.updateQueueSummary([], 'bulk-imager');
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
 }
@@ -597,7 +640,7 @@ function updateButton() {
 
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No image selected. Drag one image here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">Choose one image above, drop it here, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     return;
   }
   fileList.innerHTML = '';
@@ -611,7 +654,7 @@ function createFileElement(file, index) {
   const progressClass = file.state === 'complete' ? ' complete' : file.state === 'error' ? ' error' : '';
 
   el.innerHTML = `
-    <img class="file-thumb" data-path="${window.escapeHtml(file.path)}" src="" alt="">
+    <span class="file-type">${window.escapeHtml(getFileExtension(file.path).slice(1).toUpperCase())}</span>
     <div class="file-info">
       <div class="file-name" title="${window.escapeHtml(file.path)}">${window.escapeHtml(file.name)}<span class="file-edit-badge">click to edit</span></div>
       <div class="file-status">${window.escapeHtml(file.status)}</div>
@@ -620,12 +663,7 @@ function createFileElement(file, index) {
     <div class="file-progress-bar">
       <div class="file-progress-fill${progressClass}" style="width: ${Math.round(file.progress * 100)}%"></div>
     </div>
-    <button class="file-remove" data-index="${index}" title="Remove">&times;</button>`;
-
-  const thumb = el.querySelector('.file-thumb');
-  if (thumb) {
-    window.getFileThumbnail(file.path).then(url => { if (url) thumb.src = url; });
-  }
+    <button class="file-remove" data-index="${index}" title="Remove" aria-label="Remove ${window.escapeHtml(file.name)}">&times;</button>`;
 
   el.addEventListener('click', (e) => {
     if (e.target.closest('.file-remove')) return;

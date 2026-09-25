@@ -7,8 +7,6 @@
 // '.tim' (PlayStation 1 texture) is decode-only: it can be converted from, but
 // never to, so it deliberately has no entry in FORMAT_OPTIONS below.
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.avif', '.gif', '.svg', '.heic', '.heif', '.tim']);
-// Image inputs a Chromium <img> cannot display, so the queue shows an icon.
-const NO_THUMBNAIL_EXTS = new Set(['.tim']);
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mkv', '.mov', '.webm']);
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg', '.aac', '.wma', '.mka', '.opus']);
 const FORMAT_OPTIONS = {
@@ -142,7 +140,7 @@ function bindEvents() {
       const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Waiting for File';
+      if (statusText) statusText.textContent = 'Waiting for files';
     });
   }
 
@@ -166,7 +164,7 @@ function bindEvents() {
 
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
-      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Waiting for File'; } });
+      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Queued'; } });
       retryBtn.style.display = 'none';
       renderFileList();
       updateButton();
@@ -193,7 +191,7 @@ async function startConversion() {
   const pending = files.filter(f => f.state === 'pending' || f.state === 'error');
   if (pending.length === 0) return;
   if (!outputFormat.value || getQueueMediaType() === 'mixed') {
-    log('Choose either image files or video files before converting', 'warn');
+    log('Add only images, only videos, or only audio to each conversion batch', 'warn');
     return;
   }
 
@@ -381,7 +379,7 @@ function updateFormatOptions() {
 
   if (mediaType === 'mixed') {
     outputFormat.disabled = true;
-    outputFormat.innerHTML = '<option value="">Use either images or videos</option>';
+    outputFormat.innerHTML = '<option value="">Use one type: image, video, or audio</option>';
     outputFormat.value = '';
     return;
   }
@@ -408,7 +406,7 @@ async function addFiles(paths) {
     try {
       const size = await window.api.system.getFileSize(p);
       if (isProcessing) break;
-      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for File', state: 'pending' });
+      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Queued', state: 'pending' });
       added++;
     } catch (err) {
       log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
@@ -433,7 +431,7 @@ function clearFiles() {
   updateFormatOptions();
   renderFileList();
   updateButton();
-  statusText.textContent = 'Waiting for File';
+  statusText.textContent = 'Waiting for files';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
   if (window.updateQueueSummary) window.updateQueueSummary([], 'format-converter');
 }
@@ -443,12 +441,17 @@ function updateButton() {
   convertBtn.disabled = isProcessing
     ? cancelRequested
     : pending.length === 0 || !outputFormat.value || getQueueMediaType() === 'mixed';
+  if (!isProcessing && /^(Waiting for files|Ready to convert|Use one media type)/.test(statusText.textContent)) {
+    statusText.textContent = getQueueMediaType() === 'mixed'
+      ? 'Use one media type per batch'
+      : pending.length ? 'Ready to convert' : 'Waiting for files';
+  }
 }
 
 // ---- Rendering ----
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">Your files will appear here. Choose files above, drop them here, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     return;
   }
   fileList.innerHTML = '';
@@ -460,8 +463,7 @@ function renderFileItem(index) {
   if (window.updateQueueSummary) window.updateQueueSummary(files, 'format-converter');
   const existing = fileList.children[index];
   if (!existing) return;
-  // Update in place rather than rebuilding the row, which would re-fetch the
-  // thumbnail (IPC + image decode) on every progress tick.
+  // Update the changing fields without rebuilding the row on every tick.
   updateFileElement(existing, files[index]);
 }
 
@@ -481,19 +483,12 @@ function createFileElement(file, index) {
   el.className = 'file-item';
 
   const ext = getFileExtension(file.path);
-  const isImage = IMAGE_EXTS.has(ext);
-  // A <img> thumbnail only works for formats the browser itself can render.
-  // TIM is decoded in the main process, so show a static icon instead of an
-  // <img> that would never load.
-  const iconHtml = isImage && !NO_THUMBNAIL_EXTS.has(ext)
-    ? `<img class="file-thumb" data-path="${window.escapeHtml(file.path)}" src="" alt="">`
-    : `<span class="file-icon">${isImage ? '\u{1F5BC}' : '\u{1F3AC}'}</span>`;
   let progressClass = '';
   if (file.state === 'complete') progressClass = ' complete';
   else if (file.state === 'error') progressClass = ' error';
 
   el.innerHTML = `
-    ${iconHtml}
+    <span class="file-type">${window.escapeHtml(ext.slice(1).toUpperCase())}</span>
     <div class="file-info">
       <div class="file-name" title="${window.escapeHtml(file.path)}">${window.escapeHtml(file.name)}</div>
       <div class="file-status">${window.escapeHtml(file.status)}</div>
@@ -502,13 +497,7 @@ function createFileElement(file, index) {
     <div class="file-progress-bar">
       <div class="file-progress-fill${progressClass}" style="width: ${Math.round(file.progress * 100)}%"></div>
     </div>
-    <button class="file-remove" data-index="${index}" title="Remove">\u00D7</button>`;
-
-  // Load thumbnail async
-  const thumb = el.querySelector('.file-thumb');
-  if (thumb) {
-    window.getFileThumbnail(file.path).then(url => { if (url) thumb.src = url; });
-  }
+    <button class="file-remove" data-index="${index}" title="Remove" aria-label="Remove ${window.escapeHtml(file.name)}">\u00D7</button>`;
 
   el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing) removeFile(index); });
 

@@ -44,7 +44,7 @@ function createSplashWindow(appDir) {
     frame: false,
     alwaysOnTop: true,
     show: false,
-    backgroundColor: '#101820',
+    backgroundColor: '#111315',
     icon: path.join(appDir, 'build', 'icon.png'),
     webPreferences: {
       contextIsolation: true,
@@ -81,7 +81,7 @@ function createSplashWindow(appDir) {
       }
       splashWindow.show();
       updateSplash(splashState.percent, splashState.status, splashState.detail);
-      setTimeout(() => resolveWhenVisible(resolve), 120);
+      resolveWhenVisible(resolve);
     });
 
     splashWindow.webContents.once('did-finish-load', () => {
@@ -115,9 +115,7 @@ async function playSplashFinish() {
       'window.playSplashFinish ? window.playSplashFinish() : Promise.resolve()',
       true
     );
-  } catch {
-    await delay(900);
-  }
+  } catch { /* A failed splash update must not delay the ready application. */ }
 }
 
 function closeSplash() {
@@ -145,7 +143,7 @@ async function createWindow(appDir, networkPolicy = null) {
       sandbox: true,
       navigateOnDragDrop: false
     },
-    backgroundColor: '#0f0f1a',
+    backgroundColor: '#111315',
     icon: path.join(appDir, 'build', 'icon.png'),
     show: false
   });

@@ -53,7 +53,6 @@
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
   line-height: 1.6;
   outline: none;
-  transition: border-color 0.15s ease;
 }
 
 .tts-textarea:focus {
@@ -85,7 +84,6 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.15s ease;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -157,7 +155,6 @@
   font-size: 12px;
   flex-shrink: 0;
   padding: 0;
-  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .audio-play-btn:hover {

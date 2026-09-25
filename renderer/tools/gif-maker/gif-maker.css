@@ -15,7 +15,6 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.15s ease;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -50,7 +49,6 @@
   width: 0%;
   height: 100%;
   background: var(--accent);
-  transition: width 0.18s ease;
 }
 
 .gif-progress-percent {

@@ -8,3 +8,5 @@ build/bundle/
 .env
 .claude/
 scratch/
+artifacts/ui/
+artifacts/test-output.txt

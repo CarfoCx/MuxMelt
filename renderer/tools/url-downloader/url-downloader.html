@@ -1,47 +1,42 @@
-<!-- Control bar pinned to the top of the tool (status/queue verbosity on the
-     left, actions on the right). Keeps the tool-footer-left/right class names
-     so the app shell can still inject the queue-summary pills here. -->
-<div class="tool-footer url-topbar">
-  <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Waiting for URL</span>
-    <span class="eta-text" id="etaText"></span>
-    <div class="processing-indicator" id="processingIndicator">
-      <div class="spinner"></div>
-      <span>Processing...</span>
-    </div>
-  </div>
-  <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
-    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry Failed</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Folder</button>
-    <button class="btn btn-primary" id="downloadBtn">Download All</button>
-  </div>
-</div>
-
 <div class="tool-body">
+  <header class="tool-intro">
+    <h2>Download from a link</h2>
+    <p>Add video links, choose a quality and save location, then download. Enable playlists in advanced options when needed.</p>
+  </header>
   <div class="module-banner">
-    <strong>Online Video Downloader.</strong> The URLs you enter are contacted to fetch metadata and media. A chosen site can direct yt-dlp to redirects or resources at other addresses, including private-network addresses, so use only sources you trust. Browser cookies are accessed only when you explicitly select a browser below.
+    <strong>Internet connection required.</strong> Links you add contact the source website and may follow redirects to other addresses, including your local network. Use sources you trust. Browser cookies are read only when you select a browser below.
   </div>
   
   <div class="url-download-panel">
-    <div class="url-download-header">
-      <div>
-        <h2>Universal Downloader</h2>
-        <p>Paste video pages, channel URLs, or playlists to download media. Files will be saved in your selected folder.</p>
-      </div>
+    <!-- URL Downloader Queue -->
+    <div class="url-list-header">
+      <span>Video link &amp; details</span>
+      <span>Download status</span>
+      <span></span>
     </div>
+
+    <div class="url-list" id="urlList"></div>
+
+    <button class="add-url-row-btn" id="addUrlBtn" title="Add another video URL to download queue">
+      <svg class="add-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+      </svg>
+      <span>Add another link</span>
+    </button>
+
 
     <!-- Main Settings Panel -->
     <div class="settings-bar url-settings">
       <div class="setting-group">
-        <label>Output Folder:</label>
+        <label for="outputDirBtn">Save to</label>
         <button class="output-dir-btn" id="outputDirBtn" title="Select where to save the files">
           Downloads/MuxMelt Downloads
         </button>
       </div>
       
       <div class="setting-group">
-        <label>Quality / Format:</label>
+        <label for="qualitySelect">Quality &amp; format</label>
         <select id="qualitySelect" class="settings-select url-quality-select">
           <option value="best">Best Quality (Auto)</option>
           <option value="2160p">4K / 2160p (MP4)</option>
@@ -54,8 +49,13 @@
         </select>
       </div>
 
+    </div>
+
+    <details class="tool-options url-login-options">
+      <summary>Sign-in for restricted videos <span>Optional</span></summary>
+      <div class="settings-bar">
       <div class="setting-group">
-        <label for="cookieBrowserSelect">Browser Cookies:</label>
+        <label for="cookieBrowserSelect">Use browser sign-in</label>
         <select id="cookieBrowserSelect" class="settings-select url-quality-select" title="Use cookies only from the selected browser for login-required sites">
           <option value="">None (Default)</option>
           <option value="chrome">Chrome</option>
@@ -66,63 +66,64 @@
           <option value="vivaldi">Vivaldi</option>
           <option value="safari">Safari</option>
         </select>
-        <p class="setting-desc">None never reads any browser profile. Selecting a browser lets yt-dlp read that browser's cookies for the requested site. The choice is not saved.</p>
+        <p class="setting-desc">Optional for sites that require sign-in. Reads cookies from the selected browser for this session only.</p>
       </div>
 
       <div class="setting-group">
-        <label>Cookies File:</label>
+        <label for="cookiesFileBtn">Cookies file</label>
         <button class="output-dir-btn" id="cookiesFileBtn" title="Upload a custom netscape cookies.txt file (Right-click to clear)">
           None (optional)
         </button>
         <p class="setting-desc">Used only for this tool session. The private path and cookies are not copied into MuxMelt settings.</p>
       </div>
-    </div>
+      </div>
+    </details>
 
     <!-- Collapsible Advanced Settings -->
-    <div class="advanced-settings-toggle" id="advancedToggleBtn">
-      <span>Advanced Settings</span>
+    <button type="button" class="advanced-settings-toggle" id="advancedToggleBtn" aria-expanded="false" aria-controls="advancedSettingsPanel">
+      <span>Advanced options</span>
       <svg class="chevron-icon" id="advancedChevron" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="6 9 12 15 18 9"></polyline>
       </svg>
-    </div>
+    </button>
 
-    <div class="advanced-settings-panel collapsed" id="advancedSettingsPanel">
+    <div class="advanced-settings-panel collapsed" id="advancedSettingsPanel" hidden>
       <div class="advanced-settings-grid">
         <!-- Section 1: Playlists & Limits -->
         <div class="advanced-col">
-          <h3>Playlists & Speed limits</h3>
+          <h3>Playlists &amp; download speed</h3>
           
           <div class="adv-setting-item">
             <label class="checkbox-container">
               <input type="checkbox" id="playlistCheckbox">
               <span class="checkmark"></span>
-              Enable Playlist Mode
+              Download entire playlists
             </label>
             <p class="setting-desc">Downloads all videos if link points to a playlist.</p>
           </div>
 
           <div class="adv-setting-item dependency-playlist" style="display: none;">
-            <label>Max Playlist Videos:</label>
+            <label for="maxDownloadsInput">Playlist video limit</label>
             <input type="number" id="maxDownloadsInput" class="adv-text-input" min="0" placeholder="Unlimited" title="0 or blank for no limit">
           </div>
 
           <div class="adv-setting-item">
-            <label>Speed Limit:</label>
+            <label for="limitRateInput">Download speed limit</label>
             <input type="text" id="limitRateInput" class="adv-text-input" placeholder="Unlimited (e.g. 50K, 10M)" title="Throttle download speed. E.g. 50K or 5M">
           </div>
 
           <div class="adv-setting-item">
-            <label>Time Range:</label>
+            <label for="timeRangeInput">Clip time range</label>
             <input type="text" id="timeRangeInput" class="adv-text-input" placeholder="e.g. 1:30-5:00" title="Download only a specific time section">
           </div>
 
           <div class="adv-setting-item">
-            <label>Concurrent Fragments:</label>
+            <label for="concurrentFragmentsInput">Parallel video fragments</label>
             <input type="number" id="concurrentFragmentsInput" class="adv-text-input" min="1" placeholder="Auto" title="Number of fragments to download concurrently within a single video">
           </div>
 
           <div class="adv-setting-item">
-            <label>Simultaneous Downloads:</label>
+            <label for="simultaneousDownloadsInput">Downloads at once</label>
             <input type="number" id="simultaneousDownloadsInput" class="adv-text-input" min="1" max="10" placeholder="3" title="How many videos from the queue to download at the same time (1-10, default 3)">
             <p class="setting-desc">How many queued videos download at once. Higher is faster but may get you rate-limited.</p>
           </div>
@@ -130,10 +131,10 @@
 
         <!-- Section 2: Subtitles & Formats -->
         <div class="advanced-col">
-          <h3>Subtitles & Formats</h3>
+          <h3>Subtitles &amp; file format</h3>
           
           <div class="adv-setting-item">
-            <label>Download Subtitles:</label>
+            <label for="subtitlesSelect">Subtitles</label>
             <select id="subtitlesSelect" class="settings-select adv-select">
               <option value="none">Don't Download</option>
               <option value="embed">Embed in Video File</option>
@@ -142,7 +143,7 @@
           </div>
 
           <div class="adv-setting-item dependency-subtitles" style="display: none;">
-            <label>Languages (comma-separated):</label>
+            <label for="subLangsInput">Languages (separate with commas)</label>
             <input type="text" id="subLangsInput" class="adv-text-input" placeholder="all" value="all" title="Language codes, e.g. en,es,fr or all">
             
             <label class="checkbox-container" style="margin-top: 5px;">
@@ -153,7 +154,7 @@
           </div>
 
           <div class="adv-setting-item dependency-audio-format" style="display: none;">
-            <label>Audio Format:</label>
+            <label for="audioFormatSelect">Audio format</label>
             <select id="audioFormatSelect" class="settings-select adv-select">
               <option value="mp3">MP3</option>
               <option value="m4a">M4A</option>
@@ -164,12 +165,12 @@
           </div>
 
           <div class="adv-setting-item dependency-custom-format" style="display: none;">
-            <label>Custom yt-dlp Format String:</label>
+            <label for="customFormatInput">Custom format selector (yt-dlp)</label>
             <input type="text" id="customFormatInput" class="adv-text-input" placeholder="e.g. bestvideo+bestaudio" title="Passes directly to yt-dlp -f flag">
           </div>
 
           <div class="adv-setting-item">
-            <label>Filename Structure:</label>
+            <label for="filenameTemplateSelect">File naming</label>
             <select id="filenameTemplateSelect" class="settings-select adv-select">
               <option value="title-id">Title [ID] (Default)</option>
               <option value="title">Title Only</option>
@@ -182,23 +183,24 @@
 
         <!-- Section 3: Auth & Network -->
         <div class="advanced-col">
-          <h3>Network & Auth</h3>
+          <h3>Network &amp; sign-in</h3>
           
           <div class="adv-setting-item">
-            <label>Proxy URL:</label>
+            <label for="proxyInput">Proxy address</label>
             <input type="text" id="proxyInput" class="adv-text-input" placeholder="https://proxy.example:8080" autocomplete="off" spellcheck="false">
             <p class="setting-desc">Session only. Proxy credentials, if included, are never saved or placed in the process command line.</p>
           </div>
 
           <div class="adv-setting-item">
-            <label>Account Credentials:</label>
+            <label for="usernameInput">Account username</label>
             <input type="text" id="usernameInput" class="adv-text-input" placeholder="Username" autocomplete="off" spellcheck="false" style="margin-bottom: 4px;">
+            <label for="passwordInput">Account password</label>
             <input type="password" id="passwordInput" class="adv-text-input" placeholder="Password" autocomplete="off">
             <p class="setting-desc">Credentials stay in memory for this tool session and are removed after the batch.</p>
           </div>
 
           <div class="adv-setting-item">
-            <label>Video Password:</label>
+            <label for="videoPasswordInput">Video password</label>
             <input type="password" id="videoPasswordInput" class="adv-text-input" placeholder="For protected videos" autocomplete="off">
           </div>
 
@@ -206,7 +208,7 @@
             <label class="checkbox-container">
               <input type="checkbox" id="geoBypassCheckbox">
               <span class="checkmark"></span>
-              Geo-Bypass (Fake IP)
+              Try geographic restriction bypass
             </label>
           </div>
 
@@ -214,7 +216,7 @@
 
         <!-- Section 4: Metadata & Extra Options -->
         <div class="advanced-col span-two">
-          <h3>Post-processing & Meta</h3>
+          <h3>Chapters &amp; extra files</h3>
           <div class="checkbox-grid">
             <label class="checkbox-container">
               <input type="checkbox" id="skipSponsorsCheckbox">
@@ -256,21 +258,23 @@
       </div>
     </div>
 
-    <!-- URL Downloader Queue -->
-    <div class="url-list-header">
-      <span>Video URL / Metadata</span>
-      <span>Status / Details</span>
-      <span></span>
+
+  </div>
+</div>
+
+<div class="tool-footer">
+  <div class="tool-footer-left">
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for a link</span>
+    <span class="eta-text" id="etaText"></span>
+    <div class="processing-indicator" id="processingIndicator">
+      <div class="spinner"></div>
+      <span>Processing...</span>
     </div>
-
-    <div class="url-list" id="urlList"></div>
-
-    <button class="add-url-row-btn" id="addUrlBtn" title="Add another video URL to download queue">
-      <svg class="add-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="12" y1="5" x2="12" y2="19"></line>
-        <line x1="5" y1="12" x2="19" y2="12"></line>
-      </svg>
-      <span>Add Video URL</span>
-    </button>
+  </div>
+  <div class="tool-footer-right">
+    <button class="btn btn-clear" id="clearBtn">Clear all</button>
+    <button class="btn btn-secondary" id="retryBtn" style="display:none;">Retry failed</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open folder</button>
+    <button class="btn btn-primary" id="downloadBtn">Download all</button>
   </div>
 </div>

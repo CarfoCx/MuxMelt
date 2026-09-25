@@ -1,16 +1,20 @@
 <!-- Tool body -->
 <div class="tool-body">
+  <header class="tool-intro">
+    <h2>Turn text into speech</h2>
+    <p>Choose an installed voice, listen to a preview, and save your text as an audio file.</p>
+  </header>
   <div class="module-banner">
-    <strong>Offline Text to Speech.</strong> Uses voices installed on this computer. Your text stays on this device and is never sent to a speech service. System spellcheck is off unless you enable it for this session.
+    <strong>Works offline.</strong> Your text stays on this computer. System spellcheck is off unless you enable it for this session.
   </div>
 
   <!-- Text input area -->
   <div class="tts-input-area">
     <div class="tts-input-header">
-      <label class="tts-label" for="ttsText">Text to Speech:</label>
+      <label class="tts-label" for="ttsText">Your text</label>
       <label class="tts-spellcheck-toggle" title="Optional system/Chromium spellcheck; its language-service behavior depends on your operating system">
         <input type="checkbox" id="spellcheckToggle">
-        <span>System Spellcheck (This Session)</span>
+        <span>Spellcheck for this session</span>
       </label>
     </div>
     <textarea id="ttsText" class="tts-textarea" placeholder="Enter the text you want to convert to speech..." rows="8" maxlength="50000" spellcheck="false"></textarea>
@@ -54,8 +58,8 @@
     </div>
 
     <div class="setting-group">
-      <label>Output:</label>
-      <button class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
+      <label for="outputDirBtn">Save to</label>
+      <button class="output-dir-btn" id="outputDirBtn" title="Choose where to save your results">
         Desktop (default)
       </button>
     </div>
@@ -64,7 +68,7 @@
   <!-- Progress / result area -->
   <div class="tts-result-area" id="resultArea">
     <div class="empty-state">
-      Enter text and click Preview or Generate.
+      Enter your text, listen to a preview, then create your audio.
     </div>
   </div>
 
@@ -73,16 +77,16 @@
 <!-- Bottom bar -->
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText">Waiting for Text</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for text</span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
       <span>Generating...</span>
     </div>
   </div>
   <div class="tool-footer-right">
-    <button class="btn btn-clear" id="clearBtn">Clear All</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
-    <button class="btn btn-secondary" id="previewBtn">Preview</button>
-    <button class="btn btn-primary" id="generateBtn">Generate</button>
+    <button class="btn btn-clear" id="clearBtn">Clear all</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open folder</button>
+    <button class="btn btn-secondary" id="previewBtn">Listen to preview</button>
+    <button class="btn btn-primary" id="generateBtn">Create audio</button>
   </div>
 </div>

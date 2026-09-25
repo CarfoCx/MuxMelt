@@ -1,23 +1,27 @@
 <div class="tool-body settings-page">
   <header class="settings-page-header">
     <div>
-      <p class="settings-eyebrow">YOUR DEVICE, YOUR CHOICES</p>
       <h2>Settings</h2>
-      <p>Privacy-first defaults. Anything that can contact the internet is clearly labeled.</p>
     </div>
     <span class="settings-save-status" id="settingsSaveStatus" role="status" aria-live="polite"></span>
   </header>
+
+  <div class="settings-tabs" role="tablist" aria-label="Settings categories">
+    <button type="button" id="settingsTabGeneral" role="tab" aria-selected="true" aria-controls="settingsPanelGeneral" data-settings-tab="General">General</button>
+    <button type="button" id="settingsTabPrivacy" role="tab" aria-selected="false" aria-controls="settingsPanelPrivacy" data-settings-tab="Privacy" tabindex="-1">Privacy &amp; storage</button>
+    <button type="button" id="settingsTabComponents" role="tab" aria-selected="false" aria-controls="settingsPanelComponents" data-settings-tab="Components" tabindex="-1">Components</button>
+    <button type="button" id="settingsTabAbout" role="tab" aria-selected="false" aria-controls="settingsPanelAbout" data-settings-tab="About" tabindex="-1">About &amp; updates</button>
+  </div>
 
   <section class="settings-section" aria-labelledby="appearanceHeading">
     <h3 class="settings-section-title" id="appearanceHeading">Appearance</h3>
     <div class="settings-row">
       <div class="settings-row-left">
         <label for="themeSelect">Theme</label>
-        <div class="settings-hint">Every palette includes a dark and light version.</div>
+        <div class="settings-hint">Light or dark appearance.</div>
       </div>
       <div class="settings-control settings-theme-control">
         <select id="themeSelect" class="settings-select"></select>
-        <button type="button" class="btn btn-secondary btn-sm" id="toggleThemeModeBtn">Toggle dark / light</button>
       </div>
     </div>
   </section>
@@ -92,15 +96,11 @@
 
   <section class="settings-section" aria-labelledby="componentsHeading">
     <h3 class="settings-section-title" id="componentsHeading">Optional components</h3>
-    <p class="settings-section-copy">Install larger local AI components only if you need them. Status and downloads come from the app's component manager.</p>
+    <p class="settings-section-copy">Add the Media AI pack when you need upscaling, background removal, or stem separation. Your files are processed on this computer.</p>
     <div class="component-list">
       <div class="component-card">
         <div><strong>Media AI pack</strong><p>Upscaling, background removal, and stem separation.</p><span id="mediaPackStatus" class="component-status" role="status">Checking...</span></div>
         <div class="component-actions"><button type="button" class="btn btn-primary" id="installMediaPackBtn">Install</button><button type="button" class="btn btn-secondary" id="removeMediaPackBtn" hidden>Remove</button></div>
-      </div>
-      <div class="component-card">
-        <div><strong>Local Chat pack</strong><p>Local language model support. Models are chosen separately in Chat.</p><span id="chatPackStatus" class="component-status" role="status">Checking...</span></div>
-        <div class="component-actions"><button type="button" class="btn btn-primary" id="installChatPackBtn">Install</button><button type="button" class="btn btn-secondary" id="removeChatPackBtn" hidden>Remove</button></div>
       </div>
     </div>
     <div class="settings-unavailable" id="componentApiNotice" hidden>Component management is not available in this build.</div>
@@ -109,6 +109,10 @@
   <section class="settings-section" aria-labelledby="storageHeading">
     <h3 class="settings-section-title" id="storageHeading">Storage &amp; private data</h3>
     <div class="storage-summary" id="storageSummary" role="status" aria-live="polite">Calculating local storage...</div>
+    <div class="settings-row" id="legacyChatStorage" hidden>
+      <div class="settings-row-left"><span class="settings-row-title">Unused legacy components</span><div class="settings-hint" id="legacyChatStorageHint">Files from the removed chat feature. You can remove them to free space.</div></div>
+      <div class="settings-control"><button type="button" class="btn btn-secondary" id="removeLegacyChatBtn">Remove</button></div>
+    </div>
     <div class="settings-row">
       <div class="settings-row-left"><span class="settings-row-title">App data folder</span><div class="settings-hint">Inspect local settings, caches, and installed components.</div></div>
       <div class="settings-control"><button type="button" class="btn btn-secondary" id="openDataFolderBtn">Open data folder</button></div>

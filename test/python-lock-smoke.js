@@ -46,7 +46,7 @@ const requiredDirectVersions = {
   demucs: '4.1.0',
   rembg: '2.0.75',
   'onnxruntime-gpu': '1.26.0',
-  'yt-dlp': '2026.7.4',
+  'yt-dlp': '2026.8.19',
   'curl-cffi': '0.14.0',
 };
 for (const [name, version] of Object.entries(requiredDirectVersions)) {

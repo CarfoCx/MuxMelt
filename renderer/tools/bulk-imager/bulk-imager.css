@@ -8,7 +8,6 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.15s ease;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -26,7 +25,6 @@
   color: var(--accent);
   margin-left: 4px;
   opacity: 0;
-  transition: opacity 0.15s;
 }
 
 .file-item.file-editable:hover .file-edit-badge { opacity: 1; }
@@ -102,7 +100,6 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.15s ease;
 }
 
 .editor-tool:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -147,7 +144,6 @@
   color: var(--text-primary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.15s;
 }
 
 .btn-sm:hover { background: var(--bg-hover); }
@@ -166,7 +162,6 @@
   border-radius: 12px;
   cursor: pointer;
   font-size: 11px;
-  transition: all 0.15s ease;
   white-space: nowrap;
   line-height: 1.4;
 }
@@ -197,6 +192,15 @@
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+#editorCropShade {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .crop-overlay {

@@ -44,8 +44,8 @@ jobs:
       - name: Install locked Node dependencies
         run: npm ci
 
-      - name: Install lightweight Python smoke dependency
-        run: python -m pip install --disable-pip-version-check numpy==2.4.4
+      - name: Install lightweight Python smoke dependencies
+        run: python -m pip install --disable-pip-version-check numpy==2.4.4 fastapi==0.136.3
 
       - name: Audit production dependencies
         if: runner.os == 'Linux'

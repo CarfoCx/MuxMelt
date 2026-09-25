@@ -15,7 +15,7 @@ const persistedState = (() => {
     outputDir: '',
     modelProfile: 'general',
     outputFormat: null,
-    statusText: 'Waiting for File',
+    statusText: 'Waiting for files',
     etaText: '',
     footerProgress: 0,
     footerProgressVisible: false
@@ -157,7 +157,7 @@ function persistRuntimeState() {
 function restoreViewState() {
   if (outputFormat) outputFormat.value = persistedState.outputFormat || outputFormat.value;
   if (modelProfileSelect) modelProfileSelect.value = modelProfile;
-  if (statusText) statusText.textContent = persistedState.statusText || 'Waiting for File';
+  if (statusText) statusText.textContent = persistedState.statusText || 'Waiting for files';
   if (etaText) etaText.textContent = persistedState.etaText || '';
   setFooterProgress(persistedState.footerProgress || 0, !!persistedState.footerProgressVisible);
   if (processingIndicator) processingIndicator.classList.toggle('active', isProcessing);
@@ -338,7 +338,7 @@ function bindEvents() {
     if (isProcessing || isPreparing) return;
     if (paths.length > 0) addFiles(paths);
     else log('No supported files found in folder', 'warn');
-    if (statusText) statusText.textContent = 'Waiting for File';
+    if (statusText) statusText.textContent = 'Waiting for files';
   });
 
   dropZone.addEventListener('click', async (e) => {
@@ -788,7 +788,7 @@ function activeConfigLabel() {
 function refreshIdleStatus() {
   if (isProcessing || !statusText) return;
   if (statusText.textContent.startsWith('Done!')) return;
-  statusText.textContent = files.length > 0 ? `Ready · ${activeConfigLabel()}` : 'Waiting for File';
+  statusText.textContent = files.length > 0 ? `Ready · ${activeConfigLabel()}` : 'Waiting for files';
   persistedState.statusText = statusText.textContent;
 }
 
@@ -887,7 +887,7 @@ async function addFiles(paths) {
     try {
       const size = await window.api.system.getFileSize(p);
       if (isProcessing || isPreparing) break;
-      files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Waiting for File', state: 'pending', output: null });
+      files.push({ path: p, name: getFileName(p), type, size, progress: 0, status: 'Queued', state: 'pending', output: null });
       added++;
     } catch (err) {
       log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
@@ -915,12 +915,12 @@ function clearFiles() {
   if (isProcessing || isPreparing) return;
   files = [];
   persistedState.files = files;
-  persistedState.statusText = 'Waiting for File';
+  persistedState.statusText = 'Waiting for files';
   persistedState.etaText = '';
   persistedState.isProcessing = false;
   renderFileList();
   updateUpscaleButton();
-  statusText.textContent = 'Waiting for File';
+  statusText.textContent = 'Waiting for files';
   etaText.textContent = '';
   setFooterProgress(0, false);
   if (retryBtn) retryBtn.style.display = 'none';
@@ -931,7 +931,7 @@ function clearFiles() {
 // ---- Rendering ----
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">Your files will appear here. Choose files above, drop them here, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     if (window.updateQueueSummary) window.updateQueueSummary([], 'upscaler');
     return;
   }
@@ -968,7 +968,8 @@ function updateFileElement(el, file) {
     if (!previewBtn) {
       previewBtn = document.createElement('button');
       previewBtn.className = 'file-preview-btn';
-      previewBtn.title = 'Preview';
+      previewBtn.title = 'Compare original and result';
+      previewBtn.setAttribute('aria-label', `Compare original and result for ${file.name}`);
       previewBtn.textContent = '\u{1F50D}';
       previewBtn.addEventListener('click', (e) => { e.stopPropagation(); openPreview(file); });
       const removeBtn = el.querySelector('.file-remove');
@@ -984,9 +985,6 @@ function createFileElement(file, index) {
   el.className = 'file-item';
   if (file.state === 'complete' && file.type === 'image') el.classList.add('file-previewable');
 
-  const iconHtml = file.type === 'image'
-    ? `<img class="file-thumb" data-path="${escapeHtml(file.path)}" src="" alt="">`
-    : `<span class="file-icon">\u{1F3AC}</span>`;
   let progressClass = '';
   if (file.state === 'complete') progressClass = ' complete';
   else if (file.state === 'error' || file.state === 'cancelled') progressClass = ' error';
@@ -995,7 +993,7 @@ function createFileElement(file, index) {
   const sizeStr = file.size ? window.formatFileSize(file.size) : '';
 
   el.innerHTML = `
-    ${iconHtml}
+    <span class="file-type">${window.escapeHtml(getFileExtension(file.path).slice(1).toUpperCase())}</span>
     <div class="file-info">
       <div class="file-name" title="${escapeHtml(file.path)}">${escapeHtml(file.name)}</div>
       <div class="file-status${statusClass}">${escapeHtml(file.status)}</div>
@@ -1004,14 +1002,8 @@ function createFileElement(file, index) {
     <div class="file-progress-bar">
       <div class="file-progress-fill${progressClass}" style="width: ${Math.round(file.progress * 100)}%"></div>
     </div>
-    ${file.state === 'complete' && file.type === 'image' ? '<button class="file-preview-btn" title="Preview">\u{1F50D}</button>' : ''}
-    <button class="file-remove" data-index="${index}" title="Remove">\u00D7</button>`;
-
-  // Load thumbnail async
-  const thumb = el.querySelector('.file-thumb');
-  if (thumb) {
-    window.getFileThumbnail(file.path).then(url => { if (url) thumb.src = url; });
-  }
+    ${file.state === 'complete' && file.type === 'image' ? '<button class="file-preview-btn" title="Compare original and result" aria-label="Compare original and result">\u{1F50D}</button>' : ''}
+    <button class="file-remove" data-index="${index}" title="Remove" aria-label="Remove ${window.escapeHtml(file.name)}">\u00D7</button>`;
 
   el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing && !isPreparing) removeFile(index); });
   const prevBtn = el.querySelector('.file-preview-btn');

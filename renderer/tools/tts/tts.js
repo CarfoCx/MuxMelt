@@ -126,7 +126,7 @@ function handleWSMessage(data) {
         : [];
       populateLanguages();
       if (allVoices.length && statusText) {
-        statusText.textContent = ttsText.value.trim() ? 'Text Entered' : 'Ready - fully offline';
+        statusText.textContent = ttsText.value.trim() ? 'Text ready' : 'Ready - fully offline';
       }
       break;
     case 'log':
@@ -169,6 +169,7 @@ function stopTtsPlayback() {
   if (playBtn) {
     playBtn.innerHTML = '&#9654;';
     playBtn.classList.remove('playing');
+    playBtn.setAttribute('aria-pressed', 'false');
   }
 }
 
@@ -178,7 +179,7 @@ function resetProcessingState(errorMessage = '') {
   isPreviewing = false;
   generateBtn.disabled = false;
   previewBtn.disabled = false;
-  generateBtn.textContent = 'Generate';
+  generateBtn.textContent = 'Create audio';
   generateBtn.classList.remove('btn-cancel');
   processingIndicator.classList.remove('active');
   if (errorMessage) {
@@ -202,11 +203,11 @@ function handleComplete(data) {
   
   generateBtn.disabled = false;
   previewBtn.disabled = false;
-  generateBtn.textContent = 'Generate';
+  generateBtn.textContent = 'Create audio';
   generateBtn.classList.remove('btn-cancel');
   processingIndicator.classList.remove('active');
   
-  statusText.textContent = isActuallyPreview ? 'Preview Generated' : 'Audio generated!';
+  statusText.textContent = isActuallyPreview ? 'Preview ready' : 'Audio generated!';
   if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'complete' }], 'tts');
   
   if (!isActuallyPreview) {
@@ -347,7 +348,7 @@ function showAudioResult(outputPath, isPreview) {
     resultArea.innerHTML = `
       <div class="tts-audio-player">
         <div class="audio-preview">
-          <button class="audio-play-btn" id="ttsPlayBtn" title="Play audio">&#9654;</button>
+          <button class="audio-play-btn" id="ttsPlayBtn" title="Play or stop audio" aria-label="Play or stop audio" aria-pressed="false">&#9654;</button>
           <span class="tts-play-label">${isPreview ? 'Play Preview' : 'Play result'}</span>
         </div>
         ${isPreview ? '' : `<div class="tts-output-path">${window.escapeHtml(outputPath)}</div>`}
@@ -364,12 +365,18 @@ function showAudioResult(outputPath, isPreview) {
         audio.currentTime = 0;
         playBtn.innerHTML = '&#9654;';
         playBtn.classList.remove('playing');
+
+        playBtn.setAttribute('aria-pressed', 'false');
       } else {
         playBtn.innerHTML = '&#9632;';
         playBtn.classList.add('playing');
+
+        playBtn.setAttribute('aria-pressed', 'true');
         audio.play().catch(() => {
           playBtn.innerHTML = '&#9654;';
           playBtn.classList.remove('playing');
+
+          playBtn.setAttribute('aria-pressed', 'false');
           log('Could not play audio preview', 'warn');
         });
       }
@@ -378,6 +385,8 @@ function showAudioResult(outputPath, isPreview) {
     audio.addEventListener('ended', () => {
       playBtn.innerHTML = '&#9654;';
       playBtn.classList.remove('playing');
+
+      playBtn.setAttribute('aria-pressed', 'false');
     });
 
     // Auto-play preview
@@ -391,7 +400,7 @@ function showAudioResult(outputPath, isPreview) {
 function bindEvents() {
   ttsText.addEventListener('input', () => {
     charCount.textContent = ttsText.value.length;
-    statusText.textContent = ttsText.value.trim() ? 'Text Entered' : 'Waiting for Text';
+    statusText.textContent = ttsText.value.trim() ? 'Text ready' : 'Waiting for text';
   });
 
   if (spellcheckToggle) {
@@ -461,8 +470,8 @@ function bindEvents() {
     if (_ttsAudio) { _ttsAudio.pause(); _ttsAudio = null; }
     ttsText.value = '';
     charCount.textContent = '0';
-    resultArea.innerHTML = '<div class="empty-state">Enter text and click Preview or Generate.</div>';
-    statusText.textContent = 'Waiting for Text';
+    resultArea.innerHTML = '<div class="empty-state">Enter your text, listen to a preview, then create your audio.</div>';
+    statusText.textContent = 'Waiting for text';
     openOutputBtn.style.display = 'none';
     if (window.updateQueueSummary) window.updateQueueSummary([], 'tts');
     window.clearLog();

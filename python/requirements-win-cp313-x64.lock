@@ -83,5 +83,5 @@ urllib3==2.7.0 --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ed
 uvicorn==0.48.0 --hash=sha256:48097851328b87ec36117d3d575234519eb58c2b22d79666e9bbc6c49a761dad  # uvicorn-0.48.0-py3-none-any.whl
 watchfiles==1.2.0 --hash=sha256:a0f27f01bee51861392bb6b7c4fdb290b27d1eb194e9e28788d68102a0e898d9  # watchfiles-1.2.0-cp313-cp313-win_amd64.whl
 websockets==17.0.1 --hash=sha256:409d93efcaa14f7a99592c5baaef5ec6ca94fba0f5aec1a86f693977c69c9c1c  # websockets-17.0.1-cp313-cp313-win_amd64.whl
-yt-dlp==2026.7.4 --hash=sha256:f11f2b11d5a8ac4059f9bdf29fa4407dc7c6bb00c5097e95ca22a7a9db518266  # yt_dlp-2026.7.4-py3-none-any.whl
+yt-dlp==2026.8.19 --hash=sha256:1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf  # yt_dlp-2026.8.19-py3-none-any.whl
 yt-dlp-ejs==0.8.0 --hash=sha256:79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4  # yt_dlp_ejs-0.8.0-py3-none-any.whl

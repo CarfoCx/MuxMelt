@@ -1,8 +1,9 @@
 <!-- Tool body -->
 <div class="tool-body">
-  <div class="module-banner">
-    <strong>Basic Image Editor.</strong> Crop or flip one image at a time.
-  </div>
+  <header class="tool-intro">
+    <h2>Crop &amp; flip images</h2>
+    <p>Choose one image, make your adjustments, and save the edited result.</p>
+  </header>
 
   <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-describedby="editorDropHint">
     <div class="drop-zone-icon">&#128444;</div>
@@ -10,18 +11,18 @@
       Drag &amp; drop one image for editing
     </div>
     <div class="drop-zone-actions">
-      <button type="button" class="drop-zone-link" id="browseBtn">browse image</button>
+      <button type="button" class="drop-zone-link" id="browseBtn">Choose image</button>
     </div>
     <div class="drop-zone-hint" id="editorDropHint">
-      Supports: PNG, JPG, WebP, BMP, TIFF
+      Supported files: PNG, JPG, WebP, BMP, TIFF
     </div>
   </div>
 
   <div class="settings-bar">
     <div class="setting-group">
-      <label for="outputDirBtn">Output:</label>
-      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Click to select output directory">
-        Same as source
+      <label for="outputDirBtn">Save to</label>
+      <button type="button" class="output-dir-btn" id="outputDirBtn" title="Choose where to save your results">
+        Beside original files
       </button>
     </div>
   </div>
@@ -29,7 +30,7 @@
   <div class="file-list-container">
     <div class="file-list" id="fileList">
       <div class="empty-state">
-        No image selected yet. Drag one image above or click browse.
+        Your image will appear here. Choose an image to start editing.
       </div>
     </div>
   </div>
@@ -71,6 +72,7 @@
 
   <div class="editor-canvas-wrap" id="editorCanvasWrap">
     <canvas id="editorCanvas" aria-label="Image editing canvas"></canvas>
+    <canvas id="editorCropShade" aria-hidden="true"></canvas>
     <div class="crop-overlay" id="cropOverlay" style="display:none;"></div>
   </div>
 
@@ -86,7 +88,7 @@
 
 <div class="tool-footer">
   <div class="tool-footer-left">
-    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for Image</span>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Waiting for image</span>
     <span class="eta-text" id="etaText"></span>
     <div class="processing-indicator" id="processingIndicator">
       <div class="spinner"></div>
@@ -95,7 +97,7 @@
   </div>
   <div class="tool-footer-right">
     <button class="btn btn-clear" id="clearBtn">Clear</button>
-    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open Output</button>
+    <button class="btn btn-secondary" id="openOutputBtn" style="display:none;">Open folder</button>
     <button class="btn btn-primary" id="applyBtn" disabled>Edit Image</button>
   </div>
 </div>

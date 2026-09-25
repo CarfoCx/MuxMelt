@@ -153,8 +153,6 @@ async function testComponentAwaitsAndCancelsValidation() {
         assertAllowed: () => {},
       },
       runSlimSetup: async () => { runSetupCalls += 1; },
-      ensureLlamaServer: async () => {},
-      hasCompleteLlamaSetup: () => false,
       hasCurrentSetupMarker: () => true,
       needsSlimSetup: (...args) => new Promise((resolve, reject) => {
         signalSeen = args[5]?.signal || null;

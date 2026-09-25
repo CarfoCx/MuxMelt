@@ -42,8 +42,6 @@ function createComponentManager(options) {
     saveSettings,
     networkPolicy,
     runSlimSetup,
-    ensureLlamaServer,
-    hasCompleteLlamaSetup,
     hasCurrentSetupMarker,
     needsSlimSetup,
     startBackend,
@@ -72,10 +70,9 @@ function createComponentManager(options) {
   const requirementsPath = path.join(pythonAppDir, 'python', 'requirements.txt');
   const installState = {
     media: { installing: false, detail: '' },
-    chat: { installing: false, detail: '' },
   };
-  const installControllers = { media: null, chat: null };
-  const installPromises = { media: null, chat: null };
+  const installControllers = { media: null };
+  const installPromises = { media: null };
   let componentCleanupFailure = null;
 
   function rememberCleanupFailure(result) {
@@ -134,12 +131,6 @@ function createComponentManager(options) {
       detail: installState.media.detail,
       optional: true,
     },
-    chat: {
-      installed: installState.chat.installing ? false : hasCompleteLlamaSetup(llamaDir),
-      installing: installState.chat.installing,
-      detail: installState.chat.detail,
-      optional: true,
-    },
     backend,
     offlineMode: networkPolicy.isOffline(),
   });
@@ -151,7 +142,6 @@ function createComponentManager(options) {
     SLIM_PYTHON_DIR: slimPythonDir,
     SLIM_PYTHON_EXE: slimPythonExe,
     SLIM_SETUP_MARKER: slimSetupMarker,
-    LLAMA_DIR: llamaDir,
     IS_WIN: isWin,
     IS_PACKAGED: isPackaged,
     requirementsPath,
@@ -208,52 +198,6 @@ function createComponentManager(options) {
       if (installPromises.media === operation) installPromises.media = null;
     });
     installPromises.media = operation;
-    return operation;
-  }
-
-  async function performChatPackInstall(controller) {
-    if (installState.chat.installing) {
-      return { success: false, error: 'The Local Chat pack is already being installed.' };
-    }
-    try {
-      jobRegistry?.assertCanStart?.('Local Chat pack installation');
-      networkPolicy.assertAllowed('Local Chat pack installation');
-      installState.chat.installing = true;
-      installState.chat.detail = 'Selecting a private local inference backend';
-      emitStatus();
-      let lastProgressEmit = 0;
-      await ensureLlamaServer((_channel, payload = {}) => {
-        installState.chat.detail = payload.detail || payload.status || 'Installing Local Chat';
-        const now = Date.now();
-        if (now - lastProgressEmit >= 200) {
-          lastProgressEmit = now;
-          emitStatus();
-        }
-      }, setupOptions(controller.signal));
-      installState.chat.detail = 'Installed and checksum-verified';
-      return { success: true };
-    } catch (err) {
-      installState.chat.detail = err.message;
-      const failure = { success: false, error: err.message, code: err.code || null };
-      rememberCleanupFailure(failure);
-      return failure;
-    } finally {
-      installState.chat.installing = false;
-      emitStatus();
-    }
-  }
-
-  function installChatPack() {
-    if (installPromises.chat) {
-      return Promise.resolve({ success: false, error: 'The Local Chat pack is already being installed.' });
-    }
-    const controller = new AbortController();
-    installControllers.chat = controller;
-    const operation = performChatPackInstall(controller).finally(() => {
-      if (installControllers.chat === controller) installControllers.chat = null;
-      if (installPromises.chat === operation) installPromises.chat = null;
-    });
-    installPromises.chat = operation;
     return operation;
   }
 
@@ -316,6 +260,7 @@ function createComponentManager(options) {
         await removeManagedDirectory(`${slimPythonDir}.staging`);
         await removeManagedDirectory(`${slimPythonDir}.backup`);
       } else if (id === 'chat') {
+        // Keep manual cleanup available for components installed by older builds.
         await requireBackendStopped();
         await removeManagedDirectory(llamaDir);
       } else if (id === 'models') {
@@ -347,7 +292,9 @@ function createComponentManager(options) {
     const settingsPath = path.join(userDataDir, 'settings.json');
     const packs = [
       { id: 'media', label: 'Local media pack', target: slimPythonDir, removable: !!isSlim },
-      { id: 'chat', label: 'Local Chat engine', target: llamaDir, removable: true },
+      ...(fs.existsSync(llamaDir)
+        ? [{ id: 'chat', label: 'Legacy chat files (unused)', target: llamaDir, removable: true }]
+        : []),
       { id: 'models', label: 'Downloaded AI models', target: modelsDir, removable: true },
       { id: 'cache', label: 'Download and model caches', target: cacheDir, removable: true },
       { id: 'logs', label: 'Local diagnostic logs', target: logsDir, removable: true },
@@ -493,7 +440,6 @@ function createComponentManager(options) {
 
   ipcMain.handle('component-status', () => getStatus());
   ipcMain.handle('install-media-pack', () => installMediaPack());
-  ipcMain.handle('install-chat-pack', () => installChatPack());
   ipcMain.handle('remove-component-pack', async (_event, id) => {
     try { return await runMaintenance(() => removePack(id)); }
     catch (err) { return { success: false, error: err.message, code: err.code || null }; }

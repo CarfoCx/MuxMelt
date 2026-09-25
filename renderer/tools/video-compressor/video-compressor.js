@@ -18,7 +18,7 @@ const persistedState = (() => {
     outputDir: '',
     lastOutputDir: '',
     isProcessing: false,
-    statusText: 'Waiting for Video',
+    statusText: 'Waiting for video',
     etaText: '',
     footerProgress: 0,
     footerProgressVisible: false
@@ -40,6 +40,7 @@ let lastOutputDir = persistedState.lastOutputDir || '';
 let outputDirBtn, statusText, processingIndicator, etaText;
 let footerProgress, footerProgressFill, progressPercent;
 let compressionGoal, crfSlider, crfValue, preset, resolution, codec, customWidth, twoPassCheck;
+let compressionOptions;
 let applyingCompressionGoal = false;
 let _pasteHandler = null;
 
@@ -61,6 +62,7 @@ async function init(ctx) {
   footerProgressFill = document.getElementById('footerProgressFill');
   progressPercent = document.getElementById('progressPercent');
   compressionGoal = document.getElementById('compressionGoal');
+  compressionOptions = document.getElementById('compressionOptions');
   crfSlider = document.getElementById('crfSlider');
   crfValue = document.getElementById('crfValue');
   preset = document.getElementById('preset');
@@ -97,7 +99,7 @@ function persistRuntimeState() {
 }
 
 function restoreViewState() {
-  if (statusText) statusText.textContent = persistedState.statusText || 'Waiting for Video';
+  if (statusText) statusText.textContent = persistedState.statusText || 'Waiting for video';
   if (etaText) etaText.textContent = persistedState.etaText || '';
   setFooterProgress(persistedState.footerProgress || 0, !!persistedState.footerProgressVisible);
   if (processingIndicator) processingIndicator.classList.toggle('active', isProcessing);
@@ -115,6 +117,7 @@ function restoreViewState() {
 
 function bindEvents() {
   compressionGoal.addEventListener('change', () => {
+    compressionOptions.open = compressionGoal.value === 'custom';
     applyCompressionGoal(compressionGoal.value);
     saveToolSettings();
   });
@@ -181,7 +184,7 @@ function bindEvents() {
       const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Waiting for Video';
+      if (statusText) statusText.textContent = 'Waiting for video';
     });
   }
 
@@ -205,7 +208,7 @@ function bindEvents() {
 
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
-      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Waiting for Video'; } });
+      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Queued'; } });
       persistRuntimeState();
       retryBtn.style.display = 'none';
       renderFileList();
@@ -308,7 +311,7 @@ async function startCompression() {
   files.forEach(file => {
     if (file.state === 'queued') {
       file.state = 'pending';
-      file.status = cancelRequested ? 'Waiting after cancellation' : 'Waiting for Video';
+      file.status = cancelRequested ? 'Waiting after cancellation' : 'Waiting for video';
     }
   });
   renderFileList();
@@ -448,7 +451,7 @@ async function addFiles(paths) {
       const size = await window.api.system.getFileSize(p);
       const info = await probeVideoInfo(p);
       if (isProcessing) break;
-      files.push({ path: p, name: getFileName(p), size, width: info.width, height: info.height, progress: 0, status: 'Waiting for Video', state: 'pending' });
+      files.push({ path: p, name: getFileName(p), size, width: info.width, height: info.height, progress: 0, status: 'Queued', state: 'pending' });
       added++;
     } catch (err) {
       log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
@@ -483,12 +486,12 @@ function clearFiles() {
   files = [];
   persistedState.files = files;
   persistedState.isProcessing = false;
-  persistedState.statusText = 'Waiting for Video';
+  persistedState.statusText = 'Waiting for video';
   persistedState.etaText = '';
   updateResolutionOptions();
   renderFileList();
   updateButton();
-  statusText.textContent = 'Waiting for Video';
+  statusText.textContent = 'Waiting for video';
   if (etaText) etaText.textContent = '';
   setFooterProgress(0, false);
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
@@ -549,7 +552,7 @@ function updateButton() {
 // ---- Rendering ----
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">Your files will appear here. Choose files above, drop them here, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     return;
   }
   fileList.innerHTML = '';
@@ -621,6 +624,7 @@ async function loadToolSettings() {
     if (s.customWidth) customWidth.value = s.customWidth;
     if (s.twoPass) twoPassCheck.checked = s.twoPass;
     compressionGoal.value = s.goal && (s.goal === 'custom' || COMPRESSION_GOALS[s.goal]) ? s.goal : identifyCompressionGoal();
+    compressionOptions.open = compressionGoal.value === 'custom';
     updateResolutionOptions();
     if (s.outputDir) {
       outputDir = persistedState.outputDir || s.outputDir;

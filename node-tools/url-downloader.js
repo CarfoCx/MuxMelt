@@ -12,6 +12,8 @@ const { validateOutputDir, formatToolError } = require('./path-utils');
 
 const PRIVATE_TEMP_PREFIXES = ['muxmelt-ytdlp-', 'muxmelt-url-cookie-'];
 const PRIVATE_TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const DOWNLOAD_PROGRESS_PREFIX = 'MUXMELT_PROGRESS_V1';
+const DOWNLOAD_PROGRESS_TEMPLATE = `download:${DOWNLOAD_PROGRESS_PREFIX}\t%(progress.status)s\t%(progress.downloaded_bytes)d\t%(progress.total_bytes)d\t%(progress.total_bytes_estimate)d\t%(progress.elapsed).3f\t%(progress.eta).3f`;
 
 function cleanupStalePrivateTempDirs(tempRoot = os.tmpdir(), now = Date.now()) {
   const root = path.resolve(tempRoot);
@@ -232,7 +234,54 @@ function buildRequestHeaders(url, options = {}) {
   return headers.flat();
 }
 
+function parseProgressNumber(value) {
+  if (typeof value !== 'string' || !value || value === 'NA') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function formatProgressSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const digits = unit === 0 || value >= 100 ? 0 : (value >= 10 ? 1 : 2);
+  return `${value.toFixed(digits)}${units[unit]}`;
+}
+
 function parseProgressLine(line) {
+  if (line.startsWith(`${DOWNLOAD_PROGRESS_PREFIX}\t`)) {
+    const fields = line.split('\t');
+    const downloadedBytes = parseProgressNumber(fields[2]);
+    const exactTotalBytes = parseProgressNumber(fields[3]);
+    const estimatedTotalBytes = parseProgressNumber(fields[4]);
+    const totalBytes = exactTotalBytes ?? estimatedTotalBytes;
+    const elapsedSeconds = parseProgressNumber(fields[5]);
+    const etaSeconds = parseProgressNumber(fields[6]);
+    const calculatedPercent = downloadedBytes !== null && totalBytes > 0
+      ? (downloadedBytes / totalBytes) * 100
+      : null;
+    const percent = fields[1] === 'finished'
+      ? 100
+      : calculatedPercent;
+
+    if (percent === null) return null;
+    return {
+      percent: Math.max(0, Math.min(100, percent)),
+      speed: '',
+      eta: '',
+      size: formatProgressSize(totalBytes),
+      downloadedBytes,
+      elapsedSeconds,
+      etaSeconds,
+      machineReadable: true,
+    };
+  }
+
   const percentMatch = line.match(/\[download\]\s+([\d.]+)%/i);
   if (!percentMatch) return null;
 
@@ -247,6 +296,52 @@ function parseProgressLine(line) {
     eta: etaMatch ? etaMatch[1] : '',
     size: sizeMatch ? sizeMatch[1] : ''
   };
+}
+
+// Derive a transfer-wide average from cumulative byte/time counters instead of
+// presenting yt-dlp's highly bursty instantaneous sample. Starting at the first
+// observed sample also avoids counting bytes from a resumed partial download
+// against only the current process's elapsed time.
+function createAverageThroughputTracker({ minimumElapsedSeconds = 2 } = {}) {
+  let baseline = null;
+  let previous = null;
+
+  return {
+    update(progress) {
+      const downloadedBytes = progress && progress.downloadedBytes;
+      const elapsedSeconds = progress && progress.elapsedSeconds;
+      if (!Number.isFinite(downloadedBytes) || downloadedBytes < 0 ||
+          !Number.isFinite(elapsedSeconds) || elapsedSeconds < 0) return null;
+
+      const sample = { downloadedBytes, elapsedSeconds };
+      if (!baseline || downloadedBytes < previous.downloadedBytes ||
+          elapsedSeconds < previous.elapsedSeconds) {
+        baseline = sample;
+        previous = sample;
+        return null;
+      }
+      previous = sample;
+
+      const measuredSeconds = elapsedSeconds - baseline.elapsedSeconds;
+      const measuredBytes = downloadedBytes - baseline.downloadedBytes;
+      if (measuredSeconds < minimumElapsedSeconds || measuredBytes <= 0) return null;
+      const bytesPerSecond = measuredBytes / measuredSeconds;
+      return Number.isFinite(bytesPerSecond) && bytesPerSecond > 0 ? bytesPerSecond : null;
+    },
+    reset() {
+      baseline = null;
+      previous = null;
+    },
+  };
+}
+
+function formatAverageDownloadRate(bytesPerSecond) {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '';
+  const mebibytes = bytesPerSecond / (1024 * 1024);
+  if (mebibytes >= 1) return `Avg ${mebibytes.toFixed(1)} MiB/s`;
+  const kibibytes = bytesPerSecond / 1024;
+  if (kibibytes >= 1) return `Avg ${kibibytes.toFixed(kibibytes >= 100 ? 0 : 1)} KiB/s`;
+  return `Avg ${Math.round(bytesPerSecond)} B/s`;
 }
 
 function extractDestination(line) {
@@ -433,6 +528,10 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
     '--newline',
     '--no-color',
     '--progress',
+    // Two updates per second keep the renderer responsive without spending CPU
+    // rebuilding the queue for every network read callback.
+    '--progress-delta', '0.5',
+    '--progress-template', DOWNLOAD_PROGRESS_TEMPLATE,
     '--paths', outDir,
     // Ask yt-dlp to print the final path directly. --exec shells out and is an
     // unnecessary command-execution surface when filenames come from a site.
@@ -477,9 +576,13 @@ function buildYtDlpArgs(pythonInfo, url, outDir, options = {}) {
       : 'mp3';
     args.push('-x', '--audio-format', aFormat, '--audio-quality', '0');
   } else if (maxHeight) {
+    // Prefer directly downloadable streams. Some sites expose an HLS variant
+    // ahead of an equivalent HTTPS/DASH format; older bundled ffmpeg builds
+    // may not be able to merge that site's fragmented MP4 output. Keep the
+    // original unrestricted choices as fallbacks for HLS-only sources.
     args.push(
       '-f',
-      `bestvideo[height<=${maxHeight}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]`,
+      `bestvideo[height<=${maxHeight}][ext=mp4][protocol!*=m3u8]+bestaudio[ext=m4a][protocol!*=m3u8]/bestvideo[height<=${maxHeight}][protocol!*=m3u8]+bestaudio[protocol!*=m3u8]/bestvideo[height<=${maxHeight}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]`,
       '--merge-output-format', 'mp4'
     );
   } else if (format === 'custom') {
@@ -737,7 +840,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
         let currentStreamStart = 0;
         let lastRawPercent = 0;
         let smoothedEtaSeconds = -1;
-        let lastSpeed = '';
+        const speedTracker = createAverageThroughputTracker();
         let stdoutRemainder = '';
         let stderrRemainder = '';
         let processSettled = false;
@@ -799,6 +902,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
             if (progress.percent < lastRawPercent && lastRawPercent - progress.percent > 50) {
               // A new stream started (e.g. audio track after video track)
               currentStreamStart = overallProgress;
+              smoothedEtaSeconds = -1;
             } else if (progress.percent < lastRawPercent) {
               // Minor regression (concurrent fragments jitter), enforce monotonicity
               progress.percent = lastRawPercent;
@@ -813,14 +917,16 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
             }
 
             // ETA Smoothing (Exponential Moving Average)
-            const currentEtaSeconds = parseEtaToSeconds(progress.eta);
+            const currentEtaSeconds = Number.isFinite(progress.etaSeconds)
+              ? progress.etaSeconds
+              : parseEtaToSeconds(progress.eta);
             if (currentEtaSeconds > 0) {
               if (smoothedEtaSeconds === -1) smoothedEtaSeconds = currentEtaSeconds;
               else smoothedEtaSeconds = smoothedEtaSeconds * 0.8 + currentEtaSeconds * 0.2;
             }
             const displayEta = smoothedEtaSeconds > 0 ? formatSecondsToEta(smoothedEtaSeconds) : '';
             
-            if (progress.speed) lastSpeed = progress.speed;
+            const displaySpeed = formatAverageDownloadRate(speedTracker.update(progress));
 
             sendToolProgress(win, {
               tool: 'url-downloader',
@@ -829,7 +935,7 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
               progress: overallProgress / 100,
               status: [
                 `${statusPrefix}Downloading... ${Math.round(overallProgress)}%`,
-                lastSpeed,
+                displaySpeed,
                 displayEta ? `ETA ${displayEta}` : ''
               ].filter(Boolean).join(' | '),
               size: progress.size
@@ -888,7 +994,11 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
           else {
             const combined = `${stderr}\n${stdout}`.trim();
             const lines = combined.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-            const usefulLines = lines.filter(l => l && !l.startsWith('[download]'));
+            const usefulLines = lines.filter(l => (
+              l
+              && !l.startsWith('[download]')
+              && !l.startsWith(`${DOWNLOAD_PROGRESS_PREFIX}\t`)
+            ));
             let errorMessage = `yt-dlp exited with code ${code}`;
             const errorLine = usefulLines.find(l => l.toUpperCase().startsWith('ERROR:'));
             if (errorLine) {
@@ -917,7 +1027,8 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
         const extractionFailure = isExtractionFailure(err);
         // Try only the available yt-dlp fallbacks. Dependency repair remains a
         // signed Media Pack/app update action, never a download side effect.
-        const hasImpersonationSupport = !extractionFailure
+        const hasImpersonationSupport = shouldRetryWithImpersonation(err)
+          && !extractionFailure
           && await hasPythonModule(pythonInfo, 'curl_cffi', operation);
 
         const baseConfig = {
@@ -967,9 +1078,11 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
             lastRetryErr = e;
           }
         }
-        // Try yt-dlp's generic extractor on the original page. This can rescue
-        // media that a site-specific extractor does not recognize.
-        if (lastRetryErr) {
+        // The generic extractor can rescue a page that a site extractor could
+        // not recognize, but it cannot repair a transfer, disk, or post-process
+        // failure. In particular, forcing it after a YouTube CDN 403 produces a
+        // secondary "Unsupported URL" error that hides the useful root cause.
+        if (lastRetryErr && extractionFailure) {
           if (win) {
             sendToolProgress(win, {
               tool: 'url-downloader', url, type: 'start', progress: 0.02,
@@ -990,7 +1103,9 @@ function registerIPC(ipcMain, getMainWindow, getPythonInfo, networkPolicy = null
           } catch (e) {
             if (e?.code === 'PROCESS_CLEANUP_FAILED') throw e;
             if (operation.cancelled) throw cancelledError();
-            lastRetryErr = e;
+            // Keep the site-specific error. A generic-extractor failure is a
+            // last-chance diagnostic and is usually less actionable (often
+            // merely "Unsupported URL").
           }
         }
 
@@ -1310,6 +1425,13 @@ module.exports = {
   registerIPC,
   buildYtDlpArgs,
   orderedImpersonationAttempts,
+  __progress: {
+    prefix: DOWNLOAD_PROGRESS_PREFIX,
+    template: DOWNLOAD_PROGRESS_TEMPLATE,
+    parseProgressLine,
+    createAverageThroughputTracker,
+    formatAverageDownloadRate,
+  },
   __privacy: {
     cleanupStalePrivateTempDirs,
     writePrivateAuthConfig,

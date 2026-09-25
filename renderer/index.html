@@ -7,19 +7,14 @@
   <title>MuxMelt</title>
   <link rel="stylesheet" href="app.css">
   <link rel="stylesheet" id="toolStylesheet" href="">
+  <!-- Minimal controls and performance defaults, loaded after tool styles. -->
+  <link rel="stylesheet" href="classic.css">
 </head>
 <body data-app-name="MuxMelt">
 
   <!-- Custom window title bar -->
   <div class="titlebar" id="titlebar">
     <div class="titlebar-drag" id="titlebarDrag">
-      <div class="titlebar-brand-icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-          <polyline points="2 17 12 22 22 17"/>
-          <polyline points="2 12 12 17 22 12"/>
-        </svg>
-      </div>
       <span class="titlebar-title" id="titlebarAppName">MuxMelt</span>
       <span class="titlebar-version-tag" id="titlebarVersion" aria-label="Application version"></span>
     </div>
@@ -46,93 +41,74 @@
 
     <!-- Sidebar with Organized Categories -->
     <nav class="sidebar" id="sidebar" aria-label="Tool navigation">
-      <div class="sidebar-header">
-        <div class="brand-logo-container">
-          <div class="brand-logo-box">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-              <polyline points="2 17 12 22 22 17"/>
-              <polyline points="2 12 12 17 22 12"/>
-            </svg>
-          </div>
-          <div class="brand-title-group">
-            <h1>Mux<span>Melt</span></h1>
-            <span class="brand-subtitle">MEDIA TOOLKIT</span>
-          </div>
-        </div>
-      </div>
-
+      <button type="button" class="tool-search-trigger" id="toolSearchBtn" aria-haspopup="dialog" aria-controls="toolSearchDialog">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <span>Find a tool</span><kbd>Ctrl K</kbd>
+      </button>
       <div class="sidebar-tools">
         <button class="sidebar-item active" data-tool="home">
-          <span class="sidebar-icon" aria-hidden="true">&#8962;</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="m3 10 9-7 9 7M5 9v12h14V9M9 21v-8h6v8"/></svg></span>
           <span class="sidebar-label">Home</span>
         </button>
 
         <!-- Section: Video & Animation -->
-        <div class="sidebar-category">VIDEO &amp; ANIMATION</div>
+        <div class="sidebar-category">Video &amp; conversion</div>
         <button class="sidebar-item" data-tool="upscaler">
-          <span class="sidebar-icon">✨</span>
-          <span class="sidebar-label">AI Upscaler</span>
-          <span class="sidebar-badge">AI</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M14 3h7v7m-8 1 8-8M10 21H3v-7m8-1-8 8"/></svg></span>
+          <span class="sidebar-label">Upscaler</span>
         </button>
         <button class="sidebar-item" data-tool="format-converter">
-          <span class="sidebar-icon">🔄</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></svg></span>
           <span class="sidebar-label">Format Converter</span>
         </button>
         <button class="sidebar-item" data-tool="video-compressor">
-          <span class="sidebar-icon">📦</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m10-6-3 3 3 3"/></svg></span>
           <span class="sidebar-label">Video Compressor</span>
         </button>
         <button class="sidebar-item" data-tool="gif-maker">
-          <span class="sidebar-icon">🎬</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/></svg></span>
           <span class="sidebar-label">GIF Maker</span>
         </button>
 
         <!-- Section: Audio & Sound -->
-        <div class="sidebar-category">AUDIO &amp; SOUND</div>
+        <div class="sidebar-category">Audio</div>
         <button class="sidebar-item" data-tool="audio-extractor">
-          <span class="sidebar-icon">🎵</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M9 18V5l11-2v13M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="3"/><ellipse cx="17" cy="16" rx="3" ry="3"/></svg></span>
           <span class="sidebar-label">Audio Extractor</span>
         </button>
         <button class="sidebar-item" data-tool="stem-separator">
-          <span class="sidebar-icon">🎹</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M4 9v6m4-9v12m4-15v18m4-15v12m4-9v6"/></svg></span>
           <span class="sidebar-label">Stem Separator</span>
-          <span class="sidebar-badge">AI</span>
         </button>
         <button class="sidebar-item" data-tool="tts">
-          <span class="sidebar-icon">🗣️</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></span>
           <span class="sidebar-label">Text to Speech</span>
         </button>
 
         <!-- Section: Image & Design -->
-        <div class="sidebar-category">IMAGE &amp; DESIGN</div>
+        <div class="sidebar-category">Images</div>
         <button class="sidebar-item" data-tool="bg-remover">
-          <span class="sidebar-icon">✂️</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="m15 3 6 6-10 10H5l-3-3L15 3Zm-9 9 7 7M14 21h7"/></svg></span>
           <span class="sidebar-label">Background Editor</span>
-          <span class="sidebar-badge">AI</span>
         </button>
         <button class="sidebar-item" data-tool="bulk-imager">
-          <span class="sidebar-icon">🖼️</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M6 3v15h15M3 6h15v15"/></svg></span>
           <span class="sidebar-label">Image Editor</span>
         </button>
         <button class="sidebar-item" data-tool="qr-studio">
-          <span class="sidebar-icon">🔳</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M3 3h6v6H3Zm12 0h6v6h-6ZM3 15h6v6H3Zm12 0h3v3h3v3h-6Zm6-3v3M12 3v3m0 6h3M3 12h3"/></svg></span>
           <span class="sidebar-label">QR Studio</span>
         </button>
 
         <!-- Section: Network & Utilities -->
-        <div class="sidebar-category">NETWORK &amp; UTILITIES</div>
+        <div class="sidebar-category">Downloads</div>
         <button class="sidebar-item" data-tool="url-downloader">
-          <span class="sidebar-icon">⬇️</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg></span>
           <span class="sidebar-label">Video Downloader</span>
         </button>
         <button class="sidebar-item" data-tool="torrent-downloader">
-          <span class="sidebar-icon">💎</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5m-7 5v-5h14v5"/></svg></span>
           <span class="sidebar-label">Torrent Downloader</span>
-        </button>
-        <button class="sidebar-item" data-tool="chat">
-          <span class="sidebar-icon">💬</span>
-          <span class="sidebar-label">Local AI Chat</span>
         </button>
       </div>
 
@@ -149,32 +125,39 @@
         </div>
 
         <button class="sidebar-item sidebar-settings" data-tool="settings" id="headerSettingsBtn">
-          <span class="sidebar-icon">⚙️</span>
+          <span class="sidebar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg></span>
           <span class="sidebar-label">Settings</span>
         </button>
 
         <div class="sidebar-quick-links">
-          <button class="sidebar-shortcuts-btn" id="shortcutsBtn" title="Keyboard shortcuts (Ctrl+?)" aria-haspopup="dialog" aria-controls="shortcutsOverlay">
+          <button class="sidebar-shortcuts-btn" id="shortcutsBtn" title="Keyboard shortcuts (Ctrl+?)" aria-label="Keyboard shortcuts" aria-haspopup="dialog" aria-controls="shortcutsOverlay">
             <span class="sidebar-shortcuts-icon">?</span>
             <span>Shortcuts</span>
           </button>
-          <button class="sidebar-donate-btn" id="sidebarDonateBtn" title="Support MuxMelt development">
+          <button class="sidebar-donate-btn" id="sidebarDonateBtn" title="Support MuxMelt development" aria-label="Support MuxMelt development">
             <span class="sidebar-donate-heart">&#9829;</span>
             <span>Support</span>
           </button>
         </div>
 
+        <details class="system-status">
+          <summary>Processing status</summary>
         <div class="gpu-stats" id="gpuStats">
           <span class="gpu-stat" id="gpuUtilStat" title="GPU utilization" aria-label="GPU utilization"></span>
           <span class="gpu-stat" id="gpuTempStat" title="GPU temperature" aria-label="GPU temperature"></span>
           <span class="gpu-stat" id="gpuMemStat" title="GPU memory usage" aria-label="GPU memory usage"></span>
         </div>
         <span class="gpu-badge" id="gpuBadge" aria-label="GPU status">Connecting...</span>
+        </details>
       </div>
     </nav>
 
     <!-- Main area -->
     <div class="main-area" role="main">
+      <header class="workspace-header">
+        <div class="workspace-breadcrumb"><span id="workspaceCategory">Workspace</span><span aria-hidden="true">/</span><strong id="workspaceTitle">All tools</strong></div>
+        <span class="workspace-mode" id="workspaceMode">Your local media toolkit</span>
+      </header>
       <!-- Update banner (hidden by default) -->
       <div class="update-banner" id="updateBanner" role="alert" style="display: none;">
         <span id="updateBannerText">A new version of MuxMelt is available!</span>
@@ -186,13 +169,13 @@
       </div>
 
       <!-- Tool content -->
-      <div class="tool-content" id="toolContent" aria-label="Tool content"></div>
+      <div class="tool-content" id="toolContent" aria-label="Tool content" tabindex="-1"></div>
 
       <!-- Log panel (shared) -->
-      <div class="log-panel" id="logPanel" role="log" aria-label="Application log">
-        <div class="log-header" id="logToggle" role="button" tabindex="0" aria-expanded="true" aria-controls="logBody" aria-label="Toggle log panel">
+      <div class="log-panel collapsed" id="logPanel" role="log" aria-label="Application log">
+        <div class="log-header" id="logToggle" role="button" tabindex="0" aria-expanded="false" aria-controls="logBody" aria-label="Toggle log panel">
           <div class="log-header-left">
-            <span class="log-header-title">Application Log</span>
+            <span class="log-header-title">Activity log</span>
             <span class="log-status-indicator"></span>
           </div>
           <span class="log-toggle-icon" id="logIcon" aria-hidden="true">&#9650;</span>
@@ -212,6 +195,7 @@
         </div>
         <div class="shortcuts-body">
           <div class="shortcut-section">General Navigation</div>
+          <div class="shortcut-row"><kbd>Ctrl+K</kbd><span>Find a tool</span></div>
           <div class="shortcut-row"><kbd>Ctrl+O</kbd><span>Open file browser</span></div>
           <div class="shortcut-row"><kbd>Ctrl+L</kbd><span>Toggle log panel</span></div>
           <div class="shortcut-row"><kbd>Enter</kbd><span>Run primary action</span></div>
@@ -223,6 +207,15 @@
 
   </div>
 
+  <dialog class="tool-search-dialog" id="toolSearchDialog" aria-labelledby="toolSearchTitle">
+    <div class="tool-search-heading"><h2 id="toolSearchTitle">Find a tool</h2><button type="button" id="toolSearchClose" aria-label="Close tool search">&times;</button></div>
+    <label class="sr-only" for="toolSearchInput">Search by tool or task</label>
+    <input id="toolSearchInput" type="search" placeholder="Try convert, crop, vocals..." autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="toolSearchResults">
+    <div id="toolSearchResults" class="tool-search-results" role="listbox" aria-label="Tools"></div>
+    <p class="tool-search-empty" id="toolSearchEmpty" role="status" hidden>No tools found. Try a task like “convert” or “audio”.</p>
+    <div class="tool-search-help"><span><kbd>↑</kbd> <kbd>↓</kbd> to explore <kbd>Enter</kbd> to open</span><span><kbd>Esc</kbd> to close</span></div>
+  </dialog>
+  <script src="workspace.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

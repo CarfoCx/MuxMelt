@@ -6,6 +6,31 @@ semantic version numbers where practical.
 
 ## Unreleased
 
+### Added
+
+- Added a compact desktop interface with light and dark themes, a searchable
+  tool list, file selection toolbars, and output settings beside file queues.
+- Added keyboard-accessible quick tool search (Ctrl+K) and grouped Settings
+  into General, Privacy & storage, Components, and About & updates.
+
+### Changed
+
+- Simplified tool navigation, moved hardware details into a disclosure, and
+  collapsed the activity log by default for new users. The startup splash
+  remains static and does not delay the usable window.
+- Video download speed now shows a sustained byte/time average instead of
+  bursty fragment samples, and progress updates no longer rebuild the queue.
+- Reduced background GPU telemetry frequency and coalesced Image Editor crop
+  rendering into display-frame updates.
+- Removed Local Chat from navigation, optional component installation, and the
+  local backend. Existing downloads are preserved and can be removed from
+  Settings storage controls.
+
+### Fixed
+
+- Updated yt-dlp for YouTube's current player clients and kept transfer errors
+  from being replaced by a misleading generic-extractor "Unsupported URL".
+
 ## 1.3.0 - 2026-08-14
 
 ### Added

@@ -26,7 +26,7 @@ dependency/license report for every published artifact.
 | rembg and ONNX Runtime | Background processing | Upstream licenses |
 | yt-dlp | Online media downloader | The Unlicense, plus third-party component notices |
 | Windows SAPI / macOS `say` / eSpeak | Offline system Text to Speech | Operating-system terms; eSpeak/eSpeak NG is GPL-licensed and supplied by the Linux distribution, not bundled by MuxMelt |
-| llama.cpp | Local Chat inference engine | MIT |
+| llama.cpp | Legacy engine retained by older installations; no longer an app feature | MIT |
 
 Each packaged FFmpeg directory also contains `FFMPEG-LICENSE.txt` and
 `FFMPEG-BUILD-INFO.txt`, downloaded and SHA-256 verified alongside the matching
@@ -39,10 +39,9 @@ revision for that platform build.
   releases and retain their upstream terms.
 - Background-removal and stem-separation models retain their individual
   upstream terms.
-- Curated Qwen GGUF files are identified in the app by model and quantizer. The
-  underlying Qwen models and quantized files retain their upstream licenses.
-- Imported GGUF files are supplied by the user; MuxMelt does not infer or grant
-  a license for them.
+- Any Qwen GGUF files retained from older installations keep their original
+  upstream licenses. Imported files remain user-supplied; MuxMelt does not infer
+  or grant a license for them.
 
 ## Release checklist
 

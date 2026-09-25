@@ -110,7 +110,7 @@ function bindEvents() {
       const paths = await window.api.system.selectFolder();
       if (paths.length > 0) addFiles(paths);
       else log('No supported files found in folder', 'warn');
-      if (statusText) statusText.textContent = 'Waiting for Video';
+      if (statusText) statusText.textContent = 'Waiting for video';
     });
   }
 
@@ -134,7 +134,7 @@ function bindEvents() {
 
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
-      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Waiting for Video'; } });
+      files.forEach(f => { if (f.state === 'error') { f.state = 'pending'; f.progress = 0; f.status = 'Queued'; } });
       retryBtn.style.display = 'none';
       renderFileList();
       updateButton();
@@ -230,7 +230,7 @@ async function startExtraction() {
   if (etaText) etaText.textContent = '';
   if (window.setTaskbarProgress) window.setTaskbarProgress(-1);
   setFooterProgress(0, false);
-  extractBtn.textContent = 'Extract Audio';
+  extractBtn.textContent = 'Extract audio';
   extractBtn.classList.remove('btn-cancel');
   updateButton();
   processingIndicator.classList.remove('active');
@@ -321,7 +321,7 @@ async function addFiles(paths) {
     try {
       const size = await window.api.system.getFileSize(p);
       if (isProcessing) break;
-      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Waiting for Video', state: 'pending' });
+      files.push({ path: p, name: getFileName(p), size, progress: 0, status: 'Queued', state: 'pending' });
       added++;
     } catch (err) {
       log(`Could not add ${getFileName(p)}: ${err.message}`, 'warn');
@@ -339,7 +339,7 @@ function clearFiles() {
   files = [];
   renderFileList();
   updateButton();
-  statusText.textContent = 'Waiting for Video';
+  statusText.textContent = 'Waiting for video';
   setFooterProgress(0, false);
   if (etaText) etaText.textContent = '';
   if (window.updateDropZoneCollapse) window.updateDropZoneCollapse(dropZone, 0);
@@ -354,7 +354,7 @@ function updateButton() {
 // ---- Rendering ----
 function renderFileList() {
   if (files.length === 0) {
-    fileList.innerHTML = '<div class="empty-state">No files added. Drag files here, browse, or press <span class="shortcut-hint">Ctrl+O</span></div>';
+    fileList.innerHTML = '<div class="empty-state">Your files will appear here. Choose files above, drop them here, or press <span class="shortcut-hint">Ctrl+O</span></div>';
     return;
   }
   fileList.innerHTML = '';
@@ -400,7 +400,7 @@ function createFileElement(file, index) {
     <div class="file-progress-bar">
       <div class="file-progress-fill${progressClass}" style="width: ${Math.round(file.progress * 100)}%"></div>
     </div>
-    <button class="file-remove" data-index="${index}" title="Remove">\u00D7</button>`;
+    <button class="file-remove" data-index="${index}" title="Remove" aria-label="Remove ${window.escapeHtml(file.name)}">\u00D7</button>`;
 
   el.querySelector('.file-remove').addEventListener('click', (e) => { e.stopPropagation(); if (!isProcessing) removeFile(index); });
 

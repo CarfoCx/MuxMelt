@@ -174,7 +174,7 @@ function setVideo(path) {
   videoName.textContent = getFileName(path);
   videoName.title = path;
   videoInfo.style.display = 'flex';
-  previewArea.innerHTML = '<div class="empty-state">Set parameters and create GIF. Adjust settings and click Create.</div>';
+  previewArea.innerHTML = '<div class="empty-state">Choose the clip start and end times, then select Create GIF.</div>';
   createBtn.disabled = false;
   if (window.updateQueueSummary) window.updateQueueSummary([{ state: 'pending' }], 'gif-maker');
   log(`Selected: ${getFileName(path)}`);
@@ -374,9 +374,9 @@ function clearAll() {
   videoInfo.style.display = 'none';
   openOutputBtn.style.display = 'none';
   videoName.textContent = '';
-  previewArea.innerHTML = '<div class="empty-state">Drop a video above to get started.</div>';
+  previewArea.innerHTML = '<div class="empty-state">Choose a video to start creating your GIF.</div>';
   createBtn.disabled = true;
-  statusText.textContent = 'Waiting for Video';
+  statusText.textContent = 'Waiting for video';
   setFooterProgress(0, false);
   if (window.updateQueueSummary) window.updateQueueSummary([], 'gif-maker');
 }

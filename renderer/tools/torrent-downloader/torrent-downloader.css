@@ -51,7 +51,6 @@
   justify-content: center;
   color: var(--text-dim);
   cursor: pointer;
-  transition: all 0.25s ease;
   gap: 6px;
   font-size: 13px;
 }
@@ -65,16 +64,7 @@
 .torrent-drop-zone.dragover {
   border-color: var(--accent);
   background: rgba(99, 102, 241, 0.08);
-  box-shadow: 0 0 20px var(--accent-glow);
   color: var(--text-primary);
-}
-
-.torrent-drop-zone .drop-icon {
-  transition: transform 0.25s ease;
-}
-
-.torrent-drop-zone:hover .drop-icon {
-  transform: translateY(-2px);
 }
 
 .torrent-drop-zone:focus-visible {
@@ -120,7 +110,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
 }
 
 .clear-file-btn:hover {
@@ -140,21 +129,6 @@
 .torrent-start-hint {
   font-size: 12px;
   color: var(--text-dim);
-  animation: torrent-hint-in 0.3s ease;
-}
-
-@keyframes torrent-hint-in {
-  from { opacity: 0; transform: translateX(4px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-.torrent-add-row .btn-primary.ready:not(:disabled) {
-  animation: torrent-ready-pulse 2s ease-in-out infinite;
-}
-
-@keyframes torrent-ready-pulse {
-  0%, 100% { box-shadow: 0 0 0 rgba(99, 102, 241, 0); }
-  50% { box-shadow: 0 0 14px var(--accent-glow); }
 }
 
 /* ── Downloads container ────────────────────────────────────────────────── */
@@ -205,19 +179,6 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease;
-  animation: torrent-card-enter 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes torrent-card-enter {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .torrent-card.state-downloading {
@@ -263,16 +224,7 @@
 }
 
 .torrent-card-title.loading {
-  background: linear-gradient(90deg, var(--text-dim) 25%, var(--text-secondary) 50%, var(--text-dim) 75%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: shimmer 1.8s ease-in-out infinite;
-}
-
-@keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  color: var(--text-secondary);
 }
 
 .torrent-card-actions {
@@ -335,7 +287,6 @@
   height: 100%;
   width: 0%;
   background: var(--accent);
-  transition: width 0.4s ease;
   z-index: 1;
 }
 
@@ -361,7 +312,8 @@
   font-size: 10px;
   font-weight: 700;
   color: var(--text-primary);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  background: var(--bg-secondary);
+  padding: 0 4px;
   pointer-events: none;
   letter-spacing: 0.3px;
 }
@@ -377,12 +329,10 @@
 
 .torrent-state-dot.starting {
   background: var(--text-dim);
-  animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
 .torrent-state-dot.downloading {
   background: var(--accent);
-  animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
 .torrent-state-dot.paused {
@@ -400,11 +350,6 @@
 .torrent-state-dot.cancelled {
   background: var(--warning);
   opacity: 0.6;
-}
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
 }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */

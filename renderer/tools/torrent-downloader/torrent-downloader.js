@@ -149,7 +149,7 @@ function bindEvents() {
 // ── UI helpers ─────────────────────────────────────────────────────────
 
 function updateOutputButton() {
-  outputDirText.textContent = outputDir || 'Select output directory...';
+  outputDirText.textContent = outputDir || 'Choose a folder...';
   outputDirText.title = outputDir || '';
 }
 
@@ -194,7 +194,7 @@ function updateStartReady() {
   startBtn.classList.toggle('ready', ready);
   startBtn.disabled = isStarting || !consented;
   startHint.textContent = consented
-    ? 'Ready — click Start Download'
+    ? 'Ready — click Start download'
     : 'Review and accept the peer-to-peer privacy notice first';
   startHint.style.display = (ready || !consented) && !isStarting ? '' : 'none';
 }
@@ -603,7 +603,7 @@ async function startDownload() {
     window.showCompletionToast(err.message, true);
   } finally {
     isStarting = false;
-    startBtnLabel.textContent = 'Start Download';
+    startBtnLabel.textContent = 'Start download';
     updateStartReady();
   }
 }

@@ -19,7 +19,6 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.15s ease;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;

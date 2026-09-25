@@ -7,8 +7,10 @@
 let log = null;
 let filenameSaveTimer = null;
 let componentStatusUnsubscribe = null;
+let settingsRoot = null;
 
 const SAFE_DEFAULTS = Object.freeze({
+  logCollapsed: true,
   automaticUpdateChecks: false,
   offlineMode: false,
   rememberRecentFiles: false,
@@ -18,7 +20,7 @@ const SAFE_DEFAULTS = Object.freeze({
 const REPOSITORY_URL = 'https://github.com/CarfoCx/MuxMelt';
 const SUPPORT_URL = 'https://ko-fi.com/carfo';
 
-const byId = id => document.getElementById(id);
+const byId = id => settingsRoot?.querySelector(`#${id}`);
 const getSystemApi = () => (window.api && window.api.system) || {};
 const getPythonApi = () => (window.api && window.api.python) || {};
 
@@ -57,6 +59,52 @@ function populateThemes() {
       group.appendChild(option);
     });
     select.appendChild(group);
+  });
+}
+
+function setupSettingsTabs() {
+  const page = document.querySelector('.settings-page');
+  const groups = {
+    General: ['appearanceHeading', 'generalHeading', 'resetHeading'],
+    Privacy: ['privacyHeading', 'storageHeading', 'recentHeading'],
+    Components: ['componentsHeading', 'systemHeading'],
+    About: ['updatesHeading', 'aboutHeading']
+  };
+  const buttons = Array.from(page.querySelectorAll('[data-settings-tab]'));
+  for (const [name, headings] of Object.entries(groups)) {
+    const panel = document.createElement('div');
+    panel.id = `settingsPanel${name}`;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', `settingsTab${name}`);
+    panel.tabIndex = 0;
+    panel.hidden = name !== 'General';
+    headings.forEach(heading => {
+      const section = page.querySelector(`[aria-labelledby="${heading}"]`);
+      if (section) panel.appendChild(section);
+    });
+    page.appendChild(panel);
+  }
+  function selectTab(button, focus = false) {
+    buttons.forEach(item => {
+      const selected = item === button;
+      item.setAttribute('aria-selected', String(selected));
+      item.tabIndex = selected ? 0 : -1;
+      page.querySelector(`#settingsPanel${item.dataset.settingsTab}`).hidden = !selected;
+    });
+    if (focus) button.focus();
+  }
+  buttons.forEach((button, index) => {
+    button.addEventListener('click', () => selectTab(button));
+    button.addEventListener('keydown', event => {
+      let next = index;
+      if (event.key === 'ArrowRight') next = (index + 1) % buttons.length;
+      else if (event.key === 'ArrowLeft') next = (index + buttons.length - 1) % buttons.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = buttons.length - 1;
+      else return;
+      event.preventDefault();
+      selectTab(buttons[next], true);
+    });
   });
 }
 
@@ -122,14 +170,6 @@ function reflectOfflineMode(enabled) {
 function bindEvents() {
   byId('themeSelect').addEventListener('change', event => {
     window.applyAppTheme(event.target.value);
-    showSaveStatus('Theme saved');
-  });
-
-  byId('toggleThemeModeBtn').addEventListener('click', () => {
-    const current = document.documentElement.getAttribute('data-theme') || 'mono-dark';
-    const next = window.getThemePair(current);
-    window.applyAppTheme(next);
-    byId('themeSelect').value = next;
     showSaveStatus('Theme saved');
   });
 
@@ -216,9 +256,8 @@ function bindEvents() {
   });
 
   byId('installMediaPackBtn').addEventListener('click', () => runPackAction('installMediaPack', 'media'));
-  byId('installChatPackBtn').addEventListener('click', () => runPackAction('installChatPack', 'chat'));
   bindRemovePack('removeMediaPackBtn', 'media');
-  bindRemovePack('removeChatPackBtn', 'chat');
+  bindRemovePack('removeLegacyChatBtn', 'chat');
 
   byId('openDataFolderBtn').addEventListener('click', async () => {
     const method = getSystemApi().openDataFolder;
@@ -270,10 +309,10 @@ function normalizePackStatus(status, packId) {
 }
 
 function renderPack(packId, pack) {
-  const title = packId === 'media' ? 'Media AI pack' : 'Local Chat pack';
+  const title = 'Media AI pack';
   const status = byId(`${packId}PackStatus`);
-  const install = byId(packId === 'media' ? 'installMediaPackBtn' : 'installChatPackBtn');
-  const remove = byId(packId === 'media' ? 'removeMediaPackBtn' : 'removeChatPackBtn');
+  const install = byId('installMediaPackBtn');
+  const remove = byId('removeMediaPackBtn');
   status.textContent = pack.installing ? `${title}: installing${pack.detail ? ` - ${pack.detail}` : '...'}` : (pack.installed ? `${title}: installed${pack.detail ? ` - ${pack.detail}` : ''}` : `${title}: not installed`);
   status.classList.toggle('installed', pack.installed);
   status.setAttribute('aria-busy', String(pack.installing));
@@ -289,11 +328,8 @@ async function refreshComponentStatus(payload) {
   const notice = byId('componentApiNotice');
   if (typeof pythonApi.getStatus !== 'function') {
     notice.hidden = false;
-    ['media', 'chat'].forEach(packId => {
-      const status = byId(`${packId}PackStatus`);
-      status.textContent = 'Status unavailable in this build';
-      byId(packId === 'media' ? 'installMediaPackBtn' : 'installChatPackBtn').disabled = true;
-    });
+    byId('mediaPackStatus').textContent = 'Status unavailable in this build';
+    byId('installMediaPackBtn').disabled = true;
     return;
   }
   try {
@@ -304,7 +340,6 @@ async function refreshComponentStatus(payload) {
       reflectOfflineMode(result.offlineMode);
     }
     renderPack('media', normalizePackStatus(result, 'media'));
-    renderPack('chat', normalizePackStatus(result, 'chat'));
   } catch (error) {
     notice.hidden = false;
     notice.textContent = `Could not read component status: ${error.message}`;
@@ -321,7 +356,7 @@ async function runPackAction(action, packId) {
     if (result && result.success === false) throw new Error(result.error || 'Installation failed');
     await refreshComponentStatus();
     await refreshStorageSummary();
-    log(`${packId === 'media' ? 'Media AI' : 'Local Chat'} pack installed`, 'success');
+    log('Media AI pack installed', 'success');
   } catch (error) {
     showSaveStatus(error.message, true);
     log(`Component installation failed: ${error.message}`, 'error');
@@ -372,6 +407,11 @@ async function refreshStorageSummary() {
   }
   try {
     const data = await method();
+    const legacyChat = Array.isArray(data?.packs) ? data.packs.find(pack => pack.id === 'chat' && pack.installed) : null;
+    byId('legacyChatStorage').hidden = !legacyChat;
+    if (legacyChat) {
+      byId('legacyChatStorageHint').textContent = `${formatBytes(Number(legacyChat.bytes))} from the removed chat feature. Remove these unused files to free space.`;
+    }
     const total = Number(data?.totalBytes);
     const pieces = [Number.isFinite(total) ? `${formatBytes(total)} used by MuxMelt` : 'Local storage summary'];
     if (Number.isFinite(Number(data?.cachesBytes))) pieces.push(`${formatBytes(Number(data.cachesBytes))} caches`);
@@ -570,6 +610,8 @@ async function resetAllSettings() {
 }
 
 async function init(ctx) {
+  settingsRoot = document.querySelector('.settings-page');
+  setupSettingsTabs();
   log = ctx.log;
   populateThemes();
   bindEvents();
@@ -586,6 +628,10 @@ function cleanup() {
   componentStatusUnsubscribe = null;
 }
 
-window.registerTool('settings', { init, cleanup });
+async function activate() {
+  await Promise.all([loadCurrentSettings(), refreshComponentStatus(), refreshStorageSummary()]);
+}
+
+window.registerTool('settings', { init, cleanup, activate });
 
 })();
