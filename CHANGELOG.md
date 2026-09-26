@@ -4,7 +4,7 @@ Notable changes to MuxMelt are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 semantic version numbers where practical.
 
-## Unreleased
+## 1.3.1 - 2026-09-26
 
 ### Added
 
@@ -28,6 +28,7 @@ semantic version numbers where practical.
 
 ### Fixed
 
+- Updated sharp to 0.35.4 to include security fixes in its bundled image codecs.
 - Updated yt-dlp for YouTube's current player clients and kept transfer errors
   from being replaced by a misleading generic-extractor "Unsupported URL".
 
